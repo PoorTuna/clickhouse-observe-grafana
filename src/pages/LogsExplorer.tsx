@@ -232,7 +232,7 @@ export function LogsExplorer() {
           onViewTrace={
             selectedRow['traceId']
               ? (traceId) => {
-                  window.location.href = `/a/kessler-clickhouseobserve-app/traces/${traceId}`;
+                  window.location.href = `/a/poortuna-clickhouse-observe-app/traces/${traceId}`;
                 }
               : undefined
           }

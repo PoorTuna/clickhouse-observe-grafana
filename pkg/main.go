@@ -5,7 +5,7 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/app"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
-	"github.com/kessler/clickhouse-observe/pkg/plugin"
+	"github.com/poortuna/clickhouse-observe/pkg/plugin"
 )
 
 func main() {
@@ -16,7 +16,7 @@ func main() {
 	// argument. This factory will be automatically called on incoming request
 	// from Grafana to create different instances of `App` (per plugin
 	// ID).
-	if err := app.Manage("kessler-clickhouseobserve-app", plugin.NewApp, app.ManageOpts{}); err != nil {
+	if err := app.Manage("poortuna-clickhouse-observe-app", plugin.NewApp, app.ManageOpts{}); err != nil {
 		log.DefaultLogger.Error(err.Error())
 		os.Exit(1)
 	}

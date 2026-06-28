@@ -58,15 +58,11 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   // Datasource picker options (all datasources with type containing 'clickhouse')
   const [dsOptions, setDsOptions] = useState<Array<{ label: string; value: string }>>([]);
   React.useEffect(() => {
-    getDataSourceSrv()
-      .getList()
-      .then((list) => {
-        const ch = list.filter((ds) =>
-          (ds.type ?? '').toLowerCase().includes('clickhouse')
-        );
-        setDsOptions(ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name })));
-      })
-      .catch(() => {});
+    try {
+      const list = getDataSourceSrv().getList();
+      const ch = list.filter((ds) => (ds.type ?? '').toLowerCase().includes('clickhouse'));
+      setDsOptions(ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name })));
+    } catch {}
   }, []);
 
   const setColumnField = (key: keyof ColumnMapping, value: string) => {

@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "app",
   "name": "ClickHouse Observe",
-  "id": "kessler-clickhouseobserve-app",
+  "id": "poortuna-clickhouse-observe-app",
   "backend": false,
   "info": {
     "keywords": ["clickhouse", "logs", "traces", "observability", "otel"],

@@ -1,0 +1,17 @@
+ClickHouse Observe Grafana App Plugin
+Copyright 2026 Kessler
+
+This product includes code adapted from grafana/clickhouse-datasource
+(https://github.com/grafana/clickhouse-datasource), Copyright Grafana Labs,
+licensed under the Apache License, Version 2.0.
+
+Adapted files:
+  src/otel.ts          → src/sql/schema.ts
+  src/data/logs.ts     → src/sql/queryBuilder.ts (LOG_LEVEL_TO_IN_CLAUSE, allLogLevels)
+  src/data/adHocFilter.ts + src/data/columnFilters.ts → src/sql/filters.ts
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0

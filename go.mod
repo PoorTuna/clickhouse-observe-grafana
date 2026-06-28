@@ -1,4 +1,4 @@
-module github.com/kessler/clickhouse-observe
+module github.com/poortuna/clickhouse-observe
 
 
 go 1.26.3

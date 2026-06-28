@@ -1,7 +1,7 @@
 services:
   grafana:
     user: root
-    container_name: 'kessler-clickhouseobserve-app'
+    container_name: 'poortuna-clickhouse-observe-app'
 
     build:
       context: .
@@ -19,13 +19,13 @@ services:
     cap_add:
       - SYS_PTRACE
     volumes:
-      - ../dist:/var/lib/grafana/plugins/kessler-clickhouseobserve-app
+      - ../dist:/var/lib/grafana/plugins/poortuna-clickhouse-observe-app
       - ../provisioning:/etc/grafana/provisioning
-      - ..:/root/kessler-clickhouseobserve-app
+      - ..:/root/poortuna-clickhouse-observe-app
 
     environment:
       NODE_ENV: development
-      GF_LOG_FILTERS: plugin.kessler-clickhouseobserve-app:debug
+      GF_LOG_FILTERS: plugin.poortuna-clickhouse-observe-app:debug
       GF_LOG_LEVEL: debug
       GF_DATAPROXY_LOGGING: 1
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: kessler-clickhouseobserve-app
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: poortuna-clickhouse-observe-app

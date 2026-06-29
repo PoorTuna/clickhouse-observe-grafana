@@ -26,7 +26,8 @@ A full-page log search view backed directly by ClickHouse SQL.
 - **Field sidebar** — auto-discovered from `system.columns` plus Map-key introspection. Click a field to add it as a table column or filter. Per-field value distribution popover available on hover.
 - **Sortable, reorderable columns** — add columns from the sidebar, remove them from the header, drag to reorder.
 - **Row detail drawer** — click any row to see all fields. One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a link opens the corresponding trace in the Traces Explorer.
-- **Filter pills** — active filters displayed as dismissable chips. Supports `=`, `!=`, `contains`, `not contains`.
+- **Structured filter builder** — `+ Add filter` button in the toolbar opens a Kibana-style popup: pick a field, choose an operator (`is`, `is not`, `is one of`, `is not one of`, `exists`, `does not exist`, `contains`, `does not contain`), and select a value from a live autocomplete dropdown. Supports multi-value lists and optional custom pill labels.
+- **Filter pills** — active structured filters displayed as dismissable chips below the search bar. Supports all eight operators. Click × to remove; "Clear all" removes every pill at once.
 - **Hybrid pagination** — initial 200-row buffer with lazy fetch as you page past it. Page size is configurable (10 – 500 rows per page).
 - **Edit as SQL** — toggle to drop into raw ClickHouse SQL for full query control.
 - **Saved searches** — save and restore any combination of KQL query, filters, columns, sort, and time range. Stored in browser localStorage.
@@ -130,6 +131,7 @@ The Docker dev environment (`npm run server`) runs Grafana with unsigned plugin 
 |------|----------|
 | `src/pages/` | Top-level page components: `LogsExplorer.tsx`, `TraceExplorer.tsx` |
 | `src/components/` | Shared UI: `SearchBar`, `LogsTable`, `LogDetailDrawer`, `VolumeHistogram`, `TraceWaterfall`, `FilterPills`, `PaginationBar` |
+| `src/components/AddFilter/` | Structured filter builder popup (`AddFilterPopover`) |
 | `src/components/FieldSidebar/` | Field discovery sidebar, per-field stats popover |
 | `src/components/AppConfig/` | Plugin configuration page |
 | `src/sql/` | SQL generation: `queryBuilder.ts`, `filters.ts`, `fields.ts`, `introspection.ts` |

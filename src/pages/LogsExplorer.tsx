@@ -14,7 +14,8 @@ import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
 import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildVolumeQuery } from '../sql/queryBuilder';
-import { addFilter } from '../sql/filters';
+import { addFilterPill } from '../sql/filters';
+import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext } from '../components/App/App';
 import {
   DEFAULT_LOGS_QUERY_STATE,
@@ -212,7 +213,7 @@ export function LogsExplorer() {
   const onAddFilter = (filter: FilterPill) => {
     dispatch({
       type: 'SET_FILTERS',
-      filters: addFilter(queryState.filters, filter.field, filter.value, filter.op),
+      filters: addFilterPill(queryState.filters, filter),
     });
   };
 
@@ -360,6 +361,11 @@ export function LogsExplorer() {
             onAddFilter={onAddFilter}
             timeRange={timeRange}
             queryState={queryState}
+          />
+          <AddFilterPopover
+            queryState={queryState}
+            timeRange={timeRange}
+            onAddFilter={onAddFilter}
           />
         </div>
 

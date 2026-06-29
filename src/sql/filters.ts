@@ -62,12 +62,43 @@ export function parseFilterShorthand(input: string): Omit<FilterPill, 'id'> | nu
 }
 
 /** Create a FilterPill from a field+value+op with a generated id. */
-export function makeFilter(field: string, value: string, op: FilterOp = '='): FilterPill {
-  return { id: nextId(), field, value, op };
+export function makeFilter(
+  field: string,
+  value: string,
+  op: FilterOp = '=',
+  extras?: { values?: string[]; label?: string }
+): FilterPill {
+  return { id: nextId(), field, value, op, ...extras };
+}
+
+/**
+ * Add a fully-constructed pill to the filter list, deduping by field+op.
+ * Preserves `values` and `label` on the incoming pill — use this instead of
+ * `addFilter` when the pill may carry multi-value or custom-label data.
+ */
+export function addFilterPill(filters: FilterPill[], pill: FilterPill): FilterPill[] {
+  const deduplicated = filters.filter((f) => !(f.field === pill.field && f.op === pill.op));
+  return [...deduplicated, pill];
 }
 
 /** Human-readable label for a filter pill. */
 export function filterLabel(f: FilterPill): string {
+  // Custom label takes priority
+  if (f.label) {
+    return f.label;
+  }
+  if (f.op === 'exists') {
+    return `${f.field} exists`;
+  }
+  if (f.op === 'not_exists') {
+    return `${f.field} does not exist`;
+  }
+  if (f.op === 'one_of' || f.op === 'not_one_of') {
+    const vals = (f.values ?? [f.value]).filter(Boolean).join(', ');
+    return f.op === 'one_of'
+      ? `${f.field} is one of [${vals}]`
+      : `${f.field} is not one of [${vals}]`;
+  }
   if (f.value === '' && f.op === '=') {
     return `${f.field} is empty`;
   }
@@ -76,6 +107,10 @@ export function filterLabel(f: FilterPill): string {
     '!=': '≠',
     contains: '~',
     not_contains: '!~',
+    one_of: 'in',
+    not_one_of: 'not in',
+    exists: 'exists',
+    not_exists: '!exists',
   };
   return `${f.field} ${opSymbol[f.op]} ${f.value}`;
 }

@@ -35,12 +35,44 @@ function filterOpToSql(op: FilterOp): string {
       return 'ILIKE';
     case 'not_contains':
       return 'NOT ILIKE';
+    case 'one_of':
+      return 'IN';
+    case 'not_one_of':
+      return 'NOT IN';
+    case 'exists':
+    case 'not_exists':
+      return ''; // handled separately below
   }
 }
 
 function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
   const value = filter.value.trim();
   const resolved = resolveField(filter.field, config);
+  const sqlExprRaw = resolved ? resolved.sqlExpr : filter.field;
+
+  // exists / not_exists — value is irrelevant
+  if (filter.op === 'exists') {
+    return `notEmpty(toString(${sqlExprRaw}))`;
+  }
+  if (filter.op === 'not_exists') {
+    return `empty(toString(${sqlExprRaw}))`;
+  }
+
+  // one_of / not_one_of — use IN (...) / NOT IN (...)
+  if (filter.op === 'one_of' || filter.op === 'not_one_of') {
+    const vals = filter.values?.length ? filter.values : value ? [value] : [];
+    if (vals.length === 0) {
+      // guard: empty value set → always false / always true
+      return filter.op === 'one_of' ? '1=0' : '1=1';
+    }
+    const col = quoteIdentifier(sqlExprRaw);
+    const list = vals.map(quoteString).join(', ');
+    return filter.op === 'one_of'
+      ? `${col} IN (${list})`
+      : `${col} NOT IN (${list})`;
+  }
+
+  // Standard single-value ops: =, !=, contains, not_contains
   const negate = filter.op === '!=' || filter.op === 'not_contains';
 
   if (resolved === null) {

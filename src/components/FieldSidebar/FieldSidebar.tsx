@@ -27,6 +27,7 @@ interface FieldSidebarProps {
   timeRange: TimeRange;
   onToggleColumn: (col: SelectedColumn) => void;
   onAddFilter: (f: FilterPill) => void;
+  onCollapse: () => void;
 }
 
 export function FieldSidebar({
@@ -34,6 +35,7 @@ export function FieldSidebar({
   timeRange,
   onToggleColumn,
   onAddFilter,
+  onCollapse,
 }: FieldSidebarProps) {
   const styles = useStyles2(getStyles);
   const { fields, loading, refresh } = useFields();
@@ -62,6 +64,9 @@ export function FieldSidebar({
         {loading && <Icon name="sync" size="xs" className={styles.spinner} />}
         <button className={styles.refreshBtn} onClick={refresh} title="Refresh field list">
           <Icon name="sync" size="xs" />
+        </button>
+        <button className={styles.refreshBtn} onClick={onCollapse} title="Collapse sidebar">
+          <Icon name="angle-left" size="xs" />
         </button>
       </div>
 

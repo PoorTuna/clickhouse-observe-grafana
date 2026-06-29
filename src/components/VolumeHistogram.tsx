@@ -197,7 +197,7 @@ export function VolumeHistogram({
                       width={`${w}%`}
                       height={barH}
                       fill={color}
-                      opacity={0.85}
+                      opacity={1}
                     />
                   );
                 })}

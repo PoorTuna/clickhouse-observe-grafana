@@ -119,7 +119,11 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
   return conditions;
 }
 
-export function buildLogsQuery(config: SourceConfig, state: LogsQueryState): string {
+export function buildLogsQuery(
+  config: SourceConfig,
+  state: LogsQueryState,
+  pagination?: { limit: number; offset: number }
+): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
@@ -152,7 +156,9 @@ export function buildLogsQuery(config: SourceConfig, state: LogsQueryState): str
     `FROM ${tbl}`,
     `WHERE ${conditions.join(' AND ')}`,
     `ORDER BY ${sortCol} ${sortDir}`,
-    `LIMIT ${state.limit}`,
+    pagination
+      ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
+      : `LIMIT ${state.limit}`,
   ].join('\n');
 }
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
+import { dateTime, GrafanaTheme2, PageLayoutType, TimeRange } from '@grafana/data';
+import { PluginPage } from '@grafana/runtime';
 import { Button, Input, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
 import { TraceWaterfall } from '../components/TraceWaterfall';
 import { runQueryRows } from '../data/runQuery';
@@ -140,6 +141,7 @@ export function TraceExplorer() {
   };
 
   return (
+    <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Traces' }}>
     <div className={styles.container}>
       <div className={styles.header}>
         <h2 className={styles.title}>
@@ -262,6 +264,7 @@ export function TraceExplorer() {
         </>
       )}
     </div>
+    </PluginPage>
   );
 }
 

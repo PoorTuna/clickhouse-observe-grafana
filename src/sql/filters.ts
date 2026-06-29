@@ -68,6 +68,9 @@ export function makeFilter(field: string, value: string, op: FilterOp = '='): Fi
 
 /** Human-readable label for a filter pill. */
 export function filterLabel(f: FilterPill): string {
+  if (f.value === '' && f.op === '=') {
+    return `${f.field} is empty`;
+  }
   const opSymbol: Record<FilterOp, string> = {
     '=': '=',
     '!=': '≠',

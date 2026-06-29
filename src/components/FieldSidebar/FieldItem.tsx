@@ -6,6 +6,7 @@ import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { FieldStatsPopover } from './FieldStatsPopover';
 import { FilterPill, LogsQueryState } from '../../types';
+import { makeFilter } from '../../sql/filters';
 
 interface FieldItemProps {
   field: FieldModel;
@@ -57,21 +58,22 @@ export function FieldItem({
         ref={rowRef}
         className={`${styles.row} field-item-row ${isSelected ? styles.rowSelected : ''}`}
         title={field.sqlExpr}
+        onClick={openPopover}
       >
         <Icon name={icon as any} size="xs" className={styles.typeIcon} />
         <span className={styles.name}>{field.displayName}</span>
         <div className={`${styles.actions} field-item-actions`}>
           <button
             className={styles.actionBtn}
-            title="Top values"
-            onClick={openPopover}
+            title="Filter out rows that have this field"
+            onClick={(e) => { e.stopPropagation(); onAddFilter(makeFilter(field.sqlExpr, '', '=')); }}
           >
-            <Icon name={'chart-bar' as any} size="xs" />
+            <Icon name="minus-circle" size="xs" />
           </button>
           <button
             className={`${styles.actionBtn} ${isSelected ? styles.actionBtnActive : ''}`}
             title={isSelected ? 'Remove from table' : 'Add to table'}
-            onClick={() => onToggleColumn(field)}
+            onClick={(e) => { e.stopPropagation(); onToggleColumn(field); }}
           >
             <Icon name={isSelected ? 'minus' : 'plus'} size="xs" />
           </button>
@@ -126,7 +128,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
     padding: 3px ${theme.spacing(0.5)};
     border-radius: ${theme.shape.radius.default};
-    cursor: default;
+    cursor: pointer;
     &:hover {
       background: ${theme.colors.action.hover};
     }

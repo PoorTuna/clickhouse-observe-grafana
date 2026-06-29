@@ -73,12 +73,36 @@ export interface FilterPill {
   value: string;
 }
 
+export type ColumnType = 'time' | 'level' | 'text' | 'number' | 'string' | 'exact' | 'map' | 'unknown';
+
+export interface SelectedColumn {
+  id: string;           // stable identifier
+  key: string;          // row-object key (alias in SELECT)
+  sqlExpr: string;      // SQL expression
+  displayName: string;
+  type: ColumnType;
+  isCore: boolean;      // core cols are always selected; user cols add extra SELECT clauses
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  search: string;
+  filters: FilterPill[];
+  columns: SelectedColumn[];
+  sort?: { col: string; dir: 'asc' | 'desc' };
+  timeRange?: { from: string; to: string };
+  createdAt: string;
+}
+
 export interface LogsQueryState {
   search: string;
   filters: FilterPill[];
   rawSql: string;
   useRawSql: boolean;
   limit: number;
+  columns: SelectedColumn[];
+  sort?: { col: string; dir: 'asc' | 'desc' };
 }
 
 export const DEFAULT_LOGS_QUERY_STATE: LogsQueryState = {
@@ -87,6 +111,8 @@ export const DEFAULT_LOGS_QUERY_STATE: LogsQueryState = {
   rawSql: '',
   useRawSql: false,
   limit: 200,
+  columns: [],
+  sort: undefined,
 };
 
 export type LogRow = Record<string, unknown>;
@@ -113,7 +139,7 @@ export interface SpanRow {
   serviceName: string;
   operationName: string;
   startTime: number;
-  duration: number;
+  durationNs: number;
   statusCode: string;
   tags: string;
 }

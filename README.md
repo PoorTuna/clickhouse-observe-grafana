@@ -1,136 +1,147 @@
-# Grafana app plugin template
+# ClickHouse Observe
 
-This template is a starting point for building an app plugin for Grafana.
+HyperDX-style log and trace explorer for ClickHouse, packaged as a Grafana app plugin.
 
-## What are Grafana app plugins?
+![Logs Explorer](src/img/screenshot-logs.png)
 
-App plugins can let you create a custom out-of-the-box monitoring experience by custom pages, nested data sources and panel plugins.
+---
 
-## Get started
+## Requirements
 
-### Backend
+- Grafana >= 10.0.0
+- [ClickHouse datasource plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) installed and configured
+- A ClickHouse table with log data (the OpenTelemetry schema works out of the box)
+- Node >= 22 (development only)
 
-1. Update [Grafana plugin SDK for Go](https://grafana.com/developers/plugin-tools/key-concepts/backend-plugins/grafana-plugin-sdk-for-go) dependency to the latest minor version:
+---
 
-   ```bash
-   go get -u github.com/grafana/grafana-plugin-sdk-go
-   go mod tidy
-   ```
+## Features
 
-2. Build plugin backend binaries for Linux, Windows and Darwin:
+### Logs Explorer
 
-   ```bash
-   mage -v
-   ```
+A full-page log search view backed directly by ClickHouse SQL.
 
-3. List all available Mage targets for additional commands:
+- **KQL search bar** — Kibana Query Language with autocomplete. Field names, operators, and top values are all suggested as you type, fetched live from ClickHouse.
+- **Volume histogram** — log volume over time, bucketed by severity level. Click and drag to zoom into a time range.
+- **Field sidebar** — auto-discovered from `system.columns` plus Map-key introspection. Click a field to add it as a table column or filter. Per-field value distribution popover available on hover.
+- **Sortable, reorderable columns** — add columns from the sidebar, remove them from the header, drag to reorder.
+- **Row detail drawer** — click any row to see all fields. One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a link opens the corresponding trace in the Traces Explorer.
+- **Filter pills** — active filters displayed as dismissable chips. Supports `=`, `!=`, `contains`, `not contains`.
+- **Hybrid pagination** — initial 200-row buffer with lazy fetch as you page past it. Page size is configurable (10 – 500 rows per page).
+- **Edit as SQL** — toggle to drop into raw ClickHouse SQL for full query control.
+- **Saved searches** — save and restore any combination of KQL query, filters, columns, sort, and time range. Stored in browser localStorage.
+- **Browser-local timestamps** — log timestamps are rendered in the browser's local timezone.
 
-   ```bash
-   mage -l
-   ```
+![Logs Explorer](src/img/screenshot-logs.png)
 
-### Frontend
+### Trace Explorer
 
-1. Install dependencies
+![Trace Explorer](src/img/screenshot-traces.png)
 
-   ```bash
-   npm install
-   ```
+Search traces by service name and inspect individual traces as a span waterfall.
 
-2. Build plugin in development mode and run in watch mode
+- **Trace list** — table of recent traces showing trace ID, root service, start time, duration, span count, and error count.
+- **Span waterfall** — click any trace to open a timeline view of all spans, with hierarchy, duration bars, and status codes.
+- **Deep links** — traces are addressable by URL (`/a/poortuna-clickhouse-observe-app/traces/<traceId>`). The Logs Explorer links here directly when a log row carries a trace ID.
 
-   ```bash
-   npm run dev
-   ```
+### Configuration
 
-3. Build plugin in production mode
+![Configuration](src/img/screenshot-config.png)
 
-   ```bash
-   npm run build
-   ```
+The configuration page is at **Administration > Plugins > ClickHouse Observe > Configuration**.
 
-4. Run the tests (using Jest)
+- Pick the ClickHouse datasource to query through.
+- Set the database name and the logs/traces table names.
+- Map columns to their roles (timestamp, body, severity, trace/span IDs, service name, duration, attribute Maps).
+- **Apply OTel preset** fills in all column names for the standard OpenTelemetry Collector schema (`otel_logs` / `otel_traces`). Override individual fields below the preset button for custom schemas.
 
-   ```bash
-   # Runs the tests and watches for changes, requires git init first
-   npm run test
+---
 
-   # Exits after running all the tests
-   npm run test:ci
-   ```
+## KQL Search Reference
 
-5. Spin up a Grafana instance and run the plugin inside it (using Docker)
+| Syntax | Meaning |
+|--------|---------|
+| `level:error` | Field equals value (exact match) |
+| `service:payment*` | Wildcard match |
+| `service:*` | Field exists |
+| `"payment failed"` | Phrase match on the log body |
+| `responseTime > 500` | Numeric greater-than |
+| `responseTime >= 500` | Numeric greater-than-or-equal |
+| `responseTime < 100` | Numeric less-than |
+| `responseTime <= 100` | Numeric less-than-or-equal |
+| `level:error and service:checkout` | Boolean AND |
+| `level:warn or level:error` | Boolean OR |
+| `not level:debug` | Boolean NOT |
+| `level:error and service:pay* and latency > 1000` | Combined |
 
-   ```bash
-   npm run server
-   ```
+Bare terms without a field (`payment failed`) search the log body. Autocomplete suggests field names, operators, and live top values at each position.
 
-6. Run the E2E tests (using Playwright)
+---
 
-   ```bash
-   # Spins up a Grafana instance first that we tests against
-   npm run server
+## Configuration Steps
 
-   # If you wish to start a certain Grafana version. If not specified will use latest by default
-   GRAFANA_VERSION=11.3.0 npm run server
+1. Install and configure the [ClickHouse datasource plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) with your ClickHouse connection details. Credentials live on the datasource, not on this app.
+2. Build and copy (or run in dev mode — see below) this plugin so Grafana loads it.
+3. In Grafana, go to **Administration > Plugins**, find **ClickHouse Observe**, and click **Enable**.
+4. Open **Administration > Plugins > ClickHouse Observe > Configuration**.
+5. Select the ClickHouse datasource from the dropdown.
+6. Enter the database name (default: `default`), logs table, and traces table.
+7. Click **Apply OTel preset** if your tables follow the OpenTelemetry Collector schema. Otherwise fill in the column mapping fields manually.
+8. Click **Save configuration**. The page reloads to apply the new settings.
+9. Navigate to **More apps > ClickHouse Observe > Logs** to start querying.
 
-   # Starts the tests
-   npm run e2e
-   ```
+---
 
-7. Run the linter
+## Development
 
-   ```bash
-   npm run lint
+```bash
+# Install dependencies
+npm install
 
-   # or
+# Build in development mode (watch)
+npm run dev
 
-   npm run lint:fix
-   ```
+# Build for production
+npm run build
 
-# Distributing your plugin
+# Run unit tests (KQL parser, suggest, SQL generation)
+npm run test:ci
 
-When distributing a Grafana plugin either within the community or privately the plugin must be signed so the Grafana application can verify its authenticity. This can be done with the `@grafana/sign-plugin` package.
+# Check types
+npm run typecheck
 
-_Note: It's not necessary to sign a plugin during development. The docker development environment that is scaffolded with `@grafana/create-plugin` caters for running the plugin without a signature._
+# Lint
+npm run lint
 
-## Initial steps
+# Start a local Grafana instance via Docker (plugin hot-reloads)
+npm run server
 
-Before signing a plugin please read the Grafana [plugin publishing and signing criteria](https://grafana.com/legal/plugins/#plugin-publishing-and-signing-criteria) documentation carefully.
+# Run end-to-end tests (requires npm run server to be running)
+npm run e2e
+```
 
-`@grafana/create-plugin` has added the necessary commands and workflows to make signing and distributing a plugin via the grafana plugins catalog as straightforward as possible.
+The Docker dev environment (`npm run server`) runs Grafana with unsigned plugin loading enabled and mounts the built `dist/` directory into the container. No signing is required for local development.
 
-Before signing a plugin for the first time please consult the Grafana [plugin signature levels](https://grafana.com/legal/plugins/#what-are-the-different-classifications-of-plugins) documentation to understand the differences between the types of signature level.
+---
 
-1. Create a [Grafana Cloud account](https://grafana.com/signup).
-2. Make sure that the first part of the plugin ID matches the slug of your Grafana Cloud account.
-   - _You can find the plugin ID in the `plugin.json` file inside your plugin directory. For example, if your account slug is `acmecorp`, you need to prefix the plugin ID with `acmecorp-`._
-3. Create a Grafana Cloud API key with the `PluginPublisher` role.
-4. Keep a record of this API key as it will be required for signing a plugin
+## Project Layout
 
-## Signing a plugin
+| Path | Contents |
+|------|----------|
+| `src/pages/` | Top-level page components: `LogsExplorer.tsx`, `TraceExplorer.tsx` |
+| `src/components/` | Shared UI: `SearchBar`, `LogsTable`, `LogDetailDrawer`, `VolumeHistogram`, `TraceWaterfall`, `FilterPills`, `PaginationBar` |
+| `src/components/FieldSidebar/` | Field discovery sidebar, per-field stats popover |
+| `src/components/AppConfig/` | Plugin configuration page |
+| `src/sql/` | SQL generation: `queryBuilder.ts`, `filters.ts`, `fields.ts`, `introspection.ts` |
+| `src/sql/kql/` | KQL engine: lexer, parser, AST, SQL emitter, autocomplete suggestions, value loader |
+| `src/data/` | Data layer: `runQuery.ts` (Grafana datasource proxy), `savedSearches.ts` (localStorage) |
 
-### Using Github actions release workflow
+---
 
-If the plugin is using the github actions supplied with `@grafana/create-plugin` signing a plugin is included out of the box. The [release workflow](./.github/workflows/release.yml) can prepare everything to make submitting your plugin to Grafana as easy as possible. Before being able to sign the plugin however a secret needs adding to the Github repository.
+## Signing and Distribution
 
-1. Please navigate to "settings > secrets > actions" within your repo to create secrets.
-2. Click "New repository secret"
-3. Name the secret "GRAFANA_API_KEY"
-4. Paste your Grafana Cloud API key in the Secret field
-5. Click "Add secret"
+Plugins must be signed before they can be distributed via the Grafana plugin catalog or used in environments with signature enforcement. See the [Grafana plugin signing documentation](https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin) for instructions. The `npm run sign` script wraps `@grafana/sign-plugin` and requires a `GRAFANA_API_KEY` environment variable from a Grafana Cloud account whose slug matches the plugin ID prefix (`poortuna`).
 
-#### Push a version tag
+---
 
-To trigger the workflow we need to push a version tag to github. This can be achieved with the following steps:
-
-1. Run `npm version <major|minor|patch>`
-2. Run `git push origin main --follow-tags`
-
-## Learn more
-
-Below you can find source code for existing app plugins and other related documentation.
-
-- [Basic app plugin example](https://github.com/grafana/grafana-plugin-examples/tree/master/examples/app-basic#readme)
-- [`plugin.json` documentation](https://grafana.com/developers/plugin-tools/reference/plugin-jsonplugin-json)
-- [Sign a plugin](https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin)
+**License:** Apache-2.0

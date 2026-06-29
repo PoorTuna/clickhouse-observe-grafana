@@ -1,6 +1,6 @@
 import React from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, DateTime, dateTimeFormat } from '@grafana/data';
+import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { LogRow, SelectedColumn } from '../types';
 import { SEVERITY_COLORS } from '../constants';
@@ -22,15 +22,22 @@ function severityColor(severity: unknown): string {
   return SEVERITY_COLORS[s] ?? SEVERITY_COLORS['unknown'];
 }
 
+const TS_FORMAT = { format: 'YYYY-MM-DD HH:mm:ss.SSS', timeZone: 'browser' } as const;
+
 function formatTimestamp(ts: unknown): string {
   if (ts === null || ts === undefined) {
     return '';
   }
   if (typeof ts === 'object' && ts !== null && 'valueOf' in ts) {
-    return dateTimeFormat((ts as DateTime).valueOf(), { format: 'YYYY-MM-DD HH:mm:ss.SSS' });
+    return dateTimeFormat((ts as DateTime).valueOf(), TS_FORMAT);
   }
   if (typeof ts === 'number') {
-    return dateTimeFormat(ts, { format: 'YYYY-MM-DD HH:mm:ss.SSS' });
+    return dateTimeFormat(ts, TS_FORMAT);
+  }
+  // Raw string from ClickHouse (e.g. "2026-06-29 06:00:00") — parse as UTC, display local.
+  const ms = toUtc(String(ts)).valueOf();
+  if (!isNaN(ms)) {
+    return dateTimeFormat(ms, TS_FORMAT);
   }
   return String(ts);
 }

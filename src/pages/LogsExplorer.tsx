@@ -376,6 +376,7 @@ export function LogsExplorer() {
           <button
             className={styles.sqlToggle}
             onClick={() => dispatch({ type: 'TOGGLE_RAW_SQL' })}
+            title="For regex, ClickHouse functions, and other advanced queries, switch to raw SQL"
           >
             {queryState.useRawSql ? '▾ Edit SQL' : '▸ Edit as SQL'}
           </button>

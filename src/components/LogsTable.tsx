@@ -1,14 +1,19 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat } from '@grafana/data';
-import { useStyles2 } from '@grafana/ui';
-import { LogRow } from '../types';
+import { Icon, useStyles2 } from '@grafana/ui';
+import { LogRow, SelectedColumn } from '../types';
 import { SEVERITY_COLORS } from '../constants';
 
 interface LogsTableProps {
   rows: LogRow[];
   loading: boolean;
+  columns: SelectedColumn[];
+  sort?: { col: string; dir: 'asc' | 'desc' };
   onRowClick: (row: LogRow) => void;
+  onSort?: (col: string) => void;
+  onRemoveColumn?: (col: SelectedColumn) => void;
+  onMoveColumn?: (id: string, direction: 'left' | 'right') => void;
   selectedRow?: LogRow | null;
 }
 
@@ -21,7 +26,6 @@ function formatTimestamp(ts: unknown): string {
   if (ts === null || ts === undefined) {
     return '';
   }
-  // Grafana DateTime is a dayjs object; plain ms number or ISO string also handled
   if (typeof ts === 'object' && ts !== null && 'valueOf' in ts) {
     return dateTimeFormat((ts as DateTime).valueOf(), { format: 'YYYY-MM-DD HH:mm:ss.SSS' });
   }
@@ -31,7 +35,39 @@ function formatTimestamp(ts: unknown): string {
   return String(ts);
 }
 
-export function LogsTable({ rows, loading, onRowClick, selectedRow }: LogsTableProps) {
+function renderCell(col: SelectedColumn, row: LogRow): React.ReactNode {
+  const raw = row[col.key];
+  if (col.type === 'time') {
+    return String(formatTimestamp(raw));
+  }
+  if (col.type === 'level') {
+    const s = String(raw || '');
+    return (
+      <span style={{ color: severityColor(s) }}>
+        {s.toUpperCase() || '—'}
+      </span>
+    );
+  }
+  if (raw === null || raw === undefined) {
+    return '—';
+  }
+  if (typeof raw === 'object') {
+    return JSON.stringify(raw);
+  }
+  return String(raw);
+}
+
+export function LogsTable({
+  rows,
+  loading,
+  columns,
+  sort,
+  onRowClick,
+  onSort,
+  onRemoveColumn,
+  onMoveColumn,
+  selectedRow,
+}: LogsTableProps) {
   const styles = useStyles2(getStyles);
 
   if (loading) {
@@ -46,16 +82,62 @@ export function LogsTable({ rows, loading, onRowClick, selectedRow }: LogsTableP
       <table className={styles.table}>
         <thead>
           <tr>
-            <th className={styles.th} style={{ width: 190 }}>
-              Time
-            </th>
-            <th className={styles.th} style={{ width: 80 }}>
-              Level
-            </th>
-            <th className={styles.th}>Message</th>
-            <th className={styles.th} style={{ width: 140 }}>
-              Service
-            </th>
+            {columns.map((col, idx) => {
+              const isSorted = sort?.col === col.key;
+              return (
+                <th
+                  key={col.id}
+                  className={styles.th}
+                  style={col.type === 'time' ? { width: 190 } : col.type === 'level' ? { width: 80 } : undefined}
+                >
+                  <div className={styles.thInner}>
+                    <span
+                      className={onSort ? styles.sortable : ''}
+                      onClick={() => onSort?.(col.key)}
+                    >
+                      {col.displayName}
+                      {isSorted && (
+                        <Icon
+                          name={sort!.dir === 'asc' ? 'arrow-up' : 'arrow-down'}
+                          size="xs"
+                        />
+                      )}
+                    </span>
+                    {!col.isCore && (
+                      <div className={styles.colActions}>
+                        {onMoveColumn && idx > 0 && (
+                          <button
+                            className={styles.colBtn}
+                            title="Move left"
+                            onClick={() => onMoveColumn(col.id, 'left')}
+                          >
+                            <Icon name="angle-left" size="xs" />
+                          </button>
+                        )}
+                        {onMoveColumn && idx < columns.length - 1 && (
+                          <button
+                            className={styles.colBtn}
+                            title="Move right"
+                            onClick={() => onMoveColumn(col.id, 'right')}
+                          >
+                            <Icon name="angle-right" size="xs" />
+                          </button>
+                        )}
+                        {onRemoveColumn && (
+                          <button
+                            className={styles.colBtn}
+                            title="Remove column"
+                            onClick={() => onRemoveColumn(col)}
+                          >
+                            <Icon name="times" size="xs" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -67,23 +149,26 @@ export function LogsTable({ rows, loading, onRowClick, selectedRow }: LogsTableP
                 className={`${styles.tr} ${isSelected ? styles.trSelected : ''}`}
                 onClick={() => onRowClick(row)}
               >
-                <td className={styles.td}>
-                  <span className={styles.timestamp}>{formatTimestamp(row['timestamp'])}</span>
-                </td>
-                <td className={styles.td}>
-                  <span
-                    className={styles.severity}
-                    style={{ color: severityColor(row['severity']) }}
+                {columns.map((col) => (
+                  <td
+                    key={col.id}
+                    className={`${styles.td} ${col.type === 'text' ? styles.bodyCell : ''}`}
                   >
-                    {String(row['severity'] || '').toUpperCase() || '—'}
-                  </span>
-                </td>
-                <td className={`${styles.td} ${styles.bodyCell}`}>
-                  <span className={styles.body}>{String(row['body'] ?? '')}</span>
-                </td>
-                <td className={styles.td}>
-                  <span className={styles.service}>{String(row['serviceName'] ?? '—')}</span>
-                </td>
+                    <span
+                      className={
+                        col.type === 'time'
+                          ? styles.timestamp
+                          : col.type === 'level'
+                          ? styles.severity
+                          : col.type === 'text'
+                          ? styles.body
+                          : styles.cell
+                      }
+                    >
+                      {renderCell(col, row)}
+                    </span>
+                  </td>
+                ))}
               </tr>
             );
           })}
@@ -121,12 +206,40 @@ const getStyles = (theme: GrafanaTheme2) => ({
     top: 0;
     z-index: 1;
   `,
+  thInner: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+  `,
+  sortable: css`
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    &:hover { color: ${theme.colors.text.primary}; }
+  `,
+  colActions: css`
+    display: flex;
+    gap: 1px;
+    margin-left: auto;
+    opacity: 0;
+    th:hover & { opacity: 1; }
+  `,
+  colBtn: css`
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 1px 2px;
+    color: ${theme.colors.text.secondary};
+    display: flex;
+    align-items: center;
+    border-radius: 2px;
+    &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
+  `,
   tr: css`
     cursor: pointer;
     border-bottom: 1px solid ${theme.colors.border.weak};
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
+    &:hover { background: ${theme.colors.action.hover}; }
   `,
   trSelected: css`
     background: ${theme.colors.action.selected} !important;
@@ -135,19 +248,21 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
     vertical-align: top;
   `,
+  bodyCell: css`
+    max-width: 0;
+    width: 100%;
+  `,
   timestamp: css`
     color: ${theme.colors.text.secondary};
     white-space: nowrap;
     font-size: 11px;
+    display: block;
   `,
   severity: css`
     font-weight: ${theme.typography.fontWeightMedium};
     font-size: 11px;
     white-space: nowrap;
-  `,
-  bodyCell: css`
-    max-width: 0;
-    width: 100%;
+    display: block;
   `,
   body: css`
     display: block;
@@ -156,10 +271,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     color: ${theme.colors.text.primary};
   `,
-  service: css`
+  cell: css`
     color: ${theme.colors.text.secondary};
-    white-space: nowrap;
     font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    display: block;
   `,
   empty: css`
     padding: ${theme.spacing(4)};

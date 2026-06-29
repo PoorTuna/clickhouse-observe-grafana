@@ -4,7 +4,7 @@ import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Button, Input, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
 import { TraceWaterfall } from '../components/TraceWaterfall';
 import { runQueryRows } from '../data/runQuery';
-import { buildTraceSearchQuery, buildTraceDetailQuery, buildLogsByTraceIdQuery } from '../sql/queryBuilder';
+import { buildTraceSearchQuery, buildTraceDetailQuery } from '../sql/queryBuilder';
 import { SourceConfigContext } from '../components/App/App';
 import { SpanRow, TraceRow } from '../types';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -160,6 +160,9 @@ export function TraceExplorer() {
             onChange={setTimeRange}
             onChangeTimeZone={() => {}}
             onChangeFiscalYearStartMonth={() => {}}
+            onMoveBackward={() => {}}
+            onMoveForward={() => {}}
+            onZoom={() => {}}
             timeZone="browser"
             fiscalYearStartMonth={0}
           />

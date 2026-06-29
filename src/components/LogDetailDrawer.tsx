@@ -55,8 +55,8 @@ export function LogDetailDrawer({
   const renderAttrRow = (field: string, value: string, mapCol?: string) => {
     const clickhouseField = mapCol ? `${mapCol}['${field}']` : field;
     return (
-      <div key={field} className={styles.attrRow}>
-        <div className={styles.attrActions}>
+      <div key={field} className={`${styles.attrRow} attr-row`}>
+        <div className={`${styles.attrActions} attr-actions`}>
           <button
             className={styles.attrAction}
             title="Include in filter"
@@ -252,15 +252,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:hover {
       background: ${theme.colors.action.hover};
     }
+    &:hover .attr-actions {
+      opacity: 1;
+    }
   `,
   attrActions: css`
     display: flex;
     gap: 2px;
     flex-shrink: 0;
     opacity: 0;
-    ${css`[class*="attrRow"]:hover &`} {
-      opacity: 1;
-    }
+    transition: opacity 0.1s;
   `,
   attrAction: css`
     width: 18px;

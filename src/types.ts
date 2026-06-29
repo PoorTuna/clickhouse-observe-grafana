@@ -64,13 +64,23 @@ export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
   columns: OTEL_COLUMN_MAPPING,
 };
 
-export type FilterOp = '=' | '!=' | 'contains' | 'not_contains';
+export type FilterOp =
+  | '='            // is
+  | '!='           // is not
+  | 'contains'     // contains
+  | 'not_contains' // does not contain
+  | 'one_of'       // is one of (IN)
+  | 'not_one_of'   // is not one of (NOT IN)
+  | 'exists'       // exists
+  | 'not_exists';  // does not exist
 
 export interface FilterPill {
   id: string;
   field: string;
   op: FilterOp;
-  value: string;
+  value: string;        // single-value ops; '' for multi / exists ops
+  values?: string[];    // one_of / not_one_of
+  label?: string;       // optional custom display label
 }
 
 export type ColumnType = 'time' | 'level' | 'text' | 'number' | 'string' | 'exact' | 'map' | 'unknown';

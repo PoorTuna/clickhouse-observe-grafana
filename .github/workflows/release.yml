@@ -1,29 +1,72 @@
-# This GitHub Action automates the process of building Grafana plugins.
-# (For more information, see https://github.com/grafana/plugin-actions/blob/main/build-plugin/README.md)
 name: Release
 
 on:
   push:
     tags:
-      - 'v*' # Run workflow on version tags, e.g. v1.0.0.
+      - 'v*'
 
-permissions: read-all
+permissions:
+  contents: write
 
 jobs:
   release:
-    permissions:
-      contents: write
+    name: Build and publish release
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
 
-      - uses: grafana/plugin-actions/build-plugin@build-plugin/v1.0.2
-        # Uncomment to enable plugin signing
-        # (For more info on how to generate the access policy token see https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin#generate-an-access-policy-token)
-        #with:
-        # Make sure to save the token in your repository secrets
-        #policy_token: $
-        # Usage of GRAFANA_API_KEY is deprecated, prefer `policy_token` option above
-        #grafana_token: $
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test:ci
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Get plugin metadata
+        id: meta
+        run: |
+          PLUGIN_ID=$(jq -r '.id' dist/plugin.json)
+          PLUGIN_VERSION=$(jq -r '.info.version' dist/plugin.json)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          ZIP="${PLUGIN_ID}-${PLUGIN_VERSION}.zip"
+          echo "plugin-id=${PLUGIN_ID}"      >> "$GITHUB_OUTPUT"
+          echo "plugin-version=${PLUGIN_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "zip=${ZIP}"                  >> "$GITHUB_OUTPUT"
+          echo "tag-version=${TAG_VERSION}"  >> "$GITHUB_OUTPUT"
+
+      - name: Package plugin
+        run: |
+          cp -r dist "${{ steps.meta.outputs.plugin-id }}"
+          zip -qr "${{ steps.meta.outputs.zip }}" "${{ steps.meta.outputs.plugin-id }}"
+          rm -rf "${{ steps.meta.outputs.plugin-id }}"
+
+      # Extract the section for this version from CHANGELOG.md.
+      # Grab lines between the ## [X.Y.Z] header and the next ## header.
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${{ steps.meta.outputs.tag-version }}"
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md) for details."
+          fi
+          # Write to file so multiline content survives gh CLI
+          echo "$NOTES" > release-notes.md
+
+      - name: Create GitHub release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "${{ steps.meta.outputs.zip }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

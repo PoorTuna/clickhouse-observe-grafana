@@ -8,7 +8,7 @@
     "keywords": ["clickhouse", "logs", "traces", "observability", "otel"],
     "description": "HyperDX-style log and trace explorer for ClickHouse. Companion app — requires the ClickHouse datasource plugin.",
     "author": {
-      "name": "Kessler"
+      "name": "PoorTuna"
     },
     "logos": {
       "small": "img/logo.svg",

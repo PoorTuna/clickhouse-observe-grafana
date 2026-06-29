@@ -353,6 +353,8 @@ export function LogsExplorer() {
             onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
             onSearch={() => executeQuery()}
             onAddFilter={onAddFilter}
+            timeRange={timeRange}
+            queryState={queryState}
           />
         </div>
 
@@ -425,7 +427,10 @@ export function LogsExplorer() {
           <div className={styles.results}>
             {loading && (
               <div className={styles.loadingOverlay}>
-                <Spinner />
+                <div className={styles.loadingContent}>
+                  <Spinner size="xl" />
+                  <span className={styles.loadingText}>Running query…</span>
+                </div>
               </div>
             )}
             <LogsTable
@@ -582,8 +587,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   loadingOverlay: css`
     position: absolute;
-    top: ${theme.spacing(1)};
-    right: ${theme.spacing(1)};
-    z-index: 2;
+    inset: 0;
+    z-index: 10;
+    background: ${theme.colors.background.canvas}CC;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: ${theme.shape.radius.default};
+  `,
+  loadingContent: css`
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: ${theme.spacing(1.5)};
+  `,
+  loadingText: css`
+    font-size: ${theme.typography.body.fontSize};
+    color: ${theme.colors.text.secondary};
   `,
 });

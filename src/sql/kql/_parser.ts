@@ -18,7 +18,7 @@
  * Throws a string message on parse errors; callers fall back to body search.
  */
 
-import { lex, Token } from './_lexer';
+import { lex, Token, WILDCARD_RE, WILDCARD_STAR } from './_lexer';
 import { KqlNode, KqlAnd, KqlOr, KqlNot, KqlIs, KqlRange } from './ast';
 
 class Parser {
@@ -111,7 +111,7 @@ class Parser {
       field: null,
       value: val.value,
       isPhrase: val.isPhrase,
-      isWildcard: !val.isPhrase && /[*?]/.test(val.value),
+      isWildcard: !val.isPhrase && WILDCARD_RE.test(val.value),
       isExists: false,
     };
     return node;
@@ -121,8 +121,8 @@ class Parser {
     const field = this.consume().value; // IDENT
     this.consume(); // COLON
 
-    // field:*  → exists
-    if (this.peek().type === 'IDENT' && this.peek().value === '*') {
+    // field:*  → exists (the bare * is lexed to a WILDCARD_STAR sentinel)
+    if (this.peek().type === 'IDENT' && this.peek().value === WILDCARD_STAR) {
       this.consume();
       const node: KqlIs = {
         type: 'is', field,
@@ -145,7 +145,7 @@ class Parser {
       type: 'is', field,
       value: val.value,
       isPhrase: val.isPhrase,
-      isWildcard: !val.isPhrase && /[*?]/.test(val.value),
+      isWildcard: !val.isPhrase && WILDCARD_RE.test(val.value),
       isExists: false,
     };
     return node;
@@ -173,7 +173,7 @@ class Parser {
       type: 'is', field,
       value: val.value,
       isPhrase: val.isPhrase,
-      isWildcard: !val.isPhrase && /[*?]/.test(val.value),
+      isWildcard: !val.isPhrase && WILDCARD_RE.test(val.value),
       isExists: false,
     };
     return negate ? ({ type: 'not', operand: is } as KqlNot) : is;

@@ -36,8 +36,9 @@ export function buildLevelClause(expr: string, value: string, negate: boolean): 
   if (inList) {
     return `${expr} ${negate ? 'NOT IN' : 'IN'} (${inList})`;
   }
-  // Unknown level — fall back to ILIKE
-  return `${expr} ${negate ? 'NOT ILIKE' : 'ILIKE'} '${value.replace(/'/g, "\\'")}'`;
+  // Unknown level — fall back to ILIKE (escape ILIKE metacharacters so value is literal)
+  const escaped = value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_').replace(/'/g, "\\'");
+  return `${expr} ${negate ? 'NOT ILIKE' : 'ILIKE'} '${escaped}'`;
 }
 
 /**
@@ -56,6 +57,11 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
   // Level / severity aliases
   if (['level', 'severity', 'lvl', 'loglevel', 'log_level', 'severitytext'].includes(f)) {
     return { sqlExpr: c.severity || c.body, kind: 'level' };
+  }
+
+  // SeverityNumber — numeric column, not in OTEL_COLUMN_MAPPING values
+  if (['severitynumber', 'severity_number'].includes(f)) {
+    return { sqlExpr: 'SeverityNumber', kind: 'exact' };
   }
 
   // Service name aliases

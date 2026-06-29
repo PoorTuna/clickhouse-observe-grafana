@@ -28,6 +28,7 @@ import {
   VolumeDataPoint,
 } from '../types';
 import { PLUGIN_BASE_URL } from '../constants';
+import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 
 const INITIAL_FETCH = 200;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
@@ -336,9 +337,9 @@ export function LogsExplorer() {
             onChange={(range) => setTimeRange(range)}
             onChangeTimeZone={() => {}}
             onChangeFiscalYearStartMonth={() => {}}
-            onMoveBackward={() => {}}
-            onMoveForward={() => {}}
-            onZoom={() => {}}
+            onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
+            onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
+            onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
             timeZone="browser"
             fiscalYearStartMonth={0}
           />

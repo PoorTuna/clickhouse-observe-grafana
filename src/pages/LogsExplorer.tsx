@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Button, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
@@ -115,6 +115,8 @@ export function LogsExplorer() {
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
 
   const runRef = useRef(0);
+  // Always tracks the latest executeQuery closure so deferred calls get fresh state.
+  const latestExecuteQuery = useRef<() => void>(() => {});
 
   // Effective columns: use state if set, else derive defaults from config
   const effectiveColumns = useMemo<SelectedColumn[]>(() => {
@@ -177,6 +179,10 @@ export function LogsExplorer() {
     }
   }, [config, queryState, timeRange, effectiveColumns]);
 
+  useLayoutEffect(() => {
+    latestExecuteQuery.current = executeQuery;
+  });
+
   useEffect(() => {
     executeQuery();
   }, [executeQuery]);
@@ -204,11 +210,16 @@ export function LogsExplorer() {
         filters: search.filters,
         columns: search.columns,
         sort: search.sort,
+        useRawSql: false, // always exit raw SQL mode when loading a saved search
       },
     });
     if (newTimeRange) {
       setTimeRange(newTimeRange);
     }
+    // useLayoutEffect keeps latestExecuteQuery.current in sync with every render,
+    // so by the time this microtask fires React has committed the new state and
+    // the ref holds the fresh closure — guaranteeing results load without a manual click.
+    queueMicrotask(() => latestExecuteQuery.current());
   };
 
   const onHistogramSelectRange = (fromMs: number, toMs: number) => {

@@ -8,6 +8,7 @@
 
 import { FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
 import { resolveField, buildLevelClause } from './fields';
+import { parseKql, kqlToSql } from './kql';
 
 export function quoteIdentifier(name: string): string {
   if (name.includes('[') || name.includes('(') || name.includes('.')) {
@@ -75,27 +76,17 @@ function buildSearchClause(search: string, config: SourceConfig): string {
     return '';
   }
 
-  const c = config.columns;
-
-  const colonMatch = /^([A-Za-z_][A-Za-z0-9_.[\]']*):(.+)$/.exec(term);
-  if (colonMatch) {
-    const [, rawField, rawValue] = colonMatch;
-    const value = rawValue.trim();
-    const resolved = resolveField(rawField, config);
-
-    if (resolved === null) {
-      return `${c.body} ILIKE ${quoteString('%' + value + '%')}`;
-    }
-    const { sqlExpr, kind } = resolved;
-    if (kind === 'level') {
-      return buildLevelClause(sqlExpr, value, false);
-    }
-    if (kind === 'text') {
-      return `${sqlExpr} ILIKE ${quoteString('%' + value + '%')}`;
-    }
-    return `${quoteIdentifier(sqlExpr)} = ${quoteString(value)}`;
+  // Try to parse as KQL first.
+  try {
+    const ast = parseKql(term);
+    return kqlToSql(ast, config);
+  } catch {
+    // Fall back to legacy free-text body search on any parse error so existing
+    // queries and partial input never break a live result set.
   }
 
+  // Legacy fallback: tokenize and ILIKE/hasToken on body.
+  const c = config.columns;
   const terms = term.match(/"[^"]*"|'[^']*'|\S+/g) ?? [term];
   const clauses = terms.map((t) => {
     const clean = t.replace(/^["']|["']$/g, '');

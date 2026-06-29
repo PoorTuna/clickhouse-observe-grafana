@@ -1,50 +1,51 @@
-<!-- This README file is going to be the one displayed on the Grafana.com website for your plugin. Uncomment and replace the content here before publishing.
-
-Remove any remaining comments before publishing as these may be displayed on Grafana.com -->
-
 # Clickhouse-Observe
 
-<!-- To help maximize the impact of your README and improve usability for users, we propose the following loose structure:
-
-**BEFORE YOU BEGIN**
-- Ensure all links are absolute URLs so that they will work when the README is displayed within Grafana and Grafana.com
-- Be inspired ✨
-  - [grafana-polystat-panel](https://github.com/grafana/grafana-polystat-panel)
-  - [volkovlabs-variable-panel](https://github.com/volkovlabs/volkovlabs-variable-panel)
-
-**ADD SOME BADGES**
-
-Badges convey useful information at a glance for users whether in the Catalog or viewing the source code. You can use the generator on [Shields.io](https://shields.io/badges/dynamic-json-badge) together with the Grafana.com API
-to create dynamic badges that update automatically when you publish a new version to the marketplace.
-
-- For the URL parameter use `https://grafana.com/api/plugins/your-plugin-id`.
-- Example queries:
-  - Downloads: `$.downloads`
-  - Catalog Version: `$.version`
-  - Grafana Dependency: `$.grafanaDependency`
-  - Signature Type: `$.versionSignatureType`
-- Optionally, for the logo parameter use `grafana`.
-
-Full example: ![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?logo=grafana&query=$.version&url=https://grafana.com/api/plugins/grafana-polystat-panel&label=Marketplace&prefix=v&color=F47A20)
-
-Consider other [badges](https://shields.io/badges) as you feel appropriate for your project.
-
-## Overview / Introduction
-Provide one or more paragraphs as an introduction to your plugin to help users understand why they should use it.
-
-Consider including screenshots:
-- in [plugin.json](https://grafana.com/developers/plugin-tools/reference/plugin-json#info) include them as relative links.
-- in the README ensure they are absolute URLs.
+A Grafana App plugin for exploring logs and traces stored in ClickHouse.
 
 ## Requirements
-List any requirements or dependencies they may need to run the plugin.
+
+- Grafana 10.0+
+- [ClickHouse data source plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) configured and connected
+
+## Features
+
+### Logs Explorer
+
+Browse and search log data from ClickHouse with a Kibana-style interface:
+
+- **KQL search** — filter logs using Kibana Query Language (field:value, wildcards, ranges, boolean operators)
+- **Field sidebar** — auto-discovered columns with top-value breakdown and one-click filtering
+- **Volume histogram** — log count over time; click-and-drag to narrow the time range
+- **Filter pills** — active filters shown as removable chips
+- **Saved searches** — save and reload query state including filters, columns, and time range
+- **Pagination** — configurable page size (10–500 rows), lazy-loads additional results on demand
+- **Edit as SQL** — drop into raw SQL mode for ClickHouse-specific functions, regex, or complex expressions
+- **Inspect SQL** — view the exact SQL query sent to ClickHouse without entering edit mode; copy to clipboard with one click
+
+### Trace Explorer
+
+Browse distributed traces stored in ClickHouse using the OpenTelemetry schema:
+
+- Search by service name, trace ID, duration, and status
+- Drill into individual traces to view span waterfall
 
 ## Getting Started
-Provide a quick start on how to configure and use the plugin.
 
-## Documentation
-If your project has dedicated documentation available for users, provide links here. For help in following Grafana's style recommendations for technical documentation, refer to our [Writer's Toolkit](https://grafana.com/docs/writers-toolkit/).
+1. Install the plugin in Grafana
+2. Go to **Configuration → ClickHouse Observe** and select your ClickHouse datasource
+3. Map your table columns (timestamp, severity, body, service name, trace ID, etc.)
+4. Open **Logs** or **Traces** from the navigation menu
+
+## SQL Inspect
+
+Click **▸ Inspect SQL** below the search bar to see the full SQL query that will be sent to ClickHouse. The panel shows a read-only, formatted SQL string with a **Copy** button. This is useful for:
+
+- Debugging unexpected results
+- Copying the query to run directly in ClickHouse Play or a SQL client
+- Understanding how filters and column selections translate to SQL
+
+When **Edit as SQL** mode is active, the Inspect SQL panel is hidden — the editable textarea is the authoritative query at that point.
 
 ## Contributing
-Do you want folks to contribute to the plugin or provide feedback through specific means? If so, tell them how!
--->
+
+Issues and pull requests welcome at the project repository.

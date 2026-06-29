@@ -122,6 +122,8 @@ export function LogsExplorer() {
 
   // Sidebar collapse
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showSqlInspect, setShowSqlInspect] = useState(false);
+  const [sqlCopied, setSqlCopied] = useState(false);
 
   // Pagination
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -373,13 +375,22 @@ export function LogsExplorer() {
 
         {/* SQL preview / edit */}
         <div className={styles.sqlRow}>
-          <button
-            className={styles.sqlToggle}
-            onClick={() => dispatch({ type: 'TOGGLE_RAW_SQL' })}
-            title="For regex, ClickHouse functions, and other advanced queries, switch to raw SQL"
-          >
-            {queryState.useRawSql ? '▾ Edit SQL' : '▸ Edit as SQL'}
-          </button>
+          <div className={styles.sqlActions}>
+            <button
+              className={styles.sqlToggle}
+              onClick={() => dispatch({ type: 'TOGGLE_RAW_SQL' })}
+              title="For regex, ClickHouse functions, and other advanced queries, switch to raw SQL"
+            >
+              {queryState.useRawSql ? '▾ Edit SQL' : '▸ Edit as SQL'}
+            </button>
+            <button
+              className={styles.sqlToggle}
+              onClick={() => setShowSqlInspect((v) => !v)}
+              title="Inspect the SQL query that will be sent to ClickHouse"
+            >
+              {showSqlInspect ? '▾ Hide SQL' : '▸ Inspect SQL'}
+            </button>
+          </div>
           {queryState.useRawSql && (
             <textarea
               className={styles.sqlEditor}
@@ -387,6 +398,22 @@ export function LogsExplorer() {
               onChange={(e) => dispatch({ type: 'SET_RAW_SQL', sql: e.target.value })}
               rows={6}
             />
+          )}
+          {showSqlInspect && !queryState.useRawSql && (
+            <div className={styles.sqlInspect}>
+              <pre className={styles.sqlInspectPre}>{effectiveSql}</pre>
+              <button
+                className={styles.sqlCopyBtn}
+                onClick={() => {
+                  navigator.clipboard.writeText(effectiveSql).then(() => {
+                    setSqlCopied(true);
+                    setTimeout(() => setSqlCopied(false), 2000);
+                  });
+                }}
+              >
+                {sqlCopied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
           )}
         </div>
 
@@ -521,6 +548,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     gap: ${theme.spacing(0.5)};
   `,
+  sqlActions: css`
+    display: flex;
+    gap: ${theme.spacing(2)};
+    align-items: center;
+  `,
   sqlToggle: css`
     background: transparent;
     border: none;
@@ -530,6 +562,35 @@ const getStyles = (theme: GrafanaTheme2) => ({
     text-align: left;
     padding: 0;
     &:hover { color: ${theme.colors.text.primary}; }
+  `,
+  sqlInspect: css`
+    position: relative;
+    background: ${theme.colors.background.secondary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    padding: ${theme.spacing(1)};
+  `,
+  sqlInspectPre: css`
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.primary};
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding-right: ${theme.spacing(7)};
+  `,
+  sqlCopyBtn: css`
+    position: absolute;
+    top: ${theme.spacing(1)};
+    right: ${theme.spacing(1)};
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    cursor: pointer;
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    padding: ${theme.spacing(0.25)} ${theme.spacing(1)};
+    &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
   `,
   sqlEditor: css`
     width: 100%;

@@ -17,7 +17,7 @@ function mapKeyCacheKey(config: SourceConfig, mapCol: string, bucket: string): s
   return `${config.datasourceUid}:${config.database}:${config.logsTable}:${mapCol}:${bucket}`;
 }
 
-function coarseTimeBucket(timeRange: TimeRange): string {
+export function coarseTimeBucket(timeRange: TimeRange): string {
   // Relative strings (e.g. 'now-1h') → stable key; absolute → round to 5 min.
   if (typeof timeRange.raw.from === 'string') {
     return `${timeRange.raw.from}|${timeRange.raw.to}`;

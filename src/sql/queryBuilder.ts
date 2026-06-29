@@ -183,15 +183,28 @@ export function buildFieldTopValuesQuery(
   config: SourceConfig,
   state: LogsQueryState,
   sqlExpr: string,
-  limit = 10
+  limit = 10,
+  sampleSize = 500
 ): string {
   const tbl = tableRef(config, config.logsTable);
   const conditions = buildWhereConditions(config, state);
+  const tsCol = config.columns.timestamp;
 
+  // Sample the most-recent sampleSize rows then aggregate within the sample.
+  // Keeps query cost O(sampleSize) regardless of table size.
+  // The scalar subquery returns total sampled rows so the UI can show
+  // "Calculated from N records" with real percentages.
   return [
-    `SELECT toString(${sqlExpr}) AS value, count() AS count`,
-    `FROM ${tbl}`,
-    `WHERE ${conditions.join(' AND ')} AND notEmpty(toString(${sqlExpr}))`,
+    `WITH sample AS (`,
+    `  SELECT toString(${sqlExpr}) AS value`,
+    `  FROM ${tbl}`,
+    `  WHERE ${conditions.join(' AND ')}`,
+    `  ORDER BY ${tsCol} DESC`,
+    `  LIMIT ${sampleSize}`,
+    `)`,
+    `SELECT value, count() AS count, (SELECT count() FROM sample) AS total`,
+    `FROM sample`,
+    `WHERE notEmpty(value)`,
     `GROUP BY value`,
     `ORDER BY count DESC`,
     `LIMIT ${limit}`,

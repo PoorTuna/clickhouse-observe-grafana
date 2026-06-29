@@ -58,8 +58,13 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
     return buildLevelClause(sqlExpr, val, false);
   }
 
-  // Phrase or text-typed column → ILIKE '%val%'
-  if (kind === 'text' || node.isPhrase) {
+  // Quoted phrase → match() with word-boundary assertions (prevents "req-59" matching "req-592")
+  if (node.isPhrase) {
+    return phraseMatch(maybeQuote(sqlExpr), val);
+  }
+
+  // Unquoted text-typed column → ILIKE substring (intentionally loose)
+  if (kind === 'text') {
     return `${maybeQuote(sqlExpr)} ILIKE ${quoteString('%' + val + '%')}`;
   }
 
@@ -97,10 +102,25 @@ function kqlRangeToSql(node: KqlRange, config: SourceConfig): string {
 
 function bareTermSql(bodyCol: string, value: string, isPhrase: boolean): string {
   if (isPhrase) {
-    return `${bodyCol} ILIKE ${quoteString('%' + value + '%')}`;
+    return phraseMatch(bodyCol, value);
   }
   // hasToken for full-word match + ILIKE as fallback (matches existing behaviour)
   return `(hasToken(${bodyCol}, ${quoteString(value)}) OR ${bodyCol} ILIKE ${quoteString('%' + value + '%')})`;
+}
+
+/**
+ * Generates a ClickHouse match() call that requires word-boundary chars on both sides of the phrase.
+ * Uses [^a-zA-Z0-9_] instead of \W to avoid backslash-escaping ambiguity in SQL string literals.
+ * Prevents "req-59" from matching "req-592".
+ */
+function phraseMatch(col: string, value: string): string {
+  const escaped = escapeRe2(value);
+  return `match(${col}, '(?i)(^|[^a-zA-Z0-9_])${escaped}([^a-zA-Z0-9_]|$)')`;
+}
+
+/** Escape re2 metacharacters within a literal string segment. */
+function escapeRe2(s: string): string {
+  return s.replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

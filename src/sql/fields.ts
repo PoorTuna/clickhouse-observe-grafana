@@ -82,7 +82,7 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
 
   // Already a Map accessor like ResourceAttributes['key'] or a function call — pass through
   const raw = rawField.trim();
-  if (raw.includes('[') || raw.includes('(') || raw.includes('.')) {
+  if (raw.includes('[') || raw.includes('(')) {
     return { sqlExpr: raw, kind: raw.includes('[') ? 'map' : 'exact' };
   }
 

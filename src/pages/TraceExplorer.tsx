@@ -199,7 +199,6 @@ export function TraceExplorer() {
               onChange={(e) => setSearch(e.currentTarget.value)}
               placeholder="Filter by service name…"
               onKeyDown={(e) => e.key === 'Enter' && searchTraces()}
-              prefix={<span>🔍</span>}
             />
             <Button onClick={searchTraces} disabled={loading} variant="secondary">
               Search

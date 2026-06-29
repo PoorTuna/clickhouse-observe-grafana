@@ -10,6 +10,7 @@ import { SourceConfigContext } from '../components/App/App';
 import { SpanRow, TraceRow } from '../types';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PLUGIN_BASE_URL, ROUTES } from '../constants';
+import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 
 function defaultTimeRange(): TimeRange {
   return {
@@ -162,9 +163,9 @@ export function TraceExplorer() {
             onChange={setTimeRange}
             onChangeTimeZone={() => {}}
             onChangeFiscalYearStartMonth={() => {}}
-            onMoveBackward={() => {}}
-            onMoveForward={() => {}}
-            onZoom={() => {}}
+            onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
+            onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
+            onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
             timeZone="browser"
             fiscalYearStartMonth={0}
           />

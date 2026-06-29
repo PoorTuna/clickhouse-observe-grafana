@@ -46,12 +46,12 @@ export function FieldItem({
     <>
       <div
         ref={rowRef}
-        className={`${styles.row} ${isSelected ? styles.rowSelected : ''}`}
+        className={`${styles.row} field-item-row ${isSelected ? styles.rowSelected : ''}`}
         title={field.sqlExpr}
       >
         <Icon name={icon as any} size="xs" className={styles.typeIcon} />
         <span className={styles.name}>{field.displayName}</span>
-        <div className={styles.actions}>
+        <div className={`${styles.actions} field-item-actions`}>
           <button
             className={styles.actionBtn}
             title="Top values"
@@ -120,7 +120,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:hover {
       background: ${theme.colors.action.hover};
     }
-    &:hover .field-actions {
+    &:hover .field-item-actions {
       opacity: 1;
     }
   `,
@@ -144,9 +144,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     gap: 2px;
     opacity: 0;
-    .field-item-row:hover & {
-      opacity: 1;
-    }
+    transition: opacity 0.1s;
   `,
   actionBtn: css`
     background: transparent;

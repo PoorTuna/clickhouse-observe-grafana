@@ -1,6 +1,6 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, TimeRange } from '@grafana/data';
+import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { useStyles2 } from '@grafana/ui';
 import { VolumeDataPoint } from '../types';
 import { SEVERITY_COLORS, SEVERITY_ORDER } from '../constants';
@@ -10,6 +10,12 @@ interface VolumeHistogramProps {
   timeRange: TimeRange;
   height?: number;
   onSelectRange?: (from: number, to: number) => void;
+}
+
+interface HoveredBucket {
+  index: number;
+  clientX: number;
+  clientY: number;
 }
 
 /** Calculate bucket interval in seconds to target ~60 buckets over the time range. */
@@ -32,6 +38,7 @@ export function VolumeHistogram({
   const svgRef = useRef<SVGSVGElement>(null);
   const dragStart = useRef<number | null>(null);
   const selectionRef = useRef<SVGRectElement | null>(null);
+  const [hovered, setHovered] = useState<HoveredBucket | null>(null);
 
   const { bars, maxTotal, allLevels, totalCount } = useMemo(() => {
     if (!data.length) {
@@ -65,14 +72,15 @@ export function VolumeHistogram({
     return null;
   }
 
-  // Map SVG x% to a timestamp given the data array
+  // Map SVG x% to the epoch-ms timestamp of the nearest bucket.
+  // bars[i].time is already epoch milliseconds (CH datasource emits DateTime as ms).
   function xPctToTime(pct: number): number {
     if (!bars.length) {
       return timeRange.from.valueOf();
     }
     const idx = Math.floor((pct / 100) * bars.length);
     const clamped = Math.max(0, Math.min(bars.length - 1, idx));
-    return bars[clamped].time * 1000; // bars[i].time is Unix seconds
+    return bars[clamped].time; // already ms — do NOT multiply by 1000
   }
 
   function getSvgXPct(e: React.MouseEvent<SVGSVGElement>): number {
@@ -89,19 +97,34 @@ export function VolumeHistogram({
       return;
     }
     dragStart.current = getSvgXPct(e);
+    setHovered(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (dragStart.current === null || !svgRef.current) {
+    const pct = getSvgXPct(e);
+
+    if (dragStart.current !== null) {
+      // Dragging — update selection rect, suppress hover tooltip
+      const cur = pct;
+      const x1 = Math.min(dragStart.current, cur);
+      const x2 = Math.max(dragStart.current, cur);
+      if (selectionRef.current) {
+        selectionRef.current.setAttribute('x', `${x1}%`);
+        selectionRef.current.setAttribute('width', `${x2 - x1}%`);
+        selectionRef.current.setAttribute('display', 'block');
+      }
       return;
     }
-    const cur = getSvgXPct(e);
-    const x1 = Math.min(dragStart.current, cur);
-    const x2 = Math.max(dragStart.current, cur);
-    if (selectionRef.current) {
-      selectionRef.current.setAttribute('x', `${x1}%`);
-      selectionRef.current.setAttribute('width', `${x2 - x1}%`);
-      selectionRef.current.setAttribute('display', 'block');
+
+    // Hovering — derive bucket index from x%
+    if (bars.length > 0) {
+      const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((pct / 100) * bars.length)));
+      setHovered((prev) => {
+        if (prev?.index === idx && prev.clientX === e.clientX && prev.clientY === e.clientY) {
+          return prev;
+        }
+        return { index: idx, clientX: e.clientX, clientY: e.clientY };
+      });
     }
   };
 
@@ -127,6 +150,8 @@ export function VolumeHistogram({
     }
   };
 
+  const hoveredBar = hovered !== null ? bars[hovered.index] : null;
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.meta}>
@@ -146,6 +171,7 @@ export function VolumeHistogram({
             if (selectionRef.current) {
               selectionRef.current.setAttribute('display', 'none');
             }
+            setHovered(null);
           }}
         >
           {bars.map((d, i) => {
@@ -172,9 +198,7 @@ export function VolumeHistogram({
                       height={barH}
                       fill={color}
                       opacity={0.85}
-                    >
-                      <title>{`${level}: ${count}`}</title>
-                    </rect>
+                    />
                   );
                 })}
               </g>
@@ -195,6 +219,44 @@ export function VolumeHistogram({
           />
         </svg>
       </div>
+
+      {/* Hover tooltip */}
+      {hoveredBar && hovered && (
+        <div
+          className={styles.tooltip}
+          style={{
+            position: 'fixed',
+            left: hovered.clientX + 14,
+            top: hovered.clientY - 80,
+            zIndex: 1000,
+            pointerEvents: 'none',
+          }}
+        >
+          <div className={styles.tooltipTime}>
+            {dateTime(hoveredBar.time).format('MMM D, YYYY HH:mm:ss')}
+          </div>
+          <div className={styles.tooltipTotal}>
+            Total:{' '}
+            {Object.values(hoveredBar.levels)
+              .reduce((a, b) => a + b, 0)
+              .toLocaleString()}
+          </div>
+          {allLevels
+            .filter((level) => (hoveredBar.levels[level] ?? 0) > 0)
+            .map((level) => (
+              <div key={level} className={styles.tooltipRow}>
+                <span
+                  className={styles.tooltipSwatch}
+                  style={{ background: SEVERITY_COLORS[level] ?? SEVERITY_COLORS['unknown'] }}
+                />
+                <span className={styles.tooltipLevel}>{level}</span>
+                <span className={styles.tooltipCount}>
+                  {hoveredBar.levels[level].toLocaleString()}
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -227,5 +289,47 @@ const getStyles = (theme: GrafanaTheme2) => ({
   svgZoomable: css`
     cursor: crosshair;
     user-select: none;
+  `,
+  tooltip: css`
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z2};
+    padding: ${theme.spacing(1)};
+    min-width: 160px;
+    font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  tooltipTime: css`
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
+    margin-bottom: ${theme.spacing(0.5)};
+    white-space: nowrap;
+  `,
+  tooltipTotal: css`
+    color: ${theme.colors.text.secondary};
+    margin-bottom: ${theme.spacing(0.25)};
+    font-variant-numeric: tabular-nums;
+  `,
+  tooltipRow: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    padding: 1px 0;
+  `,
+  tooltipSwatch: css`
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  `,
+  tooltipLevel: css`
+    flex: 1;
+    color: ${theme.colors.text.primary};
+    text-transform: capitalize;
+  `,
+  tooltipCount: css`
+    color: ${theme.colors.text.secondary};
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   `,
 });

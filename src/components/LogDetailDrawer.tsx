@@ -164,7 +164,7 @@ export function LogDetailDrawer({
               {Object.entries(row)
                 .filter(([k]) => !['ResourceAttributes','LogAttributes','ScopeAttributes','SpanAttributes'].includes(k))
                 .filter(([k, v]) => filterMatch(k, String(v ?? '')))
-                .map(([k, v]) => renderAttrRow(k, String(v ?? ''), undefined))}
+                .map(([k, v]) => renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined))}
             </div>
           )}
         </section>

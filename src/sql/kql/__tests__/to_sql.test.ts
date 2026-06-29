@@ -23,10 +23,12 @@ describe('kqlToSql', () => {
     expect(result).toContain("ILIKE '%hello%'");
   });
 
-  it('bare quoted phrase → body ILIKE', () => {
+  it('bare quoted phrase → match() with word boundaries, not ILIKE', () => {
     const result = sql('"hello world"');
-    expect(result).toContain("ILIKE '%hello world%'");
+    expect(result).toContain("match(");
+    expect(result).toContain('hello world');
     expect(result).not.toContain('hasToken');
+    expect(result).not.toContain("ILIKE '%hello world%'");
   });
 
   // ── Level ─────────────────────────────────────────────────────────────────
@@ -111,13 +113,25 @@ describe('kqlToSql', () => {
     expect(result).toContain('SeverityText');
   });
 
-  // ── Dotted field name (pass-through via resolveField) ────────────────────
-  it('http.method:GET → passed through as-is (resolveField dot pass-through)', () => {
-    // resolveField returns sqlExpr='http.method', kind='exact' for dotted names
-    // (the map-accessor path only fires for raw.includes('[') after the dot check)
+  // ── Dotted field name → Map attribute lookup ─────────────────────────────
+  it('http.method:GET → LogAttributes map accessor', () => {
     const result = sql('http.method:GET');
     expect(result).toContain("= 'GET'");
-    expect(result).toContain('http.method');
+    expect(result).toContain("LogAttributes['http.method']");
+  });
+
+  // ── Phrase match uses match() not ILIKE (word-boundary precision) ────────
+  it('Body:"req-59" → match() so req-592 does NOT match', () => {
+    const result = sql('Body:"req-59"');
+    expect(result).toContain('match(');
+    expect(result).toContain('req-59');
+    expect(result).not.toContain("ILIKE '%req-59%'");
+  });
+
+  it('http.status_code:200 → LogAttributes map accessor', () => {
+    const result = sql('http.status_code:200');
+    expect(result).toContain("LogAttributes['http.status_code']");
+    expect(result).toContain("= '200'");
   });
 
   // ── Unknown field falls back to body ────────────────────────────────────

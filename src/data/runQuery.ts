@@ -62,7 +62,10 @@ export function dataFrameToRows(frame: DataFrame): Record<string, unknown>[] {
   for (let i = 0; i < frame.length; i++) {
     const row: Record<string, unknown> = {};
     for (const field of frame.fields) {
-      row[field.name] = field.values[i];
+      // The ClickHouse Grafana datasource prefixes Map-typed column names with
+      // "_f_col_" in the DataFrame. Strip it so downstream code sees the SQL alias.
+      const name = field.name.replace(/^_f_col_/, '');
+      row[name] = field.values[i];
     }
     rows.push(row);
   }

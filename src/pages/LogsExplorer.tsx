@@ -144,6 +144,7 @@ export function LogsExplorer() {
       return;
     }
     const runId = ++runRef.current;
+    console.debug('[LogsExplorer] executeQuery runId=%d search=%o', runId, queryState.search);
     setLoading(true);
     setError(null);
 
@@ -164,9 +165,11 @@ export function LogsExplorer() {
       ]);
 
       if (runRef.current !== runId) {
+        console.debug('[LogsExplorer] runId=%d DISCARDED (current=%d)', runId, runRef.current);
         return;
       }
 
+      console.debug('[LogsExplorer] runId=%d ACCEPTED rows=%d', runId, logRows.length);
       setRows(logRows);
       setCurrentPage(0);
       setHasMore(!queryState.useRawSql && logRows.length === INITIAL_FETCH);
@@ -351,7 +354,7 @@ export function LogsExplorer() {
           <SearchBar
             value={queryState.search}
             onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
-            onSearch={() => executeQuery()}
+            onSearch={() => {}}  // re-query is driven by useEffect([executeQuery]) after the onChange dispatch
             onAddFilter={onAddFilter}
             timeRange={timeRange}
             queryState={queryState}

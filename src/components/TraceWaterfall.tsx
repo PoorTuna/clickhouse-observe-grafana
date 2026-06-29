@@ -45,6 +45,13 @@ function buildTree(spans: SpanRow[]): WaterfallNode[] {
     }
   }
 
+  // Sort children and roots by startTime so waterfall reads top-to-bottom chronologically
+  const sortByStart = (nodes: WaterfallNode[]) => nodes.sort((a, b) => a.startTime - b.startTime);
+  sortByStart(roots);
+  for (const node of byId.values()) {
+    sortByStart(node.children);
+  }
+
   // Assign depths via BFS
   const queue = roots.map((r) => ({ node: r, depth: 0 }));
   while (queue.length) {
@@ -126,10 +133,10 @@ export function TraceWaterfall({ spans }: TraceWaterfallProps) {
                   title={node.serviceName}
                   style={{ marginLeft: node.depth * INDENT }}
                 >
-                  {node.serviceName}
+                  {node.serviceName || node.spanID.slice(0, 8)}
                 </span>
                 <span className={styles.opName} title={node.operationName}>
-                  {node.operationName}
+                  {node.operationName || node.spanID.slice(0, 12)}
                 </span>
                 {isError && <span className={styles.errorBadge}>ERR</span>}
               </div>
@@ -137,16 +144,33 @@ export function TraceWaterfall({ spans }: TraceWaterfallProps) {
               {/* Bar */}
               <div className={styles.barCol}>
                 <div className={styles.barTrack}>
-                  <div
-                    className={`${styles.bar} ${isError ? styles.barError : ''}`}
-                    style={{
-                      left: `${node.startOffset * 100}%`,
-                      width: `${Math.max(node.widthFraction * 100, 0.5)}%`,
-                    }}
-                    title={`${node.serviceName}: ${node.operationName} — ${formatDuration(node.durationNs)}`}
-                  >
-                    <span className={styles.barLabel}>{formatDuration(node.durationNs)}</span>
-                  </div>
+                  {(() => {
+                    const pct = Math.max(node.widthFraction * 100, 0.5);
+                    const leftPct = node.startOffset * 100;
+                    const tooNarrow = pct < 8;
+                    const labelRight = leftPct + pct > 95;
+                    return (
+                      <>
+                        <div
+                          className={`${styles.bar} ${isError ? styles.barError : ''}`}
+                          style={{ left: `${leftPct}%`, width: `${pct}%` }}
+                          title={`${node.serviceName}: ${node.operationName} — ${formatDuration(node.durationNs)}`}
+                        >
+                          {!tooNarrow && (
+                            <span className={styles.barLabel}>{formatDuration(node.durationNs)}</span>
+                          )}
+                        </div>
+                        {tooNarrow && (
+                          <span
+                            className={styles.barLabelOutside}
+                            style={{ left: labelRight ? `${leftPct - 1}%` : `${leftPct + pct + 0.5}%` }}
+                          >
+                            {formatDuration(node.durationNs)}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -229,6 +253,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     padding: 0 3px;
     overflow: hidden;
+  `,
+  barLabelOutside: css`
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: ${theme.colors.text.secondary};
+    white-space: nowrap;
   `,
   serviceName: css`
     color: ${theme.colors.text.secondary};

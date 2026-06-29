@@ -24,7 +24,7 @@
       "name": "Logs",
       "path": "/a/%PLUGIN_ID%/logs",
       "addToNav": true,
-      "defaultNav": true,
+      "defaultNav": false,
       "icon": "document-info"
     },
     {

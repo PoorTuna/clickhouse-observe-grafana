@@ -7,40 +7,21 @@
  */
 
 import { FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
+import { resolveField, buildLevelClause } from './fields';
 
-// Severity level aliases adapted from CH datasource src/data/logs.ts
-export const LOG_LEVEL_TO_IN_CLAUSE: Record<string, string> = (() => {
-  const levels: Record<string, string[]> = {
-    critical: ['critical', 'fatal', 'crit', 'alert', 'emerg'],
-    error: ['error', 'err', 'eror'],
-    warn: ['warn', 'warning'],
-    info: ['info', 'information', 'informational'],
-    debug: ['debug', 'dbug'],
-    trace: ['trace'],
-    unknown: ['unknown'],
-  };
-  return Object.fromEntries(
-    Object.entries(levels).map(([level, aliases]) => [
-      level,
-      [
-        ...aliases.map((a) => `'${a}'`),
-        ...aliases.map((a) => `'${a.toUpperCase()}'`),
-        ...aliases.map((a) => `'${a[0].toUpperCase()}${a.slice(1)}'`),
-      ].join(','),
-    ])
-  );
-})();
-
-function quoteIdentifier(name: string): string {
-  // If it's a Map access like ResourceAttributes['key'] or a function call, don't quote
+export function quoteIdentifier(name: string): string {
   if (name.includes('[') || name.includes('(') || name.includes('.')) {
     return name;
   }
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-function quoteString(value: string): string {
+export function quoteString(value: string): string {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+export function tableRef(config: SourceConfig, table: string): string {
+  return `"${config.database}"."${table}"`;
 }
 
 function filterOpToSql(op: FilterOp): string {
@@ -56,46 +37,94 @@ function filterOpToSql(op: FilterOp): string {
   }
 }
 
-function buildFilterClause(filter: FilterPill): string {
-  const col = quoteIdentifier(filter.field);
+function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
+  const value = filter.value.trim();
+  const resolved = resolveField(filter.field, config);
+  const negate = filter.op === '!=' || filter.op === 'not_contains';
+
+  if (resolved === null) {
+    const bodyCol = config.columns.body;
+    return negate
+      ? `${bodyCol} NOT ILIKE ${quoteString('%' + value + '%')}`
+      : `${bodyCol} ILIKE ${quoteString('%' + value + '%')}`;
+  }
+
+  const { sqlExpr, kind } = resolved;
+
+  if (kind === 'level') {
+    return buildLevelClause(sqlExpr, value, negate);
+  }
+
+  if (kind === 'text') {
+    return negate
+      ? `${sqlExpr} NOT ILIKE ${quoteString('%' + value + '%')}`
+      : `${sqlExpr} ILIKE ${quoteString('%' + value + '%')}`;
+  }
+
+  const col = quoteIdentifier(sqlExpr);
   const op = filterOpToSql(filter.op);
   if (op === 'ILIKE' || op === 'NOT ILIKE') {
-    return `${col} ${op} ${quoteString('%' + filter.value + '%')}`;
+    return `${col} ${op} ${quoteString('%' + value + '%')}`;
   }
-  return `${col} ${op} ${quoteString(filter.value)}`;
+  return `${col} ${op} ${quoteString(value)}`;
 }
 
-function buildSearchClause(search: string, bodyCol: string): string {
+function buildSearchClause(search: string, config: SourceConfig): string {
   const term = search.trim();
   if (!term) {
     return '';
   }
 
-  // `field:value` or `field=value` shorthand → typed predicate
+  const c = config.columns;
+
   const colonMatch = /^([A-Za-z_][A-Za-z0-9_.[\]']*):(.+)$/.exec(term);
   if (colonMatch) {
-    const [, field, value] = colonMatch;
-    return `${quoteIdentifier(field)} = ${quoteString(value)}`;
+    const [, rawField, rawValue] = colonMatch;
+    const value = rawValue.trim();
+    const resolved = resolveField(rawField, config);
+
+    if (resolved === null) {
+      return `${c.body} ILIKE ${quoteString('%' + value + '%')}`;
+    }
+    const { sqlExpr, kind } = resolved;
+    if (kind === 'level') {
+      return buildLevelClause(sqlExpr, value, false);
+    }
+    if (kind === 'text') {
+      return `${sqlExpr} ILIKE ${quoteString('%' + value + '%')}`;
+    }
+    return `${quoteIdentifier(sqlExpr)} = ${quoteString(value)}`;
   }
 
-  // Free text: hasToken for token-BF indexed columns + ILIKE fallback
-  const quoted = quoteString(term);
-  return `(hasToken(${bodyCol}, ${quoted}) OR ${bodyCol} ILIKE ${quoteString('%' + term + '%')})`;
+  const terms = term.match(/"[^"]*"|'[^']*'|\S+/g) ?? [term];
+  const clauses = terms.map((t) => {
+    const clean = t.replace(/^["']|["']$/g, '');
+    const quoted = quoteString(clean);
+    return `(hasToken(${c.body}, ${quoted}) OR ${c.body} ILIKE ${quoteString('%' + clean + '%')})`;
+  });
+  return clauses.length === 1 ? clauses[0] : clauses.map((cl) => `(${cl})`).join(' AND ');
 }
 
-function tableRef(config: SourceConfig, table: string): string {
-  return `"${config.database}"."${table}"`;
+/** Build the WHERE conditions shared across logs, volume, and field-stats queries. */
+export function buildWhereConditions(config: SourceConfig, state: LogsQueryState): string[] {
+  const conditions: string[] = [
+    `${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`,
+  ];
+  if (state.search.trim()) {
+    conditions.push(buildSearchClause(state.search, config));
+  }
+  for (const f of state.filters) {
+    conditions.push(buildFilterClause(f, config));
+  }
+  return conditions;
 }
-
-// ---------------------------------------------------------------------------
-// Public builders
-// ---------------------------------------------------------------------------
 
 export function buildLogsQuery(config: SourceConfig, state: LogsQueryState): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
-  const selectParts = [
+  // Core SELECT — always present; drawer + trace-link depend on these fixed aliases.
+  const coreSelect = [
     `${c.timestamp} AS timestamp`,
     `${c.body} AS body`,
     c.severity ? `${c.severity} AS severity` : `'' AS severity`,
@@ -105,45 +134,88 @@ export function buildLogsQuery(config: SourceConfig, state: LogsQueryState): str
     c.resourceAttributes ? `${c.resourceAttributes} AS ResourceAttributes` : null,
     c.logAttributes ? `${c.logAttributes} AS LogAttributes` : null,
     c.scopeAttributes ? `${c.scopeAttributes} AS ScopeAttributes` : null,
-  ].filter(Boolean);
+  ].filter(Boolean) as string[];
 
-  const conditions: string[] = [`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`];
+  // Extra SELECT for user-added non-core columns
+  const extraSelect = (state.columns ?? [])
+    .filter((col) => !col.isCore)
+    .map((col) => `${col.sqlExpr} AS ${col.key}`);
 
-  if (state.search.trim()) {
-    conditions.push(buildSearchClause(state.search, c.body));
-  }
-  for (const f of state.filters) {
-    conditions.push(buildFilterClause(f));
-  }
+  const selectParts = [...coreSelect, ...extraSelect];
+  const conditions = buildWhereConditions(config, state);
+
+  const sortCol = state.sort?.col ?? 'timestamp';
+  const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
 
   return [
     `SELECT ${selectParts.join(', ')}`,
     `FROM ${tbl}`,
     `WHERE ${conditions.join(' AND ')}`,
-    `ORDER BY timestamp DESC`,
+    `ORDER BY ${sortCol} ${sortDir}`,
     `LIMIT ${state.limit}`,
   ].join('\n');
 }
 
-export function buildVolumeQuery(config: SourceConfig, state: LogsQueryState): string {
+export function buildVolumeQuery(
+  config: SourceConfig,
+  state: LogsQueryState,
+  intervalSeconds?: number
+): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
   const sevCol = c.severity || `''`;
+  const timeExpr = intervalSeconds
+    ? `toStartOfInterval(${c.timestamp}, INTERVAL ${intervalSeconds} SECOND)`
+    : `toStartOfMinute(${c.timestamp})`;
 
-  const conditions: string[] = [`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`];
-  if (state.search.trim()) {
-    conditions.push(buildSearchClause(state.search, c.body));
-  }
-  for (const f of state.filters) {
-    conditions.push(buildFilterClause(f));
-  }
+  const conditions = buildWhereConditions(config, state);
 
   return [
-    `SELECT toStartOfMinute(${c.timestamp}) AS time, ${sevCol} AS level, count() AS count`,
+    `SELECT ${timeExpr} AS time, ${sevCol} AS level, count() AS count`,
     `FROM ${tbl}`,
     `WHERE ${conditions.join(' AND ')}`,
     `GROUP BY time, level`,
     `ORDER BY time ASC`,
+  ].join('\n');
+}
+
+export function buildFieldTopValuesQuery(
+  config: SourceConfig,
+  state: LogsQueryState,
+  sqlExpr: string,
+  limit = 10
+): string {
+  const tbl = tableRef(config, config.logsTable);
+  const conditions = buildWhereConditions(config, state);
+
+  return [
+    `SELECT toString(${sqlExpr}) AS value, count() AS count`,
+    `FROM ${tbl}`,
+    `WHERE ${conditions.join(' AND ')} AND notEmpty(toString(${sqlExpr}))`,
+    `GROUP BY value`,
+    `ORDER BY count DESC`,
+    `LIMIT ${limit}`,
+  ].join('\n');
+}
+
+export function buildSurroundingDocsQuery(
+  config: SourceConfig,
+  rowTimestamp: string,
+  n = 25,
+  direction: 'before' | 'after' = 'before'
+): string {
+  const c = config.columns;
+  const tbl = tableRef(config, config.logsTable);
+  const op = direction === 'before' ? '<' : '>';
+  const order = direction === 'before' ? 'DESC' : 'ASC';
+
+  return [
+    `SELECT ${c.timestamp} AS timestamp, ${c.body} AS body,`,
+    `  ${c.severity || "''"} AS severity, ${c.serviceName || "''"} AS serviceName`,
+    `FROM ${tbl}`,
+    `WHERE ${c.timestamp} ${op} ${quoteString(rowTimestamp)}`,
+    `ORDER BY ${c.timestamp} ${order}`,
+    `LIMIT ${n}`,
   ].join('\n');
 }
 
@@ -157,7 +229,7 @@ export function buildTraceSearchQuery(
 
   const conditions: string[] = [`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`];
   if (search.trim()) {
-    conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search + '%')}`);
+    conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search.trim() + '%')}`);
   }
 
   return [
@@ -180,7 +252,6 @@ export function buildTraceSearchQuery(
 export function buildTraceDetailQuery(config: SourceConfig, traceId: string): string {
   const c = config.columns;
   const tbl = tableRef(config, config.tracesTable);
-
   const spanAttrSel = c.spanAttributes ? `${c.spanAttributes} AS tags` : `'' AS tags`;
 
   return [

@@ -23,7 +23,7 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   traceId: 'TraceId',
   spanId: 'SpanId',
   parentSpanId: 'ParentSpanId',
-  serviceName: "ResourceAttributes['service.name']",
+  serviceName: 'ServiceName',
   duration: 'Duration',
   resourceAttributes: 'ResourceAttributes',
   logAttributes: 'LogAttributes',

@@ -1,7 +1,8 @@
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Button, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
+import { dateTime, GrafanaTheme2, PageLayoutType, TimeRange } from '@grafana/data';
+import { PluginPage } from '@grafana/runtime';
+import { Button, Icon, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
@@ -10,6 +11,7 @@ import { VolumeHistogram, calcBucketInterval } from '../components/VolumeHistogr
 import { FieldSidebar } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsProvider } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
+import { PaginationBar } from '../components/PaginationBar';
 import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildVolumeQuery } from '../sql/queryBuilder';
 import { addFilter } from '../sql/filters';
@@ -26,6 +28,10 @@ import {
 } from '../types';
 import { PLUGIN_BASE_URL } from '../constants';
 
+const INITIAL_FETCH = 200;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
+const DEFAULT_PAGE_SIZE = 50;
+
 function defaultTimeRange(): TimeRange {
   return {
     from: dateTime(Date.now() - 3600 * 1000),
@@ -39,8 +45,8 @@ function defaultColumns(config: ReturnType<typeof useContext<any>>): SelectedCol
   const cols: Array<{ id: string; key: string; sqlExpr: string; displayName: string; type: ColumnType }> = [
     { id: 'timestamp', key: 'timestamp', sqlExpr: c.timestamp, displayName: 'Time', type: 'time' },
     { id: 'severity', key: 'severity', sqlExpr: c.severity || "''", displayName: 'Level', type: 'level' },
-    { id: 'body', key: 'body', sqlExpr: c.body, displayName: 'Message', type: 'text' },
     { id: 'serviceName', key: 'serviceName', sqlExpr: c.serviceName || "''", displayName: 'Service', type: 'exact' },
+    { id: 'body', key: 'body', sqlExpr: c.body, displayName: 'Message', type: 'text' },
   ];
   return cols
     .filter((col) => Boolean(col.sqlExpr))
@@ -114,6 +120,15 @@ export function LogsExplorer() {
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
 
+  // Sidebar collapse
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Pagination
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [fetchingMore, setFetchingMore] = useState(false);
+
   const runRef = useRef(0);
   // Always tracks the latest executeQuery closure so deferred calls get fresh state.
   const latestExecuteQuery = useRef<() => void>(() => {});
@@ -139,7 +154,7 @@ export function LogsExplorer() {
       };
       const sql = queryState.useRawSql
         ? queryState.rawSql
-        : buildLogsQuery(config, stateWithCols);
+        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 });
       const intervalSec = calcBucketInterval(timeRange);
       const volSql = buildVolumeQuery(config, queryState, intervalSec);
 
@@ -153,6 +168,8 @@ export function LogsExplorer() {
       }
 
       setRows(logRows);
+      setCurrentPage(0);
+      setHasMore(!queryState.useRawSql && logRows.length === INITIAL_FETCH);
 
       const volMap = new Map<number, Record<string, number>>();
       for (const r of volRows) {
@@ -230,12 +247,75 @@ export function LogsExplorer() {
     });
   };
 
+  // Lazy-fetch rows beyond the initial buffer when the user pages past it.
+  const ensureRows = useCallback(
+    async (page: number, currentPageSize: number, currentRows: LogRow[], currentHasMore: boolean) => {
+      const needed = (page + 1) * currentPageSize;
+      if (currentRows.length >= needed || !currentHasMore || queryState.useRawSql) {
+        return currentRows;
+      }
+      if (!config.datasourceUid) {
+        return currentRows;
+      }
+
+      setFetchingMore(true);
+      const runId = runRef.current;
+      try {
+        const stateWithCols: LogsQueryState = {
+          ...queryState,
+          columns: effectiveColumns,
+        };
+        const chunkSize = needed - currentRows.length;
+        const sql = buildLogsQuery(config, stateWithCols, {
+          limit: chunkSize,
+          offset: currentRows.length,
+        });
+        const chunk = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
+        if (runRef.current !== runId) {
+          return currentRows;
+        }
+        const merged = [...currentRows, ...chunk];
+        setRows(merged);
+        setHasMore(chunk.length === chunkSize);
+        return merged;
+      } catch {
+        return currentRows;
+      } finally {
+        setFetchingMore(false);
+      }
+    },
+    [config, queryState, timeRange, effectiveColumns]
+  );
+
+  const onPageChange = useCallback(
+    async (page: number) => {
+      const updated = await ensureRows(page, pageSize, rows, hasMore);
+      const needed = (page + 1) * pageSize;
+      // Only navigate to page if rows are available
+      if (updated.length > page * pageSize || needed <= updated.length) {
+        setCurrentPage(page);
+      }
+    },
+    [ensureRows, pageSize, rows, hasMore]
+  );
+
+  const onPageSizeChange = useCallback((size: number) => {
+    setPageSize(size);
+    setCurrentPage(0);
+  }, []);
+
   const effectiveSql = queryState.useRawSql
     ? queryState.rawSql
     : buildLogsQuery(config, { ...queryState, columns: effectiveColumns });
 
+  const pageRows = useMemo(
+    () => rows.slice(currentPage * pageSize, currentPage * pageSize + pageSize),
+    [rows, currentPage, pageSize]
+  );
+
   return (
     <FieldsProvider config={config} timeRange={timeRange}>
+      <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div className={styles.container}>
         {/* Header */}
         <div className={styles.header}>
@@ -322,12 +402,25 @@ export function LogsExplorer() {
 
         {/* Two-pane: sidebar + results */}
         <div className={styles.body}>
-          <FieldSidebar
-            queryState={{ ...queryState, columns: effectiveColumns }}
-            timeRange={timeRange}
-            onToggleColumn={onToggleColumn}
-            onAddFilter={onAddFilter}
-          />
+          {sidebarCollapsed ? (
+            <div className={styles.sidebarRail}>
+              <button
+                className={styles.railBtn}
+                title="Show fields"
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <Icon name="angle-right" size="sm" />
+              </button>
+            </div>
+          ) : (
+            <FieldSidebar
+              queryState={{ ...queryState, columns: effectiveColumns }}
+              timeRange={timeRange}
+              onToggleColumn={onToggleColumn}
+              onAddFilter={onAddFilter}
+              onCollapse={() => setSidebarCollapsed(true)}
+            />
+          )}
 
           <div className={styles.results}>
             {loading && (
@@ -336,7 +429,7 @@ export function LogsExplorer() {
               </div>
             )}
             <LogsTable
-              rows={rows}
+              rows={pageRows}
               loading={loading && rows.length === 0}
               columns={effectiveColumns}
               sort={queryState.sort}
@@ -345,6 +438,16 @@ export function LogsExplorer() {
               onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
               onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
               selectedRow={selectedRow}
+            />
+            <PaginationBar
+              page={currentPage}
+              pageSize={pageSize}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              totalLoaded={rows.length}
+              hasMore={hasMore}
+              fetchingMore={fetchingMore}
+              onPageChange={onPageChange}
+              onPageSizeChange={onPageSizeChange}
             />
           </div>
         </div>
@@ -369,6 +472,7 @@ export function LogsExplorer() {
           />
         )}
       </div>
+      </PluginPage>
     </FieldsProvider>
   );
 }
@@ -452,6 +556,29 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: relative;
     display: flex;
     flex-direction: column;
+  `,
+  sidebarRail: css`
+    width: 28px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: ${theme.spacing(0.5)};
+    border-right: 1px solid ${theme.colors.border.weak};
+  `,
+  railBtn: css`
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    color: ${theme.colors.text.secondary};
+    border-radius: ${theme.shape.radius.default};
+    display: flex;
+    align-items: center;
+    &:hover {
+      color: ${theme.colors.text.primary};
+      background: ${theme.colors.action.hover};
+    }
   `,
   loadingOverlay: css`
     position: absolute;

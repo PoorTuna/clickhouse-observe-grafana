@@ -7,18 +7,19 @@ export enum ROUTES {
   Traces = 'traces',
 }
 
+// EUI colorblind-safe viz palette (Kibana-style — calmer than pure RGB)
 export const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#ff0000',
-  fatal: '#ff0000',
-  error: '#e74c3c',
-  err: '#e74c3c',
-  warn: '#f39c12',
-  warning: '#f39c12',
-  info: '#27ae60',
-  information: '#27ae60',
-  debug: '#3498db',
-  trace: '#9b59b6',
-  unknown: '#95a5a6',
+  critical:    '#BD271E',
+  fatal:       '#BD271E',
+  error:       '#E7664C',
+  err:         '#E7664C',
+  warn:        '#D6BF57',
+  warning:     '#D6BF57',
+  info:        '#54B399',
+  information: '#54B399',
+  debug:       '#6092C0',
+  trace:       '#9170B8',
+  unknown:     '#98A2B3',
 };
 
 export const SEVERITY_ORDER = [

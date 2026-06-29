@@ -45,17 +45,17 @@ export function toggleFilter(
 export function parseFilterShorthand(input: string): Omit<FilterPill, 'id'> | null {
   const neqMatch = /^([A-Za-z_][A-Za-z0-9_.[\]']*)\s*!=\s*(.+)$/.exec(input.trim());
   if (neqMatch) {
-    return { field: neqMatch[1], value: neqMatch[2], op: '!=' };
+    return { field: neqMatch[1], value: neqMatch[2].trim(), op: '!=' };
   }
 
   const colonMatch = /^([A-Za-z_][A-Za-z0-9_.[\]']*):(.+)$/.exec(input.trim());
   if (colonMatch) {
-    return { field: colonMatch[1], value: colonMatch[2], op: '=' };
+    return { field: colonMatch[1], value: colonMatch[2].trim(), op: '=' };
   }
 
   const eqMatch = /^([A-Za-z_][A-Za-z0-9_.[\]']*)\s*=\s*(.+)$/.exec(input.trim());
   if (eqMatch) {
-    return { field: eqMatch[1], value: eqMatch[2], op: '=' };
+    return { field: eqMatch[1], value: eqMatch[2].trim(), op: '=' };
   }
 
   return null;

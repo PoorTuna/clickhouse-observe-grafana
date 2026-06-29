@@ -18,7 +18,7 @@ export function SearchBar({
   onChange,
   onSearch,
   onAddFilter,
-  placeholder = 'Search logs… (text, field:value, field!=value)',
+  placeholder = 'Search text · level:error · service:payment-gateway · http.method:POST',
 }: SearchBarProps) {
   const styles = useStyles2(getStyles);
   const [inputValue, setInputValue] = useState(value);

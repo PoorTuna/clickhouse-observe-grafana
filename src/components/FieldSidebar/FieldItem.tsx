@@ -34,10 +34,19 @@ export function FieldItem({
   const openPopover = () => {
     if (rowRef.current) {
       const rect = rowRef.current.getBoundingClientRect();
-      setPopoverPos({
-        top: rect.top + window.scrollY,
-        left: rect.right + 8,
-      });
+      const POPOVER_W = 308;
+      const POPOVER_H = 400; // conservative estimate
+
+      // Prefer right of field row; flip left if it would overflow viewport
+      const left =
+        rect.right + 8 + POPOVER_W > window.innerWidth
+          ? Math.max(8, rect.left - POPOVER_W - 8)
+          : rect.right + 8;
+
+      // Clamp top so popover doesn't go below viewport
+      const top = Math.min(rect.top, Math.max(8, window.innerHeight - POPOVER_H - 8));
+
+      setPopoverPos({ top, left });
     }
     setPopoverOpen(true);
   };
@@ -81,9 +90,10 @@ export function FieldItem({
           >
             <div
               style={{
-                position: 'absolute',
+                position: 'fixed',
                 top: popoverPos.top,
                 left: popoverPos.left,
+                zIndex: 10000,
               }}
               onClick={(e) => e.stopPropagation()}
             >

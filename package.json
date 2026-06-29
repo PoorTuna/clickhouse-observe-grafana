@@ -13,7 +13,7 @@
     "server": "docker compose up --build",
     "sign": "sign-plugin"
   },
-  "author": "Kessler",
+  "author": "PoorTuna",
   "license": "Apache-2.0",
   "devDependencies": {
     "@grafana/eslint-config": "^9.0.0",

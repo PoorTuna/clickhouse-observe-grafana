@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, TimeRange, dateTime } from '@grafana/data';
+import { GrafanaTheme2, TimeRange, dateTime, rangeUtil } from '@grafana/data';
 import { Button, ConfirmModal, Icon, Input, Modal, useStyles2 } from '@grafana/ui';
 import { SavedSearch, LogsQueryState } from '../../types';
 import {
@@ -66,11 +66,10 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad }: SavedSearchMe
     let tr: TimeRange | undefined;
     if (s.timeRange) {
       try {
-        tr = {
-          from: dateTime(s.timeRange.from.startsWith('now') ? undefined : Number(s.timeRange.from)),
-          to: dateTime(s.timeRange.to.startsWith('now') ? undefined : Number(s.timeRange.to)),
-          raw: { from: s.timeRange.from, to: s.timeRange.to },
-        };
+        // Preserve relative strings (e.g. 'now-1h') so dateMath can resolve them;
+        // convert absolute epoch-ms strings to DateTime objects.
+        const toRaw = (v: string) => (v.startsWith('now') ? v : dateTime(Number(v)));
+        tr = rangeUtil.convertRawToRange({ from: toRaw(s.timeRange.from), to: toRaw(s.timeRange.to) });
       } catch {
         tr = undefined;
       }

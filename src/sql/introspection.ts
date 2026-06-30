@@ -1,10 +1,20 @@
 import { SourceConfig } from '../types';
 
-/** Fetch column names + types from system.columns for the logs table. */
-export function buildColumnsQuery(config: SourceConfig): string {
+/** All databases available on this ClickHouse server. */
+export function buildDatabasesQuery(): string {
+  return `SELECT name FROM system.databases ORDER BY name`;
+}
+
+/** All tables (and views) in a given database. */
+export function buildTablesQuery(database: string): string {
+  return `SELECT name FROM system.tables WHERE database = '${database}' ORDER BY name`;
+}
+
+/** Fetch column names + types from system.columns for any database + table combination. */
+export function buildColumnsQuery(database: string, table: string): string {
   return (
     `SELECT name, type FROM system.columns` +
-    ` WHERE database = '${config.database}' AND table = '${config.logsTable}'` +
+    ` WHERE database = '${database}' AND table = '${table}'` +
     ` ORDER BY position`
   );
 }

@@ -130,9 +130,13 @@ function buildSearchClause(search: string, config: SourceConfig): string {
 
 /** Build the WHERE conditions shared across logs, volume, and field-stats queries. */
 export function buildWhereConditions(config: SourceConfig, state: LogsQueryState): string[] {
-  const conditions: string[] = [
-    `${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`,
-  ];
+  const conditions: string[] = [];
+  // Only add the time filter when a timestamp column is mapped (no-time views skip this).
+  if (config.columns.timestamp) {
+    conditions.push(
+      `${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`
+    );
+  }
   if (state.search.trim()) {
     conditions.push(buildSearchClause(state.search, config));
   }

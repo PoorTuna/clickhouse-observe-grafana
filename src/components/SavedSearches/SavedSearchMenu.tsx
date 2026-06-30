@@ -13,9 +13,11 @@ interface SavedSearchMenuProps {
   queryState: LogsQueryState;
   timeRange: TimeRange;
   onLoad: (search: SavedSearch, newTimeRange?: TimeRange) => void;
+  /** Active data view ID; used to scope saved searches. Undefined = show all (legacy). */
+  activeDataViewId?: string;
 }
 
-export function SavedSearchMenu({ queryState, timeRange, onLoad }: SavedSearchMenuProps) {
+export function SavedSearchMenu({ queryState, timeRange, onLoad, activeDataViewId }: SavedSearchMenuProps) {
   const styles = useStyles2(getStyles);
   const [open, setOpen] = useState(false);
   const [searches, setSearches] = useState<SavedSearch[]>([]);
@@ -26,9 +28,16 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad }: SavedSearchMe
 
   useEffect(() => {
     if (open) {
-      setSearches(loadSavedSearches());
+      const all = loadSavedSearches();
+      // Show searches for the active view + legacy searches (no dataViewId) when a view is set;
+      // show all when no view is active (shouldn't happen in practice).
+      setSearches(
+        activeDataViewId
+          ? all.filter((s) => !s.dataViewId || s.dataViewId === activeDataViewId)
+          : all
+      );
     }
-  }, [open]);
+  }, [open, activeDataViewId]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -47,17 +56,20 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad }: SavedSearchMe
     if (!name) {
       return;
     }
-    saveSearch({
-      name,
-      search: queryState.search,
-      filters: queryState.filters,
-      columns: queryState.columns,
-      sort: queryState.sort,
-      timeRange: {
-        from: typeof timeRange.raw.from === 'string' ? timeRange.raw.from : String(timeRange.from.valueOf()),
-        to: typeof timeRange.raw.to === 'string' ? timeRange.raw.to : String(timeRange.to.valueOf()),
+    saveSearch(
+      {
+        name,
+        search: queryState.search,
+        filters: queryState.filters,
+        columns: queryState.columns,
+        sort: queryState.sort,
+        timeRange: {
+          from: typeof timeRange.raw.from === 'string' ? timeRange.raw.from : String(timeRange.from.valueOf()),
+          to: typeof timeRange.raw.to === 'string' ? timeRange.raw.to : String(timeRange.to.valueOf()),
+        },
       },
-    });
+      activeDataViewId
+    );
     setSaveName('');
     setSaveModalOpen(false);
   }

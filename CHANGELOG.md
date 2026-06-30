@@ -10,6 +10,22 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.4] — 2026-06-30
+
+### Fixed
+
+- **Timestamp picker accepted non-time columns** — "Create data view" timestamp
+  dropdown now only lists columns with an actual `Date`/`Date32`/`DateTime`/
+  `DateTime64(...)` type (including `Nullable(...)`/`LowCardinality(...)` wrapped),
+  instead of suggesting time types first but allowing any column. Body field still
+  accepts any column.
+- **Empty log table when no timestamp mapped** — `ORDER BY timestamp` was hardcoded
+  even when no timestamp column was mapped, causing the query to fail server-side and
+  silently render "No logs found". Now omits `ORDER BY` entirely when there's no
+  timestamp.
+
+---
+
 ## [0.2.3] — 2026-06-30
 
 ### Changed

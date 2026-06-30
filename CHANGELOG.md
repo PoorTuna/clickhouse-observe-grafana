@@ -10,6 +10,17 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.1] — 2026-06-30
+
+### Fixed
+
+- Removed `dependencies.plugins` from `plugin.json` — Grafana was auto-resolving
+  `grafana-clickhouse-datasource` from grafana.com at install time, which blocks
+  installation on airgapped / offline Grafana instances. The ClickHouse datasource
+  is now documented as a manual prerequisite in the README instead.
+
+---
+
 ## [0.2.0] — 2026-06-30
 
 ### Added
@@ -140,6 +151,7 @@ with a one-click copy button.
 
 ---
 
-[Unreleased]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/PoorTuna/clickhouse-grafana/releases/tag/v0.1.0

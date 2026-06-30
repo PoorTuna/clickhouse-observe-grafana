@@ -5,7 +5,13 @@ A Grafana App plugin for exploring logs and traces stored in ClickHouse.
 ## Requirements
 
 - Grafana 10.0+
-- [ClickHouse data source plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) configured and connected
+- [ClickHouse data source plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) — **must be installed and configured separately before installing this plugin**
+
+> **Airgapped / offline installs:** Grafana will not attempt to download the ClickHouse
+> datasource automatically (this plugin declares no auto-resolved plugin dependencies).
+> Install the ClickHouse datasource plugin manually first (download the zip from
+> grafana.com on a connected machine, copy it to your Grafana plugins directory), then
+> install this plugin the same way.
 
 ## Features
 

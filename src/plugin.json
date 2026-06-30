@@ -45,13 +45,6 @@
     }
   ],
   "dependencies": {
-    "grafanaDependency": ">=10.0.0",
-    "plugins": [
-      {
-        "type": "datasource",
-        "name": "ClickHouse",
-        "id": "grafana-clickhouse-datasource"
-      }
-    ]
+    "grafanaDependency": ">=10.0.0"
   }
 }

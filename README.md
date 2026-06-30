@@ -10,7 +10,7 @@ HyperDX-style log and trace explorer for ClickHouse, packaged as a Grafana app p
 
 - Grafana >= 10.0.0
 - [ClickHouse datasource plugin](https://grafana.com/grafana/plugins/grafana-clickhouse-datasource/) installed and configured
-- A ClickHouse table with log data (the OpenTelemetry schema works out of the box)
+- A ClickHouse table with log data (arbitrary schemas supported; OpenTelemetry schema works out of the box with the OTel preset)
 - Node >= 22 (development only)
 
 ---
@@ -22,10 +22,10 @@ HyperDX-style log and trace explorer for ClickHouse, packaged as a Grafana app p
 A full-page log search view backed directly by ClickHouse SQL.
 
 - **KQL search bar** — Kibana Query Language with autocomplete. Field names, operators, and top values are all suggested as you type, fetched live from ClickHouse.
-- **Volume histogram** — log volume over time, bucketed by severity level. Click and drag to zoom into a time range.
+- **Volume histogram** — log volume over time with configurable bucket interval (auto, second → month). Breakdown picker stacks bars by severity (when the column exists in the schema), any arbitrary field (top-10 + "Other" computed server-side), or shows a single series. Click and drag to zoom into a time range.
 - **Field sidebar** — auto-discovered from `system.columns` plus Map-key introspection. Click a field to add it as a table column or filter. Per-field value distribution popover available on hover.
 - **Sortable, reorderable columns** — add columns from the sidebar, remove them from the header, drag to reorder.
-- **Row detail drawer** — click any row to see all fields. One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a link opens the corresponding trace in the Traces Explorer.
+- **Row detail drawer** — click any row to see every column in the table (all fields, not just mapped ones). One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a link opens the corresponding trace in the Traces Explorer.
 - **Structured filter builder** — `+ Add filter` button in the toolbar opens a Kibana-style popup: pick a field, choose an operator (`is`, `is not`, `is one of`, `is not one of`, `exists`, `does not exist`, `contains`, `does not contain`), and select a value from a live autocomplete dropdown. Supports multi-value lists and optional custom pill labels.
 - **Filter pills** — active structured filters displayed as dismissable chips below the search bar. Supports all eight operators. Click × to remove; "Clear all" removes every pill at once.
 - **Hybrid pagination** — initial 200-row buffer with lazy fetch as you page past it. Page size is configurable (10 – 500 rows per page).

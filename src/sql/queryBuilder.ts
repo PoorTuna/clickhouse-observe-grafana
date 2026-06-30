@@ -154,7 +154,8 @@ export function buildLogsQuery(
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
-  // Core SELECT — always present; drawer + trace-link depend on these fixed aliases.
+  // Core aliases — always present; drawer + trace-link depend on these fixed names.
+  // '*' exposes every raw table column so the log-detail drawer can show all fields.
   const coreSelect = [
     `${c.timestamp} AS timestamp`,
     `${c.body} AS body`,
@@ -172,7 +173,7 @@ export function buildLogsQuery(
     .filter((col) => !col.isCore)
     .map((col) => `${col.sqlExpr} AS ${col.key}`);
 
-  const selectParts = [...coreSelect, ...extraSelect];
+  const selectParts = ['*', ...coreSelect, ...extraSelect];
   const conditions = buildWhereConditions(config, state);
 
   const sortCol = state.sort?.col ?? 'timestamp';
@@ -249,7 +250,7 @@ export function buildVolumeQuery(
     `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
     `)`,
     `SELECT ${timeExpr} AS time,`,
-    `       if(${exprStr} IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
+    `       if(${exprStr} GLOBAL IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
     `       count() AS count`,
     `FROM ${tbl}`,
     `WHERE ${condSql}`,
@@ -281,7 +282,7 @@ export function buildFieldTopValuesQuery(
     `  ORDER BY ${tsCol} DESC`,
     `  LIMIT ${sampleSize}`,
     `)`,
-    `SELECT value, count() AS count, (SELECT count() FROM sample) AS total`,
+    `SELECT value, count() AS count, sum(count()) OVER () AS total`,
     `FROM sample`,
     `WHERE notEmpty(value)`,
     `GROUP BY value`,

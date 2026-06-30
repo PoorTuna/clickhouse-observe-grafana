@@ -153,7 +153,7 @@ export function LogDetailDrawer({
           );
         })}
 
-        {/* Fallback: any top-level columns not already shown */}
+        {/* All fields: every column from SELECT *, deduped against fixed aliases and mapped columns */}
         <section className={styles.section}>
           <button className={styles.sectionHeader} onClick={() => toggleSection('raw')}>
             <Icon name={expandedSections.has('raw') ? 'angle-down' : 'angle-right'} />
@@ -161,10 +161,25 @@ export function LogDetailDrawer({
           </button>
           {expandedSections.has('raw') && (
             <div className={styles.attrList}>
-              {Object.entries(row)
-                .filter(([k]) => !['ResourceAttributes','LogAttributes','ScopeAttributes','SpanAttributes'].includes(k))
-                .filter(([k, v]) => filterMatch(k, String(v ?? '')))
-                .map(([k, v]) => renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined))}
+              {(() => {
+                // Keys shown in dedicated sections (aliases + their source columns) — skip in All fields.
+                const c = config.columns;
+                const hidden = new Set([
+                  // Fixed core aliases always added by buildLogsQuery
+                  'timestamp', 'body', 'severity', 'traceId', 'spanId', 'serviceName',
+                  // Raw mapped column names projected by SELECT * (duplicates of the aliases)
+                  c.timestamp, c.body, c.severity, c.traceId, c.spanId, c.serviceName,
+                  // Attribute map columns shown in their own groups
+                  'ResourceAttributes', 'LogAttributes', 'ScopeAttributes', 'SpanAttributes',
+                  c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes,
+                ]);
+                return Object.entries(row)
+                  .filter(([k]) => !hidden.has(k) && k !== '')
+                  .filter(([k, v]) => filterMatch(k, String(v ?? '')))
+                  .map(([k, v]) =>
+                    renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined)
+                  );
+              })()}
             </div>
           )}
         </section>

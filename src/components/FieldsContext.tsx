@@ -78,7 +78,7 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
       try {
         const rows = await runQueryRows({
           datasourceUid: config.datasourceUid,
-          sql: buildColumnsQuery(config),
+          sql: buildColumnsQuery(config.database, config.logsTable),
           timeRange,
         });
         columns = rows

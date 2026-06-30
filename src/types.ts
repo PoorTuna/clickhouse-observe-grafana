@@ -94,17 +94,6 @@ export interface SelectedColumn {
   isCore: boolean;      // core cols are always selected; user cols add extra SELECT clauses
 }
 
-export interface SavedSearch {
-  id: string;
-  name: string;
-  search: string;
-  filters: FilterPill[];
-  columns: SelectedColumn[];
-  sort?: { col: string; dir: 'asc' | 'desc' };
-  timeRange?: { from: string; to: string };
-  createdAt: string;
-}
-
 export interface LogsQueryState {
   search: string;
   filters: FilterPill[];
@@ -154,7 +143,34 @@ export interface SpanRow {
   tags: string;
 }
 
+/** A named, storable view over a single logs table — superset of SourceConfig. */
+export interface DataView extends SourceConfig {
+  id: string;
+  name: string;
+  /** 'shared' = stored in plugin jsonData by admin; 'personal' = localStorage per-browser. */
+  origin: 'shared' | 'personal';
+  createdAt: string;
+}
+
 // Plugin jsonData shape
 export interface AppJsonData {
+  /** Admin-managed shared data views (v1+). */
+  dataViews?: DataView[];
+  /** ID of the view that is active by default for all users. */
+  defaultDataViewId?: string;
+  /** LEGACY single-source config — migrated to a shared DataView on load. */
   sourceConfig?: SourceConfig;
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  search: string;
+  filters: FilterPill[];
+  columns: SelectedColumn[];
+  sort?: { col: string; dir: 'asc' | 'desc' };
+  timeRange?: { from: string; to: string };
+  createdAt: string;
+  /** Scope this saved search to a specific data view; undefined = legacy (all views). */
+  dataViewId?: string;
 }

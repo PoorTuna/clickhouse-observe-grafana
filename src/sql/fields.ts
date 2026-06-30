@@ -51,6 +51,9 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
 
   // Body / message aliases
   if (['message', 'msg', 'body', 'log', 'text', 'content'].includes(f)) {
+    if (!c.body) {
+      return null; // body column not mapped; toSql falls back to treating field name as direct column
+    }
     return { sqlExpr: c.body, kind: 'text' };
   }
 
@@ -62,8 +65,12 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
     return { sqlExpr: c.severity, kind: 'level' };
   }
 
-  // SeverityNumber — numeric column, not in OTEL_COLUMN_MAPPING values
+  // SeverityNumber — only resolve to hardcoded OTel column name on OTel schemas;
+  // on arbitrary schemas, fall through so toSql uses the field name directly.
   if (['severitynumber', 'severity_number'].includes(f)) {
+    if (!config.isOtel) {
+      return null;
+    }
     return { sqlExpr: 'SeverityNumber', kind: 'exact' };
   }
 

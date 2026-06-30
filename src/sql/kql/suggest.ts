@@ -55,6 +55,7 @@ const OPERATORS = [
 const CONJUNCTIONS = [
   { text: 'and', description: 'Requires both arguments to be true',          insert: 'and ' },
   { text: 'or',  description: 'Requires one or more arguments to be true',   insert: 'or '  },
+  { text: 'not', description: 'Negates the following expression',            insert: 'not ' },
 ];
 
 // ── Main API ─────────────────────────────────────────────────────────────────
@@ -86,11 +87,16 @@ export function getSuggestions(
 
   // ── Nothing typed yet ─────────────────────────────────────────────────────
   if (!last) {
-    return { suggestions: fieldSuggestions(fields, '', cursor, cursor) };
+    return { suggestions: [notSuggestion(cursor), ...fieldSuggestions(fields, '', cursor, cursor)] };
   }
 
-  // ── After AND / OR / NOT keyword ──────────────────────────────────────────
-  if (last.type === 'AND' || last.type === 'OR' || last.type === 'NOT') {
+  // ── After AND / OR keyword: fields + not ──────────────────────────────────
+  if (last.type === 'AND' || last.type === 'OR') {
+    return { suggestions: [notSuggestion(cursor), ...fieldSuggestions(fields, '', cursor, cursor)] };
+  }
+
+  // ── After NOT keyword: only fields ────────────────────────────────────────
+  if (last.type === 'NOT') {
     return { suggestions: fieldSuggestions(fields, '', cursor, cursor) };
   }
 
@@ -142,7 +148,20 @@ export function getSuggestions(
       prev.type === 'NOT' ||
       prev.type === 'LPAREN';
     if (afterConjOrStart) {
-      return { suggestions: fieldSuggestions(fields, last.value, last.start, cursor) };
+      const fieldSugg = fieldSuggestions(fields, last.value, last.start, cursor);
+      // Offer 'not' if the partial text could be a prefix of it
+      if ('not'.startsWith(last.value.toLowerCase())) {
+        const not: Suggestion = {
+          type: 'conjunction',
+          text: 'not',
+          description: 'Negates the following expression',
+          insertText: 'not ',
+          replaceStart: last.start,
+          replaceEnd: cursor,
+        };
+        return { suggestions: [not, ...fieldSugg] };
+      }
+      return { suggestions: fieldSugg };
     }
     // After an unknown context — still suggest fields as a safe fallback
     return { suggestions: fieldSuggestions(fields, last.value, last.start, cursor) };
@@ -205,6 +224,17 @@ function operatorSuggestions(cursor: number): Suggestion[] {
     replaceStart: cursor,
     replaceEnd: cursor,
   }));
+}
+
+function notSuggestion(cursor: number): Suggestion {
+  return {
+    type: 'conjunction',
+    text: 'not',
+    description: 'Negates the following expression',
+    insertText: 'not ',
+    replaceStart: cursor,
+    replaceEnd: cursor,
+  };
 }
 
 function conjunctionSuggestions(cursor: number): Suggestion[] {

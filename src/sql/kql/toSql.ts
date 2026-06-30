@@ -34,6 +34,9 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
 
   // ── Bare term (no field) → body search ──────────────────────────────────
   if (node.field === null) {
+    if (!bodyCol) {
+      return '1=1'; // body column not mapped — ignore bare terms rather than emit broken SQL
+    }
     return bareTermSql(bodyCol, node.value, node.isWildcard, node.isPhrase);
   }
 
@@ -47,12 +50,10 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
 
   // ── Named field ──────────────────────────────────────────────────────────
   const resolved = resolveField(node.field, config);
-  if (!resolved) {
-    // Unknown field: fall back to body search
-    return bareTermSql(bodyCol, node.value, node.isWildcard, node.isPhrase);
-  }
-
-  const { sqlExpr, kind } = resolved;
+  // Unknown field: use the field name as a direct column rather than silently
+  // falling back to body search, which produces wrong results for named-field queries.
+  // e.g. `level:info` with severity unmapped → `"level" = 'info'`, not body ILIKE.
+  const { sqlExpr, kind } = resolved ?? { sqlExpr: node.field, kind: 'exact' as const };
   const val = node.value;
 
   // Level — always use IN-clause logic; wildcard falls through to ILIKE.

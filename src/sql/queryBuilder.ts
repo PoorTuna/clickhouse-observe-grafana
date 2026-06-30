@@ -184,14 +184,14 @@ export function buildLogsQuery(
   const selectParts = ['*', ...coreSelect, ...extraSelect];
   const conditions = buildWhereConditions(config, state);
 
-  const sortCol = state.sort?.col ?? 'timestamp';
+  const sortCol = state.sort?.col ?? (c.timestamp ? 'timestamp' : null);
   const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
 
   return [
     `SELECT ${selectParts.join(', ')}`,
     `FROM ${tbl}`,
     conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
-    `ORDER BY ${sortCol} ${sortDir}`,
+    sortCol ? `ORDER BY ${sortCol} ${sortDir}` : null,
     pagination
       ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
       : `LIMIT ${state.limit}`,

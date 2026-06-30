@@ -23,6 +23,13 @@ interface CreateDataViewModalProps {
 const NO_TIME_VALUE = '__no_time__';
 const NO_BODY_VALUE = '__no_body__';
 
+// Matches ClickHouse Date, Date32, DateTime, DateTime64(...), unwrapping
+// Nullable(...) / LowCardinality(...) wrappers first.
+function isTimeColumnType(rawType: string): boolean {
+  const t = rawType.toLowerCase().replace(/^(nullable|lowcardinality)\(([^)]+)\)$/, '$2');
+  return /^date(32|time(64)?)?\b/.test(t);
+}
+
 // A minimal valid time range for schema-only introspection queries.
 function schemaTimeRange(): TimeRange {
   const now = Date.now();
@@ -53,6 +60,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
 
   // Step 2 state
   const [columnOptions, setColumnOptions] = useState<Array<SelectableValue<string>>>([]);
+  const [allColumnOptions, setAllColumnOptions] = useState<Array<SelectableValue<string>>>([]);
   const [loadingCols, setLoadingCols] = useState(false);
   const [timestampField, setTimestampField] = useState<string | undefined>(undefined);
   const [bodyField, setBodyField] = useState<string | undefined>(undefined);
@@ -166,26 +174,23 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
         sql: buildColumnsQuery(database, logsTable),
         timeRange: schemaTimeRange(),
       });
-      const cols = rows
+      const typedRows = rows as Array<Record<string, unknown>>;
+      const cols = typedRows
         .map((r) => String(r['name'] ?? ''))
         .filter(Boolean);
 
-      // Timestamp picker: suggest Date/DateTime types first, then rest
-      const typedRows = rows as Array<Record<string, unknown>>;
+      // Timestamp picker: only columns with an actual date/time type.
       const dateTimeCols = typedRows
-        .filter((r) => {
-          const t = String(r['type'] ?? '').toLowerCase();
-          return t.startsWith('date') || t.startsWith('datetime') || t.includes('uint64');
-        })
+        .filter((r) => isTimeColumnType(String(r['type'] ?? '')))
         .map((r) => String(r['name'] ?? ''));
 
       const timestampOpts: Array<SelectableValue<string>> = [
         { label: '— No time field', value: NO_TIME_VALUE },
         ...dateTimeCols.map((c) => ({ label: c, value: c, description: 'date/time type' })),
-        ...cols.filter((c) => !dateTimeCols.includes(c)).map((c) => ({ label: c, value: c })),
       ];
 
       setColumnOptions(timestampOpts);
+      setAllColumnOptions(cols.map((c) => ({ label: c, value: c })));
 
       // No auto-inference — leave mapping blank. User maps columns by hand or ticks the OTel checkbox.
       setApplyOtel(false);
@@ -259,12 +264,10 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     }
   }
 
-  // Build body Select options (exclude what's shown in column options, add no-body)
+  // Build body Select options from all columns (any type may hold the message), add no-body
   const bodySelectOptions: Array<SelectableValue<string>> = [
     { label: '— (none)', value: NO_BODY_VALUE },
-    ...columnOptions
-      .filter((o) => o.value !== NO_TIME_VALUE)
-      .map((o) => ({ label: o.label ?? o.value ?? '', value: o.value ?? '' })),
+    ...allColumnOptions.map((o) => ({ label: o.label ?? o.value ?? '', value: o.value ?? '' })),
   ];
 
   const canProceed = Boolean(datasourceUid && database && logsTable);

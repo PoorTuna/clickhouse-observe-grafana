@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint --cache .",
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
+    "demo": "ts-node --transpile-only scripts/record-demo.ts",
     "e2e": "playwright test",
     "server": "docker compose up --build",
     "sign": "sign-plugin"
@@ -73,11 +74,13 @@
     "@grafana/runtime": "13.0.2",
     "@grafana/schema": "13.0.2",
     "@grafana/ui": "13.0.2",
-    "@swc/core-win32-x64-msvc": "^1.15.43",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-router-dom": "^6.22.0",
     "rxjs": "7.8.2"
+  },
+  "optionalDependencies": {
+    "@swc/core-win32-x64-msvc": "^1.15.43"
   },
   "packageManager": "npm@10.8.2"
 }

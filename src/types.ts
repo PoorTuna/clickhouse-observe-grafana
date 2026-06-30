@@ -53,6 +53,9 @@ export interface SourceConfig {
   database: string;
   logsTable: string;
   tracesTable: string;
+  // true only when the table has the OTel SeverityNumber numeric column.
+  // Enables KQL `severitynumber` / `severity_number` field resolution.
+  // Has no effect on any other SQL generation — all other paths use columns.*.
   isOtel: boolean;
   columns: ColumnMapping;
 }
@@ -60,10 +63,10 @@ export interface SourceConfig {
 export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
   datasourceUid: '',
   database: 'default',
-  logsTable: 'otel_logs',
-  tracesTable: 'otel_traces',
-  isOtel: true,
-  columns: OTEL_COLUMN_MAPPING,
+  logsTable: '',
+  tracesTable: '',
+  isOtel: false,
+  columns: EMPTY_COLUMN_MAPPING,
 };
 
 export type FilterOp =

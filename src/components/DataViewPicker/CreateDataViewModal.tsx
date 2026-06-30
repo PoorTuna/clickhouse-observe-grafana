@@ -6,12 +6,12 @@
 import React, { ChangeEvent, useContext, useEffect, useState } from 'react';
 import { dateTime, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, Field, Input, Modal, Select, Spinner } from '@grafana/ui';
+import { Alert, Button, Checkbox, Field, Input, Modal, Select, Spinner } from '@grafana/ui';
 import { SelectableValue } from '@grafana/data';
 import { DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
-import { looksLikeOtelSchema, applyOtelPreset } from '../../sql/schema';
+import { applyOtelPreset } from '../../sql/schema';
 import { ColumnMapping, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
 
@@ -58,7 +58,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
   const [bodyField, setBodyField] = useState<string | undefined>(undefined);
   const [mapping, setMapping] = useState<ColumnMapping>({ ...EMPTY_COLUMN_MAPPING });
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [otelDetected, setOtelDetected] = useState(false);
+  const [applyOtel, setApplyOtel] = useState(false);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -82,7 +82,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     setBodyField(undefined);
     setMapping({ ...EMPTY_COLUMN_MAPPING });
     setShowAdvanced(false);
-    setOtelDetected(false);
+    setApplyOtel(false);
     setName('');
     setError('');
   }
@@ -187,37 +187,11 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
 
       setColumnOptions(timestampOpts);
 
-      // Auto-detect OTel schema
-      const isOtel = looksLikeOtelSchema(cols);
-      setOtelDetected(isOtel);
-      if (isOtel) {
-        // Build a temporary config to run applyOtelPreset, then grab columns
-        const tmp: SourceConfig = {
-          ...DEFAULT_SOURCE_CONFIG,
-          database,
-          logsTable,
-          datasourceUid,
-        };
-        const preset = applyOtelPreset(tmp);
-        setMapping({ ...preset.columns });
-        setTimestampField(preset.columns.timestamp || NO_TIME_VALUE);
-        setBodyField(preset.columns.body || NO_BODY_VALUE);
-      } else {
-        // Guess: use first Date/DateTime col as timestamp, first String col as body
-        const firstDateCol = dateTimeCols[0];
-        const firstStringCol = typedRows.find((r) => {
-          const t = String(r['type'] ?? '').toLowerCase();
-          return t.startsWith('string') || t.startsWith('text') || t.includes('string');
-        });
-        const guessedBody = firstStringCol ? String(firstStringCol['name'] ?? '') : '';
-        setTimestampField(firstDateCol || NO_TIME_VALUE);
-        setBodyField(guessedBody || NO_BODY_VALUE);
-        setMapping({
-          ...EMPTY_COLUMN_MAPPING,
-          timestamp: firstDateCol || '',
-          body: guessedBody,
-        });
-      }
+      // No auto-inference — leave mapping blank. User maps columns by hand or ticks the OTel checkbox.
+      setApplyOtel(false);
+      setMapping({ ...EMPTY_COLUMN_MAPPING });
+      setTimestampField(undefined);
+      setBodyField(undefined);
 
       setName(`${database}.${logsTable}`);
     } catch (e) {
@@ -243,6 +217,26 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     }));
   }
 
+  function onApplyOtelChange(checked: boolean) {
+    setApplyOtel(checked);
+    if (checked) {
+      const tmp: SourceConfig = {
+        ...DEFAULT_SOURCE_CONFIG,
+        datasourceUid,
+        database,
+        logsTable,
+      };
+      const preset = applyOtelPreset(tmp);
+      setMapping({ ...preset.columns });
+      setTimestampField(preset.columns.timestamp || NO_TIME_VALUE);
+      setBodyField(preset.columns.body || NO_BODY_VALUE);
+    } else {
+      setMapping({ ...EMPTY_COLUMN_MAPPING });
+      setTimestampField(undefined);
+      setBodyField(undefined);
+    }
+  }
+
   function handleSave() {
     setSaving(true);
     setError('');
@@ -252,7 +246,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
         database,
         logsTable,
         tracesTable: '',
-        isOtel: otelDetected,
+        isOtel: applyOtel,
         columns: mapping,
         name: name.trim() || `${database}.${logsTable}`,
       });
@@ -360,11 +354,14 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
 
           {!loadingCols && (
             <>
-              {otelDetected && (
-                <Alert title="OpenTelemetry schema detected" severity="info" style={{ marginBottom: 12 }}>
-                  Column mapping pre-filled with OTel defaults. Adjust if needed.
-                </Alert>
-              )}
+              <div style={{ marginBottom: 16 }}>
+                <Checkbox
+                  label="This table uses the OpenTelemetry schema — apply preset"
+                  description="Pre-fills all column mappings with standard OTel column names (Timestamp, Body, SeverityText, …)."
+                  value={applyOtel}
+                  onChange={(e) => onApplyOtelChange(e.currentTarget.checked)}
+                />
+              </div>
 
               <Field
                 label="Timestamp field"

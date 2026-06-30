@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { BreakdownSel } from '../../types';
 import { useFields } from '../FieldsContext';
+import { SourceConfigContext } from '../App/App';
 
 interface Props {
   value: BreakdownSel;
@@ -25,8 +26,25 @@ function triggerLabel(sel: BreakdownSel): string {
 export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
   const styles = useStyles2(getStyles);
   const { fields, loading } = useFields();
+  const config = useContext(SourceConfigContext);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+
+  // Severity is only real when the mapped column actually exists in the table schema.
+  const severityExists =
+    Boolean(config.columns.severity) &&
+    fields.some(
+      (f) =>
+        f.source === 'column' &&
+        (f.sqlExpr === config.columns.severity || f.name === config.columns.severity)
+    );
+
+  // If fields have loaded and severity doesn't exist but is currently selected, fall back.
+  useEffect(() => {
+    if (!loading && !severityExists && value.kind === 'severity') {
+      onChange({ kind: 'none' });
+    }
+  }, [loading, severityExists, value.kind, onChange]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -89,8 +107,8 @@ export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
               <span>No breakdown</span>
             </button>
 
-            {/* Severity — only when the view has a severity column */}
-            {hasSeverity && (
+            {/* Severity — only when the mapped column actually exists in the real schema */}
+            {severityExists && (
               <button
                 className={`${styles.item} ${value.kind === 'severity' ? styles.itemActive : ''}`}
                 onClick={() => select({ kind: 'severity' })}

@@ -36,6 +36,17 @@ import {
 import { PLUGIN_BASE_URL } from '../constants';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 
+function fallbackCopy(text: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch { /* best-effort */ }
+  document.body.removeChild(ta);
+}
+
 const INITIAL_FETCH = 200;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
 const DEFAULT_PAGE_SIZE = 50;
@@ -474,10 +485,19 @@ export function LogsExplorer() {
               <button
                 className={styles.sqlCopyBtn}
                 onClick={() => {
-                  navigator.clipboard.writeText(effectiveSql).then(() => {
+                  const copied = () => {
                     setSqlCopied(true);
                     setTimeout(() => setSqlCopied(false), 2000);
-                  });
+                  };
+                  if (navigator.clipboard) {
+                    navigator.clipboard.writeText(effectiveSql).then(copied).catch(() => {
+                      fallbackCopy(effectiveSql);
+                      copied();
+                    });
+                  } else {
+                    fallbackCopy(effectiveSql);
+                    copied();
+                  }
                 }}
               >
                 {sqlCopied ? 'Copied!' : 'Copy'}

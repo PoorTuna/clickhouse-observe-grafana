@@ -8,7 +8,7 @@ import { FieldItem } from './FieldItem';
 import { FilterPill, LogsQueryState, SelectedColumn, ColumnType } from '../../types';
 
 function makeColumnKey(id: string): string {
-  return '_f_' + id.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').slice(0, 40);
+  return 'fld_' + id.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').slice(0, 40);
 }
 
 function fieldToColumn(field: FieldModel): SelectedColumn {

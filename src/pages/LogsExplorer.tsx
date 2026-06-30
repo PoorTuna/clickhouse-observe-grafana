@@ -296,9 +296,14 @@ export function LogsExplorer() {
 
   const onPageChange = useCallback(
     async (page: number) => {
+      const runIdAtStart = runRef.current;
       const updated = await ensureRows(page, pageSize, rows, hasMore);
+      // Abort if a new query started while we were fetching — stale setCurrentPage
+      // would leave currentPage=N with the new (shorter) rows, making pageRows empty.
+      if (runRef.current !== runIdAtStart) {
+        return;
+      }
       const needed = (page + 1) * pageSize;
-      // Only navigate to page if rows are available
       if (updated.length > page * pageSize || needed <= updated.length) {
         setCurrentPage(page);
       }

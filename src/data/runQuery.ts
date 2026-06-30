@@ -37,7 +37,7 @@ export async function runQuery(options: RunQueryOptions): Promise<DataFrame[]> {
   };
 
   const request: DataQueryRequest<ChTarget> = {
-    requestId: `ch-observe-${Date.now()}`,
+    requestId: `ch-observe-${refId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     app: 'dashboard',
     interval: '1m',
     intervalMs: 60000,

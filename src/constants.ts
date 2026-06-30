@@ -26,3 +26,26 @@ export const SEVERITY_ORDER = [
   'critical', 'fatal', 'error', 'err', 'warn', 'warning',
   'info', 'information', 'debug', 'trace', 'unknown',
 ];
+
+/** Accent color for single-stack bars when no severity column is mapped. */
+export const SINGLE_STACK_COLOR = '#54B399';
+
+/**
+ * 10-hue categorical palette for breakdown field series.
+ * Mirrors the EUI colorblind-safe palette used in SEVERITY_COLORS.
+ */
+export const BREAKDOWN_PALETTE = [
+  '#54B399',
+  '#6092C0',
+  '#D36086',
+  '#9170B8',
+  '#CA8EAE',
+  '#D6BF57',
+  '#B9A888',
+  '#DA8B45',
+  '#AA6556',
+  '#E7664C',
+];
+
+/** Color used for the "Other" series in breakdown mode. */
+export const OTHER_COLOR = '#98A2B3';

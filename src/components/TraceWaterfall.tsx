@@ -99,8 +99,6 @@ export function TraceWaterfall({ spans }: TraceWaterfallProps) {
     return <div className={styles.empty}>No spans found.</div>;
   }
 
-  const totalHeight = nodes.length * ROW_HEIGHT;
-
   return (
     <div className={styles.container}>
       {/* Header */}

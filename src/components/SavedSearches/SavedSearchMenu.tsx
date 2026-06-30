@@ -170,7 +170,7 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad, activeDataViewI
         title="Delete saved search"
         body="This cannot be undone."
         confirmText="Delete"
-        icon={'trash-alt' as any}
+
         onConfirm={() => { if (deleteId) { handleDelete(deleteId); } }}
         onDismiss={() => setDeleteId(null)}
       />

@@ -81,7 +81,7 @@ describe('buildWhereConditions — search clause', () => {
     const conds = buildWhereConditions(config, {
       ...DEFAULT_LOGS_QUERY_STATE,
       search: 'error',
-      filters: [{ field: 'ServiceName', op: '=', value: 'api', active: true }],
+      filters: [{ id: 'f1', field: 'ServiceName', op: '=', value: 'api' }],
     });
     // timestamp + search + filter = 3
     expect(conds).toHaveLength(3);
@@ -91,7 +91,7 @@ describe('buildWhereConditions — search clause', () => {
     const conds = buildWhereConditions(config, {
       ...DEFAULT_LOGS_QUERY_STATE,
       search: '',
-      filters: [{ field: 'ServiceName', op: '=', value: 'api', active: true }],
+      filters: [{ id: 'f1', field: 'ServiceName', op: '=', value: 'api' }],
     });
     expect(conds).toHaveLength(2);
   });

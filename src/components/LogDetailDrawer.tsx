@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, dateTimeFormat } from '@grafana/data';
-import { useStyles2, Drawer, IconButton, Button, Icon } from '@grafana/ui';
+import { GrafanaTheme2 } from '@grafana/data';
+import { useStyles2, Drawer, Button, Icon } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig } from '../types';
-import { groupAttributes, AttributeGroup } from '../sql/schema';
+import { groupAttributes } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 
 interface LogDetailDrawerProps {
@@ -14,7 +14,6 @@ interface LogDetailDrawerProps {
   onViewTrace?: (traceId: string) => void;
 }
 
-type Section = AttributeGroup | 'logLine' | 'links';
 
 export function LogDetailDrawer({
   row,

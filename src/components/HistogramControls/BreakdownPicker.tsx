@@ -78,7 +78,7 @@ export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
   return (
     <div className={styles.wrapper} ref={wrapperRef}>
       <button className={styles.trigger} onClick={() => setOpen((v) => !v)}>
-        <Icon name="chart-bar" size="sm" />
+        <Icon name={'chart-bar' as any} size="sm" />
         <span className={styles.triggerLabel}>{triggerLabel(value)}</span>
         <Icon name={open ? 'angle-up' : 'angle-down'} size="sm" />
       </button>

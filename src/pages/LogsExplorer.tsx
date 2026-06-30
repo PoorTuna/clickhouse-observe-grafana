@@ -7,7 +7,9 @@ import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
 import { LogDetailDrawer } from '../components/LogDetailDrawer';
-import { VolumeHistogram, calcBucketInterval } from '../components/VolumeHistogram';
+import { VolumeHistogram, resolveInterval, ResolvedInterval } from '../components/VolumeHistogram';
+import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
+import { BreakdownPicker } from '../components/HistogramControls/BreakdownPicker';
 import { FieldSidebar } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsProvider } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
@@ -20,8 +22,10 @@ import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
 import { viewCapabilities } from '../sql/capabilities';
 import {
+  BreakdownSel,
   DEFAULT_LOGS_QUERY_STATE,
   FilterPill,
+  IntervalMode,
   LogRow,
   LogsQueryState,
   SavedSearch,
@@ -128,14 +132,26 @@ export function LogsExplorer() {
     const viewId = activeView?.id;
     if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
       dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
+      // Re-derive capabilities from the latest config (updates with activeView).
+      const newCaps = viewCapabilities(config);
+      setBreakdown(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
     }
     prevViewId.current = viewId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView?.id]);
   const [rows, setRows] = useState<LogRow[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
+
+  // Histogram controls.
+  // Breakdown initial value is set once at mount — no effect ever forces it back,
+  // so user choices (including "No breakdown") always persist.
+  const [intervalMode, setIntervalMode] = useState<IntervalMode>('auto');
+  const [breakdown, setBreakdown] = useState<BreakdownSel>(() =>
+    caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' }
+  );
 
   // Sidebar collapse
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -157,6 +173,16 @@ export function LogsExplorer() {
     return queryState.columns.length > 0 ? queryState.columns : defaultColumns(config);
   }, [queryState.columns, config]);
 
+  const resolvedInterval = useMemo<ResolvedInterval>(
+    () => resolveInterval(intervalMode, timeRange),
+    [intervalMode, timeRange]
+  );
+
+  const totalEvents = useMemo(
+    () => volumeData.reduce((sum, d) => sum + Object.values(d.levels).reduce((a, b) => a + b, 0), 0),
+    [volumeData]
+  );
+
   const executeQuery = useCallback(async () => {
     if (!config.datasourceUid) {
       setError('No ClickHouse datasource configured. Go to Configuration to set it up.');
@@ -175,8 +201,16 @@ export function LogsExplorer() {
       const sql = queryState.useRawSql
         ? queryState.rawSql
         : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 });
-      const intervalSec = calcBucketInterval(timeRange);
-      const volSql = buildVolumeQuery(config, queryState, intervalSec);
+      const resolved = resolveInterval(intervalMode, timeRange);
+      const volSql = buildVolumeQuery(config, queryState, {
+        interval: { unit: resolved.unit, value: resolved.value },
+        breakdown:
+          breakdown.kind === 'none'
+            ? { kind: 'none' }
+            : breakdown.kind === 'severity'
+            ? { kind: 'severity', expr: config.columns.severity }
+            : { kind: 'field', expr: breakdown.field.sqlExpr },
+      });
 
       const volPromise = caps.hasTime
         ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' })
@@ -220,7 +254,7 @@ export function LogsExplorer() {
         setLoading(false);
       }
     }
-  }, [config, queryState, timeRange, effectiveColumns]);
+  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown]);
 
   useLayoutEffect(() => {
     latestExecuteQuery.current = executeQuery;
@@ -459,13 +493,47 @@ export function LogsExplorer() {
           </div>
         )}
 
-        {/* Volume histogram */}
-        {volumeData.length > 0 && (
-          <VolumeHistogram
-            data={volumeData}
-            timeRange={timeRange}
-            onSelectRange={onHistogramSelectRange}
-          />
+        {/* Histogram panel: header (controls + meta) + chart in one bordered card */}
+        {caps.hasTime && (
+          <div className={styles.histogramPanel}>
+            <div className={styles.histogramHeader}>
+              <IntervalPicker
+                value={intervalMode}
+                onChange={setIntervalMode}
+                timeRange={timeRange}
+              />
+              <BreakdownPicker
+                value={breakdown}
+                onChange={setBreakdown}
+                hasSeverity={caps.hasSeverity}
+              />
+              <div className={styles.histogramHeaderSpacer} />
+              {volumeData.length > 0 && (
+                <span className={styles.histogramMeta}>
+                  {totalEvents.toLocaleString()} events &middot; interval: {resolvedInterval.label}
+                </span>
+              )}
+            </div>
+            {volumeData.length > 0 ? (
+              <VolumeHistogram
+                data={volumeData}
+                timeRange={timeRange}
+                onSelectRange={onHistogramSelectRange}
+                colorMode={
+                  breakdown.kind === 'field'
+                    ? 'breakdown'
+                    : breakdown.kind === 'severity'
+                    ? 'severity'
+                    : 'single'
+                }
+                bucketMs={resolvedInterval.intervalMs}
+              />
+            ) : (
+              <div className={styles.histogramEmpty}>
+                {loading ? 'Loading…' : 'No events in selected time range'}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Two-pane: sidebar + results */}
@@ -641,6 +709,35 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-radius: ${theme.shape.radius.default};
     color: ${theme.colors.error.text};
     font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  histogramPanel: css`
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    background: ${theme.colors.background.primary};
+  `,
+  histogramEmpty: css`
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: ${theme.colors.text.disabled};
+    font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  histogramHeader: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
+    border-bottom: 1px solid ${theme.colors.border.weak};
+  `,
+  histogramHeaderSpacer: css`
+    flex: 1;
+  `,
+  histogramMeta: css`
+    font-size: 11px;
+    color: ${theme.colors.text.disabled};
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   `,
   body: css`
     flex: 1;

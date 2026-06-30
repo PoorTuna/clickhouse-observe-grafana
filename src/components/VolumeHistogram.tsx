@@ -2,13 +2,98 @@ import React, { useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { useStyles2 } from '@grafana/ui';
-import { VolumeDataPoint } from '../types';
-import { SEVERITY_COLORS, SEVERITY_ORDER } from '../constants';
+import { VolumeDataPoint, IntervalMode } from '../types';
+import { CHIntervalUnit } from '../sql/queryBuilder';
+import {
+  SEVERITY_COLORS,
+  SEVERITY_ORDER,
+  BREAKDOWN_PALETTE,
+  OTHER_COLOR,
+  SINGLE_STACK_COLOR,
+} from '../constants';
+
+// ─── Interval helpers ────────────────────────────────────────────────────────
+
+const UNIT_SECONDS: Record<Exclude<IntervalMode, 'auto'>, number> = {
+  second: 1,
+  minute: 60,
+  hour:   3_600,
+  day:    86_400,
+  week:   604_800,
+  month:  2_592_000,  // 30 days
+  year:   31_536_000, // 365 days
+};
+
+const UNIT_CH: Record<Exclude<IntervalMode, 'auto'>, CHIntervalUnit> = {
+  second: 'SECOND',
+  minute: 'MINUTE',
+  hour:   'HOUR',
+  day:    'DAY',
+  week:   'WEEK',
+  month:  'MONTH',
+  year:   'YEAR',
+};
+
+export interface ResolvedInterval {
+  unit: CHIntervalUnit;
+  value: number;
+  /** Human-readable label, e.g. "Auto - 30 seconds" or "Minute". */
+  label: string;
+  /** Bucket width in milliseconds (used for single-click zoom). */
+  intervalMs: number;
+}
+
+function formatDuration(sec: number): string {
+  if (sec < 60)    return `${sec} second${sec !== 1 ? 's' : ''}`;
+  if (sec < 3_600) return `${sec / 60} minute${sec / 60 !== 1 ? 's' : ''}`;
+  if (sec < 86_400) return `${sec / 3_600} hour${sec / 3_600 !== 1 ? 's' : ''}`;
+  return `${sec / 86_400} day${sec / 86_400 !== 1 ? 's' : ''}`;
+}
+
+/** Calculate bucket interval in seconds to target ~60 buckets over the time range. */
+export function calcBucketInterval(timeRange: TimeRange): number {
+  const spanMs = timeRange.to.valueOf() - timeRange.from.valueOf();
+  const targetBuckets = 60;
+  const rawSec = Math.ceil(spanMs / 1000 / targetBuckets);
+  const steps = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400];
+  return steps.find((s) => s >= rawSec) ?? 86400;
+}
+
+/** Resolve an IntervalMode + time range into concrete SQL interval + display label. */
+export function resolveInterval(mode: IntervalMode, timeRange: TimeRange): ResolvedInterval {
+  if (mode === 'auto') {
+    const sec = calcBucketInterval(timeRange);
+    return { unit: 'SECOND', value: sec, label: `Auto - ${formatDuration(sec)}`, intervalMs: sec * 1000 };
+  }
+  const sec = UNIT_SECONDS[mode];
+  const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+  return { unit: UNIT_CH[mode], value: 1, label, intervalMs: sec * 1000 };
+}
+
+/** Estimate how many bars a given mode would produce. Used to guard against too-fine intervals. */
+export function estimateBucketCount(mode: IntervalMode, timeRange: TimeRange): number {
+  const spanMs = timeRange.to.valueOf() - timeRange.from.valueOf();
+  const sec = mode === 'auto' ? calcBucketInterval(timeRange) : UNIT_SECONDS[mode];
+  return Math.ceil(spanMs / 1000 / sec);
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
+export type HistogramColorMode = 'single' | 'severity' | 'breakdown';
 
 interface VolumeHistogramProps {
   data: VolumeDataPoint[];
   timeRange: TimeRange;
   height?: number;
+  /**
+   * Controls how bars are colored:
+   * - 'single'    → one accent color, no legend (No breakdown selected).
+   * - 'severity'  → SEVERITY_COLORS ordered by SEVERITY_ORDER, no legend (default).
+   * - 'breakdown' → categorical palette + legend (field breakdown active).
+   */
+  colorMode: HistogramColorMode;
+  /** Bucket width in ms — drives single-click zoom width. */
+  bucketMs: number;
   onSelectRange?: (from: number, to: number) => void;
 }
 
@@ -18,20 +103,12 @@ interface HoveredBucket {
   clientY: number;
 }
 
-/** Calculate bucket interval in seconds to target ~60 buckets over the time range. */
-export function calcBucketInterval(timeRange: TimeRange): number {
-  const spanMs = timeRange.to.valueOf() - timeRange.from.valueOf();
-  const targetBuckets = 60;
-  const rawSec = Math.ceil(spanMs / 1000 / targetBuckets);
-  // Round to a nice step
-  const steps = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400];
-  return steps.find((s) => s >= rawSec) ?? 86400;
-}
-
 export function VolumeHistogram({
   data,
   timeRange,
   height = 64,
+  colorMode,
+  bucketMs,
   onSelectRange,
 }: VolumeHistogramProps) {
   const styles = useStyles2(getStyles);
@@ -40,47 +117,80 @@ export function VolumeHistogram({
   const selectionRef = useRef<SVGRectElement | null>(null);
   const [hovered, setHovered] = useState<HoveredBucket | null>(null);
 
-  const { bars, maxTotal, allLevels, totalCount } = useMemo(() => {
+  const { bars, maxTotal, allLevels, totalCount, colorMap } = useMemo(() => {
     if (!data.length) {
-      return { bars: [], maxTotal: 0, allLevels: [], totalCount: 0 };
+      return { bars: [], maxTotal: 0, allLevels: [] as string[], totalCount: 0, colorMap: {} as Record<string, string> };
     }
 
     const levelSet = new Set<string>();
     let maxTotal = 0;
     let totalCount = 0;
+    const levelTotals: Record<string, number> = {};
 
     const bars = data.map((d) => {
       let bucketTotal = 0;
       for (const [level, count] of Object.entries(d.levels)) {
-        levelSet.add(level.toLowerCase());
+        const key = level.toLowerCase();
+        levelSet.add(key);
         bucketTotal += count;
         totalCount += count;
+        levelTotals[key] = (levelTotals[key] ?? 0) + count;
       }
       maxTotal = Math.max(maxTotal, bucketTotal);
       return d;
     });
 
-    const allLevels = [
-      ...SEVERITY_ORDER.filter((l) => levelSet.has(l)),
-      ...[...levelSet].filter((l) => !SEVERITY_ORDER.includes(l)),
-    ];
+    let allLevels: string[];
+    let colorMap: Record<string, string>;
 
-    return { bars, maxTotal, allLevels, totalCount };
-  }, [data]);
+    if (colorMode === 'breakdown') {
+      // Categorical coloring: sort by total count desc, 'other' always last.
+      const otherKey = 'other';
+      const seriesKeys = [...levelSet].filter((l) => l !== otherKey);
+      seriesKeys.sort((a, b) => (levelTotals[b] ?? 0) - (levelTotals[a] ?? 0));
+      if (levelSet.has(otherKey)) {
+        seriesKeys.push(otherKey);
+      }
+      allLevels = seriesKeys;
+      colorMap = {};
+      let paletteIdx = 0;
+      for (const key of allLevels) {
+        if (key === otherKey) {
+          colorMap[key] = OTHER_COLOR;
+        } else {
+          colorMap[key] = BREAKDOWN_PALETTE[paletteIdx % BREAKDOWN_PALETTE.length];
+          paletteIdx++;
+        }
+      }
+    } else if (colorMode === 'severity') {
+      // Severity stacking ordered by SEVERITY_ORDER.
+      allLevels = [
+        ...SEVERITY_ORDER.filter((l) => levelSet.has(l)),
+        ...[...levelSet].filter((l) => !SEVERITY_ORDER.includes(l)),
+      ];
+      colorMap = Object.fromEntries(
+        allLevels.map((l) => [l, SEVERITY_COLORS[l] ?? SEVERITY_COLORS['unknown']])
+      );
+    } else {
+      // Single-stack ('none'): one accent color, no legend.
+      allLevels = [...levelSet];
+      colorMap = Object.fromEntries(allLevels.map((l) => [l, SINGLE_STACK_COLOR]));
+    }
+
+    return { bars, maxTotal, allLevels, totalCount, colorMap };
+  }, [data, colorMode]);
 
   if (!data.length) {
     return null;
   }
 
-  // Map SVG x% to the epoch-ms timestamp of the nearest bucket.
-  // bars[i].time is already epoch milliseconds (CH datasource emits DateTime as ms).
   function xPctToTime(pct: number): number {
     if (!bars.length) {
       return timeRange.from.valueOf();
     }
     const idx = Math.floor((pct / 100) * bars.length);
     const clamped = Math.max(0, Math.min(bars.length - 1, idx));
-    return bars[clamped].time; // already ms — do NOT multiply by 1000
+    return bars[clamped].time;
   }
 
   function getSvgXPct(e: React.MouseEvent<SVGSVGElement>): number {
@@ -104,7 +214,6 @@ export function VolumeHistogram({
     const pct = getSvgXPct(e);
 
     if (dragStart.current !== null) {
-      // Dragging — update selection rect, suppress hover tooltip
       const cur = pct;
       const x1 = Math.min(dragStart.current, cur);
       const x2 = Math.max(dragStart.current, cur);
@@ -116,7 +225,6 @@ export function VolumeHistogram({
       return;
     }
 
-    // Hovering — derive bucket index from x%
     if (bars.length > 0) {
       const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((pct / 100) * bars.length)));
       setHovered((prev) => {
@@ -141,9 +249,9 @@ export function VolumeHistogram({
       selectionRef.current.setAttribute('display', 'none');
     }
     if (x2 - x1 < 0.5) {
-      // Single click — zoom into bucket
+      // Single click — zoom into one bucket using the resolved interval width.
       const t = xPctToTime(end);
-      const halfBucketMs = calcBucketInterval(timeRange) * 500;
+      const halfBucketMs = bucketMs / 2;
       onSelectRange(t - halfBucketMs, t + halfBucketMs);
     } else {
       onSelectRange(xPctToTime(x1), xPctToTime(x2));
@@ -154,9 +262,7 @@ export function VolumeHistogram({
 
   return (
     <div className={styles.wrapper}>
-      <div className={styles.meta}>
-        <span className={styles.totalCount}>{totalCount.toLocaleString()} events</span>
-      </div>
+      {/* SVG bar chart */}
       <div className={styles.container} style={{ height }}>
         <svg
           ref={svgRef}
@@ -174,6 +280,18 @@ export function VolumeHistogram({
             setHovered(null);
           }}
         >
+          {/* Hover highlight band — sits behind bars, hidden during drag */}
+          {hovered !== null && dragStart.current === null && (
+            <rect
+              x={`${(hovered.index / bars.length) * 100}%`}
+              y={0}
+              width={`${(1 / bars.length) * 100}%`}
+              height={height}
+              className={styles.highlightBand}
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
+
           {bars.map((d, i) => {
             const x = (i / bars.length) * 100;
             const w = (1 / bars.length) * 100 - 0.15;
@@ -182,13 +300,14 @@ export function VolumeHistogram({
             return (
               <g key={d.time}>
                 {allLevels.map((level) => {
-                  const count = d.levels[level] ?? 0;
+                  const rawLevel = Object.keys(d.levels).find((k) => k.toLowerCase() === level);
+                  const count = rawLevel !== undefined ? d.levels[rawLevel] : 0;
                   if (!count) {
                     return null;
                   }
                   const barH = maxTotal > 0 ? (count / maxTotal) * (height - 2) : 0;
                   yOffset -= barH;
-                  const color = SEVERITY_COLORS[level] ?? SEVERITY_COLORS['unknown'];
+                  const color = colorMap[level] ?? OTHER_COLOR;
                   return (
                     <rect
                       key={level}
@@ -220,6 +339,21 @@ export function VolumeHistogram({
         </svg>
       </div>
 
+      {/* Breakdown legend — only shown in field-breakdown mode */}
+      {colorMode === 'breakdown' && allLevels.length > 0 && (
+        <div className={styles.legend}>
+          {allLevels.map((level) => (
+            <div key={level} className={styles.legendItem}>
+              <span
+                className={styles.legendSwatch}
+                style={{ background: colorMap[level] ?? OTHER_COLOR }}
+              />
+              <span className={styles.legendLabel}>{level || '(empty)'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Hover tooltip */}
       {hoveredBar && hovered && (
         <div
@@ -241,20 +375,27 @@ export function VolumeHistogram({
               .reduce((a, b) => a + b, 0)
               .toLocaleString()}
           </div>
-          {allLevels
-            .filter((level) => (hoveredBar.levels[level] ?? 0) > 0)
-            .map((level) => (
-              <div key={level} className={styles.tooltipRow}>
-                <span
-                  className={styles.tooltipSwatch}
-                  style={{ background: SEVERITY_COLORS[level] ?? SEVERITY_COLORS['unknown'] }}
-                />
-                <span className={styles.tooltipLevel}>{level}</span>
-                <span className={styles.tooltipCount}>
-                  {hoveredBar.levels[level].toLocaleString()}
-                </span>
-              </div>
-            ))}
+          {colorMode !== 'single' &&
+            allLevels
+              .filter((level) => {
+                const rawLevel = Object.keys(hoveredBar.levels).find((k) => k.toLowerCase() === level);
+                return rawLevel !== undefined && hoveredBar.levels[rawLevel] > 0;
+              })
+              .map((level) => {
+                const rawLevel = Object.keys(hoveredBar.levels).find((k) => k.toLowerCase() === level)!;
+                return (
+                  <div key={level} className={styles.tooltipRow}>
+                    <span
+                      className={styles.tooltipSwatch}
+                      style={{ background: colorMap[level] ?? OTHER_COLOR }}
+                    />
+                    <span className={styles.tooltipLevel}>{level || '(empty)'}</span>
+                    <span className={styles.tooltipCount}>
+                      {hoveredBar.levels[rawLevel].toLocaleString()}
+                    </span>
+                  </div>
+                );
+              })}
         </div>
       )}
     </div>
@@ -267,28 +408,43 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     gap: 2px;
   `,
-  meta: css`
-    display: flex;
-    align-items: center;
-    padding: 0 2px;
-  `,
-  totalCount: css`
-    font-size: 11px;
-    color: ${theme.colors.text.secondary};
-    font-variant-numeric: tabular-nums;
-  `,
   container: css`
     width: 100%;
-    border-bottom: 1px solid ${theme.colors.border.weak};
-    background: ${theme.colors.background.canvas};
-    margin-bottom: ${theme.spacing(0.5)};
   `,
   svg: css`
     display: block;
   `,
+  highlightBand: css`
+    fill: ${theme.colors.action.hover};
+  `,
   svgZoomable: css`
     cursor: crosshair;
     user-select: none;
+  `,
+  legend: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
+    padding: 0 2px ${theme.spacing(0.5)};
+  `,
+  legendItem: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+  `,
+  legendSwatch: css`
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  `,
+  legendLabel: css`
+    font-size: 11px;
+    color: ${theme.colors.text.secondary};
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   `,
   tooltip: css`
     background: ${theme.colors.background.primary};

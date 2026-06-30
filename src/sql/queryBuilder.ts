@@ -189,24 +189,70 @@ export function buildLogsQuery(
   ].join('\n');
 }
 
+export type CHIntervalUnit = 'SECOND' | 'MINUTE' | 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR';
+
+export type VolumeBreakdown =
+  /** One bar per bucket, no per-series coloring. */
+  | { kind: 'none' }
+  /** Stack by severity column — no CTE, same as the original query. */
+  | { kind: 'severity'; expr: string }
+  /** Top-N breakdown by a chosen field expression + 'Other' catch-all via CTE. */
+  | { kind: 'field'; expr: string; limit?: number };
+
+export interface VolumeQueryOpts {
+  interval: { unit: CHIntervalUnit; value: number };
+  breakdown: VolumeBreakdown;
+}
+
 export function buildVolumeQuery(
   config: SourceConfig,
   state: LogsQueryState,
-  intervalSeconds?: number
+  opts: VolumeQueryOpts
 ): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
-  const sevCol = c.severity || `''`;
-  const timeExpr = intervalSeconds
-    ? `toStartOfInterval(${c.timestamp}, INTERVAL ${intervalSeconds} SECOND)`
-    : `toStartOfMinute(${c.timestamp})`;
-
+  const { interval, breakdown } = opts;
+  const timeExpr = `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
   const conditions = buildWhereConditions(config, state);
+  const condSql = conditions.join(' AND ');
 
+  if (breakdown.kind === 'none') {
+    // Single series: constant empty-string level so the fold loop stays generic.
+    return [
+      `SELECT ${timeExpr} AS time, '' AS level, count() AS count`,
+      `FROM ${tbl}`,
+      `WHERE ${condSql}`,
+      `GROUP BY time, level`,
+      `ORDER BY time ASC`,
+    ].join('\n');
+  }
+
+  if (breakdown.kind === 'severity') {
+    // Stack by severity column — no CTE, identical to the original behaviour.
+    return [
+      `SELECT ${timeExpr} AS time, ${breakdown.expr} AS level, count() AS count`,
+      `FROM ${tbl}`,
+      `WHERE ${condSql}`,
+      `GROUP BY time, level`,
+      `ORDER BY time ASC`,
+    ].join('\n');
+  }
+
+  // Field breakdown: compute top-N server-side so 'Other' is one aggregated series.
+  const limit = breakdown.limit ?? 10;
+  const exprStr = `toString(${breakdown.expr})`;
   return [
-    `SELECT ${timeExpr} AS time, ${sevCol} AS level, count() AS count`,
+    `WITH top AS (`,
+    `  SELECT ${exprStr} AS v`,
+    `  FROM ${tbl}`,
+    `  WHERE ${condSql}`,
+    `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
+    `)`,
+    `SELECT ${timeExpr} AS time,`,
+    `       if(${exprStr} IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
+    `       count() AS count`,
     `FROM ${tbl}`,
-    `WHERE ${conditions.join(' AND ')}`,
+    `WHERE ${condSql}`,
     `GROUP BY time, level`,
     `ORDER BY time ASC`,
   ].join('\n');

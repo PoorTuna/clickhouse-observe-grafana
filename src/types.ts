@@ -1,3 +1,5 @@
+import { FieldModel } from './sql/fieldModel';
+
 // SourceConfig: persisted in plugin jsonData. Drives all SQL generation.
 
 export interface ColumnMapping {
@@ -103,6 +105,20 @@ export interface LogsQueryState {
   columns: SelectedColumn[];
   sort?: { col: string; dir: 'asc' | 'desc' };
 }
+
+/** Histogram time bucket granularity. 'auto' derives the best interval from the time range. */
+export type IntervalMode = 'auto' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year';
+
+/**
+ * Histogram breakdown selection.
+ * - 'none'     → plain single-color bars; no per-series coloring.
+ * - 'severity' → stack by severity column (existing behavior, default when severity is mapped).
+ * - 'field'    → top-10 CTE breakdown by a chosen field.
+ */
+export type BreakdownSel =
+  | { kind: 'none' }
+  | { kind: 'severity' }
+  | { kind: 'field'; field: FieldModel };
 
 export const DEFAULT_LOGS_QUERY_STATE: LogsQueryState = {
   search: '',

@@ -10,10 +10,11 @@ const fields: FieldModel[] = [
 
 describe('getSuggestions', () => {
   // ── Empty query ────────────────────────────────────────────────────────────
-  it('empty query → all field suggestions', () => {
+  it('empty query → not suggestion + all field suggestions', () => {
     const { suggestions } = getSuggestions('', 0, fields);
-    expect(suggestions.length).toBe(fields.length);
-    expect(suggestions.every((s) => s.type === 'field')).toBe(true);
+    expect(suggestions.length).toBe(fields.length + 1);
+    expect(suggestions[0]).toMatchObject({ type: 'conjunction', text: 'not' });
+    expect(suggestions.slice(1).every((s) => s.type === 'field')).toBe(true);
   });
 
   // ── Partial field name ─────────────────────────────────────────────────────
@@ -114,10 +115,11 @@ describe('getSuggestions', () => {
   });
 
   // ── After conjunction → field suggestions ─────────────────────────────────
-  it('after "level:error and " → field suggestions', () => {
+  it('after "level:error and " → not + field suggestions', () => {
     const q = 'SeverityText:error and ';
     const { suggestions } = getSuggestions(q, q.length, fields);
-    expect(suggestions.every((s) => s.type === 'field')).toBe(true);
+    expect(suggestions[0]).toMatchObject({ type: 'conjunction', text: 'not' });
+    expect(suggestions.slice(1).every((s) => s.type === 'field')).toBe(true);
   });
 
   it('after "level:error and se" → field suggestions filtered by "se"', () => {

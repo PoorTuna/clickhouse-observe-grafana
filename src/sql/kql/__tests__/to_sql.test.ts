@@ -425,25 +425,28 @@ describe('kqlToSql', () => {
     expect(result).toContain("ILIKE 'api%'");
   });
 
-  // ── Unknown field falls back to body ────────────────────────────────────
+  // ── Unknown field → direct column (not body fallback) ───────────────────
 
-  it('completely unknown field falls back to body search', () => {
+  it('completely unknown field queries it as a direct column', () => {
     const noMapConfig: SourceConfig = {
       ...config,
       columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
     };
     const result = kqlToSql(parseKql('unknownfield:value'), noMapConfig);
-    expect(result).toContain('Body');
+    expect(result).toContain('"unknownfield"');
+    expect(result).toContain("= 'value'");
+    expect(result).not.toContain('Body');
   });
 
-  it('unknown field with wildcard falls back to body wildcard', () => {
+  it('unknown field with wildcard queries it as a direct column with ILIKE', () => {
     const noMapConfig: SourceConfig = {
       ...config,
       columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
     };
     const result = kqlToSql(parseKql('unknownfield:val*'), noMapConfig);
-    expect(result).toContain('Body');
+    expect(result).toContain('"unknownfield"');
     expect(result).toContain("ILIKE 'val%'");
+    expect(result).not.toContain('Body');
   });
 
   // ── Implicit AND (multiple terms) ─────────────────────────────────────────

@@ -23,12 +23,16 @@ export function loadSavedSearches(): SavedSearch[] {
   return readAll();
 }
 
-export function saveSearch(search: Omit<SavedSearch, 'id' | 'createdAt'>): SavedSearch {
+export function saveSearch(
+  search: Omit<SavedSearch, 'id' | 'createdAt'>,
+  dataViewId?: string
+): SavedSearch {
   const all = readAll();
   const entry: SavedSearch = {
     ...search,
     id: `ss_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     createdAt: new Date().toISOString(),
+    ...(dataViewId ? { dataViewId } : {}),
   };
   writeAll([...all, entry]);
   return entry;

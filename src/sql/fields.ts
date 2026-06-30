@@ -54,9 +54,12 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
     return { sqlExpr: c.body, kind: 'text' };
   }
 
-  // Level / severity aliases
+  // Level / severity aliases — only when severity is mapped; otherwise fall through to body search
   if (['level', 'severity', 'lvl', 'loglevel', 'log_level', 'severitytext'].includes(f)) {
-    return { sqlExpr: c.severity || c.body, kind: 'level' };
+    if (!c.severity) {
+      return null;
+    }
+    return { sqlExpr: c.severity, kind: 'level' };
   }
 
   // SeverityNumber — numeric column, not in OTEL_COLUMN_MAPPING values
@@ -64,18 +67,27 @@ export function resolveField(rawField: string, config: SourceConfig): ResolvedFi
     return { sqlExpr: 'SeverityNumber', kind: 'exact' };
   }
 
-  // Service name aliases
+  // Service name aliases — only when mapped
   if (['service', 'svc', 'service.name', 'servicename', 'service_name'].includes(f)) {
+    if (!c.serviceName) {
+      return null;
+    }
     return { sqlExpr: c.serviceName, kind: 'exact' };
   }
 
-  // Trace ID aliases
+  // Trace ID aliases — only when mapped
   if (['trace', 'traceid', 'trace_id', 'trace.id'].includes(f)) {
+    if (!c.traceId) {
+      return null;
+    }
     return { sqlExpr: c.traceId, kind: 'exact' };
   }
 
-  // Span ID aliases
+  // Span ID aliases — only when mapped
   if (['span', 'spanid', 'span_id', 'span.id'].includes(f)) {
+    if (!c.spanId) {
+      return null;
+    }
     return { sqlExpr: c.spanId, kind: 'exact' };
   }
 

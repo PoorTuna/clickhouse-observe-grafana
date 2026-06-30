@@ -1,61 +1,37 @@
 /**
- * Config page: choose a ClickHouse datasource, set DB/table names,
- * configure column mapping, and apply the OTel preset.
+ * Config page: manage shared data views (admin-only).
+ * Views are stored in jsonData.dataViews[] and visible to all users of this plugin.
+ * Users can also create personal (per-browser) views from the Logs Explorer header.
  */
 
-import React, { ChangeEvent, useCallback, useState } from 'react';
+import React, { ChangeEvent, useState } from 'react';
 import { lastValueFrom } from 'rxjs';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
-import {
-  Button,
-  Field,
-  FieldSet,
-  Input,
-  InlineSwitch,
-  Select,
-  useStyles2,
-  Alert,
-} from '@grafana/ui';
+import { Alert, Button, Field, Input, Select, useStyles2 } from '@grafana/ui';
 import { applyOtelPreset } from '../../sql/schema';
 import {
   AppJsonData,
-  ColumnMapping,
+  DataView,
   DEFAULT_SOURCE_CONFIG,
   EMPTY_COLUMN_MAPPING,
-  OTEL_COLUMN_MAPPING,
-  SourceConfig,
 } from '../../types';
+import { migrateLegacyConfig } from '../../data/dataViews';
+import { ColumnMappingForm } from '../ColumnMappingForm';
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppJsonData>> {}
-
-const COL_FIELDS: Array<{ key: keyof ColumnMapping; label: string; required?: boolean }> = [
-  { key: 'timestamp', label: 'Timestamp column', required: true },
-  { key: 'body', label: 'Log body / message column', required: true },
-  { key: 'severity', label: 'Severity / level column' },
-  { key: 'traceId', label: 'Trace ID column' },
-  { key: 'spanId', label: 'Span ID column' },
-  { key: 'parentSpanId', label: 'Parent Span ID column' },
-  { key: 'serviceName', label: 'Service name expression (can be Map accessor)' },
-  { key: 'duration', label: 'Duration column (nanoseconds)' },
-  { key: 'resourceAttributes', label: 'Resource Attributes Map column' },
-  { key: 'logAttributes', label: 'Log Attributes Map column' },
-  { key: 'scopeAttributes', label: 'Scope Attributes Map column' },
-  { key: 'spanAttributes', label: 'Span Attributes Map column' },
-];
 
 const AppConfig = ({ plugin }: AppConfigProps) => {
   const styles = useStyles2(getStyles);
   const { enabled, pinned, jsonData } = plugin.meta;
 
-  const [config, setConfig] = useState<SourceConfig>(
-    jsonData?.sourceConfig ?? DEFAULT_SOURCE_CONFIG
-  );
+  // On first load, migrate legacy sourceConfig → dataViews if needed.
+  const [views, setViews] = useState<DataView[]>(() => migrateLegacyConfig(jsonData ?? {}));
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
 
-  // Datasource picker options (all datasources with type containing 'clickhouse')
   const [dsOptions, setDsOptions] = useState<Array<{ label: string; value: string }>>([]);
   React.useEffect(() => {
     try {
@@ -65,24 +41,28 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     } catch {}
   }, []);
 
-  const setColumnField = (key: keyof ColumnMapping, value: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      columns: { ...prev.columns, [key]: value },
-    }));
-  };
+  function patchView(id: string, patch: Partial<DataView>) {
+    setViews((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+  }
 
-  const applyOtel = () => {
-    setConfig((prev) => applyOtelPreset(prev));
-  };
+  function addView() {
+    const newView: DataView = {
+      ...DEFAULT_SOURCE_CONFIG,
+      id: `shared_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      name: 'New view',
+      origin: 'shared',
+      createdAt: new Date().toISOString(),
+    };
+    setViews((prev) => [...prev, newView]);
+    setEditingId(newView.id);
+  }
 
-  const clearMapping = () => {
-    setConfig((prev) => ({
-      ...prev,
-      isOtel: false,
-      columns: { ...EMPTY_COLUMN_MAPPING },
-    }));
-  };
+  function deleteView(id: string) {
+    setViews((prev) => prev.filter((v) => v.id !== id));
+    if (editingId === id) {
+      setEditingId(null);
+    }
+  }
 
   const onSave = async () => {
     setSaveStatus('saving');
@@ -91,7 +71,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       await updatePlugin(plugin.meta.id, {
         enabled,
         pinned,
-        jsonData: { sourceConfig: config },
+        jsonData: { dataViews: views },
       });
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
@@ -104,81 +84,117 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
   return (
     <div className={styles.page}>
-      <FieldSet label="ClickHouse Datasource">
-        <Field
-          label="Datasource"
-          description="Select the installed ClickHouse datasource that this app will query through."
-        >
-          <Select
-            width={40}
-            value={config.datasourceUid}
-            options={dsOptions}
-            onChange={(opt) => setConfig((prev) => ({ ...prev, datasourceUid: opt.value ?? '' }))}
-            placeholder="Select ClickHouse datasource…"
-          />
-        </Field>
+      <div className={styles.viewListHeader}>
+        <h3 className={styles.sectionTitle}>Shared Data Views</h3>
+        <Button variant="secondary" size="sm" icon="plus" onClick={addView}>
+          Add view
+        </Button>
+      </div>
 
-        <Field label="Database" description="Default ClickHouse database name.">
-          <Input
-            width={30}
-            value={config.database}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setConfig((prev) => ({ ...prev, database: e.target.value.trim() }))
-            }
-            placeholder="default"
-          />
-        </Field>
-
-        <Field label="Logs table">
-          <Input
-            width={30}
-            value={config.logsTable}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setConfig((prev) => ({ ...prev, logsTable: e.target.value.trim() }))
-            }
-            placeholder="otel_logs"
-          />
-        </Field>
-
-        <Field label="Traces table">
-          <Input
-            width={30}
-            value={config.tracesTable}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setConfig((prev) => ({ ...prev, tracesTable: e.target.value.trim() }))
-            }
-            placeholder="otel_traces"
-          />
-        </Field>
-      </FieldSet>
-
-      <FieldSet label="Column Mapping">
-        <div className={styles.presetRow}>
-          <Button variant="secondary" size="sm" onClick={applyOtel}>
-            Apply OTel preset
-          </Button>
-          <Button variant="destructive" size="sm" fill="text" onClick={clearMapping}>
-            Clear all
-          </Button>
-          <span className={styles.presetHint}>
-            OTel preset fills the standard OpenTelemetry schema column names.
-            Override individual fields below for custom schemas.
-          </span>
+      {views.length === 0 && (
+        <div className={styles.empty}>
+          No data views configured. Click &ldquo;Add view&rdquo; to create one, or users can create
+          personal views from the Logs Explorer header.
         </div>
+      )}
 
-        {COL_FIELDS.map(({ key, label, required }) => (
-          <Field key={key} label={label} required={required}>
-            <Input
-              width={40}
-              value={config.columns[key]}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setColumnField(key, e.target.value)
-              }
-              placeholder={OTEL_COLUMN_MAPPING[key] ?? '—'}
-            />
-          </Field>
+      <div className={styles.viewList}>
+        {views.map((v) => (
+          <div key={v.id} className={`${styles.viewCard} ${editingId === v.id ? styles.viewCardActive : ''}`}>
+            <div className={styles.viewCardHeader}>
+              <span className={styles.viewCardName}>{v.name || '(unnamed)'}</span>
+              <span className={styles.viewCardSub}>{v.database}.{v.logsTable}</span>
+              <div className={styles.viewCardActions}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setEditingId(editingId === v.id ? null : v.id)}
+                >
+                  {editingId === v.id ? 'Collapse' : 'Edit'}
+                </Button>
+                <Button size="sm" variant="destructive" fill="text" onClick={() => deleteView(v.id)}>
+                  Delete
+                </Button>
+              </div>
+            </div>
+
+            {editingId === v.id && (
+              <div className={styles.viewEditor}>
+                <Field label="Name">
+                  <Input
+                    width={30}
+                    value={v.name}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      patchView(v.id, { name: e.target.value })
+                    }
+                    placeholder="My logs view"
+                  />
+                </Field>
+
+                <Field label="ClickHouse datasource">
+                  <Select
+                    width={30}
+                    value={v.datasourceUid}
+                    options={dsOptions}
+                    onChange={(opt) => patchView(v.id, { datasourceUid: opt.value ?? '' })}
+                    placeholder="Select datasource…"
+                  />
+                </Field>
+
+                <Field label="Database">
+                  <Input
+                    width={30}
+                    value={v.database}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      patchView(v.id, { database: e.target.value.trim() })
+                    }
+                    placeholder="default"
+                  />
+                </Field>
+
+                <Field label="Logs table">
+                  <Input
+                    width={30}
+                    value={v.logsTable}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      patchView(v.id, { logsTable: e.target.value.trim() })
+                    }
+                    placeholder="otel_logs"
+                  />
+                </Field>
+
+                <Field label="Traces table (optional — enables trace-jump links)">
+                  <Input
+                    width={30}
+                    value={v.tracesTable}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      patchView(v.id, { tracesTable: e.target.value.trim() })
+                    }
+                    placeholder="otel_traces"
+                  />
+                </Field>
+
+                <ColumnMappingForm
+                  value={v.columns}
+                  onChange={(updated) => patchView(v.id, { columns: updated })}
+                  onApplyOtelPreset={() => {
+                    const preset = applyOtelPreset(v);
+                    patchView(v.id, {
+                      logsTable: preset.logsTable,
+                      tracesTable: preset.tracesTable,
+                      isOtel: true,
+                      columns: preset.columns,
+                    });
+                  }}
+                  onClearMapping={() =>
+                    patchView(v.id, { isOtel: false, columns: { ...EMPTY_COLUMN_MAPPING } })
+                  }
+                />
+              </div>
+            )}
+          </div>
         ))}
-      </FieldSet>
+      </div>
 
       {saveStatus === 'error' && (
         <Alert title="Save failed" severity="error">
@@ -204,19 +220,68 @@ export default AppConfig;
 
 const getStyles = (theme: GrafanaTheme2) => ({
   page: css`
-    max-width: 700px;
+    max-width: 780px;
     padding: ${theme.spacing(2)};
   `,
-  presetRow: css`
+  sectionTitle: css`
+    margin: 0;
+    font-size: ${theme.typography.h5.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
+  `,
+  viewListHeader: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: ${theme.spacing(1.5)};
+  `,
+  empty: css`
+    padding: ${theme.spacing(2)};
+    color: ${theme.colors.text.secondary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    border: 1px dashed ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    margin-bottom: ${theme.spacing(2)};
+  `,
+  viewList: css`
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(1)};
+    margin-bottom: ${theme.spacing(2)};
+  `,
+  viewCard: css`
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    overflow: hidden;
+  `,
+  viewCardActive: css`
+    border-color: ${theme.colors.primary.border};
+  `,
+  viewCardHeader: css`
     display: flex;
     align-items: center;
     gap: ${theme.spacing(1)};
-    margin-bottom: ${theme.spacing(2)};
-    flex-wrap: wrap;
+    padding: ${theme.spacing(1)} ${theme.spacing(1.5)};
+    background: ${theme.colors.background.secondary};
   `,
-  presetHint: css`
-    color: ${theme.colors.text.secondary};
+  viewCardName: css`
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
     font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  viewCardSub: css`
+    color: ${theme.colors.text.disabled};
+    font-size: 0.78em;
+    flex: 1;
+  `,
+  viewCardActions: css`
+    display: flex;
+    gap: ${theme.spacing(0.5)};
+    margin-left: auto;
+  `,
+  viewEditor: css`
+    padding: ${theme.spacing(2)};
+    background: ${theme.colors.background.primary};
   `,
   footer: css`
     margin-top: ${theme.spacing(3)};

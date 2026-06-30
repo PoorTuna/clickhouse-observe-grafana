@@ -12,11 +12,13 @@ import { FieldSidebar } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsProvider } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
+import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildVolumeQuery } from '../sql/queryBuilder';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
-import { SourceConfigContext } from '../components/App/App';
+import { SourceConfigContext, DataViewContext } from '../components/App/App';
+import { viewCapabilities } from '../sql/capabilities';
 import {
   DEFAULT_LOGS_QUERY_STATE,
   FilterPill,
@@ -44,10 +46,11 @@ function defaultTimeRange(): TimeRange {
 
 function defaultColumns(config: ReturnType<typeof useContext<any>>): SelectedColumn[] {
   const c = config.columns;
+  // Only include columns for which a mapping exists. Empty mapping = column not present in this view.
   const cols: Array<{ id: string; key: string; sqlExpr: string; displayName: string; type: ColumnType }> = [
     { id: 'timestamp', key: 'timestamp', sqlExpr: c.timestamp, displayName: 'Time', type: 'time' },
-    { id: 'severity', key: 'severity', sqlExpr: c.severity || "''", displayName: 'Level', type: 'level' },
-    { id: 'serviceName', key: 'serviceName', sqlExpr: c.serviceName || "''", displayName: 'Service', type: 'exact' },
+    { id: 'severity', key: 'severity', sqlExpr: c.severity, displayName: 'Level', type: 'level' },
+    { id: 'serviceName', key: 'serviceName', sqlExpr: c.serviceName, displayName: 'Service', type: 'exact' },
     { id: 'body', key: 'body', sqlExpr: c.body, displayName: 'Message', type: 'text' },
   ];
   return cols
@@ -113,9 +116,21 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
 export function LogsExplorer() {
   const styles = useStyles2(getStyles);
   const config = useContext(SourceConfigContext);
+  const { activeView } = useContext(DataViewContext);
+  const caps = viewCapabilities(config);
 
   const [queryState, dispatch] = useReducer(queryReducer, DEFAULT_LOGS_QUERY_STATE);
   const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange);
+
+  // Reset query state when the active data view changes so stale field refs don't carry over.
+  const prevViewId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const viewId = activeView?.id;
+    if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
+      dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
+    }
+    prevViewId.current = viewId;
+  }, [activeView?.id]);
   const [rows, setRows] = useState<LogRow[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -163,9 +178,13 @@ export function LogsExplorer() {
       const intervalSec = calcBucketInterval(timeRange);
       const volSql = buildVolumeQuery(config, queryState, intervalSec);
 
+      const volPromise = caps.hasTime
+        ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' })
+        : Promise.resolve<ReturnType<typeof Object>[]>([]);
+
       const [logRows, volRows] = await Promise.all([
         runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' }),
-        runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' }),
+        volPromise,
       ]);
 
       if (runRef.current !== runId) {
@@ -329,25 +348,29 @@ export function LogsExplorer() {
     <FieldsProvider config={config} timeRange={timeRange}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div className={styles.container}>
-        {/* Header */}
+        {/* Row 1: view picker (left) + controls (right) */}
         <div className={styles.header}>
-          <h2 className={styles.title}>Logs Explorer</h2>
+          <DataViewPicker />
+          <div className={styles.headerSpacer} />
           <SavedSearchMenu
             queryState={{ ...queryState, columns: effectiveColumns }}
             timeRange={timeRange}
             onLoad={onLoadSaved}
+            activeDataViewId={activeView?.id}
           />
-          <TimeRangePicker
-            value={timeRange}
-            onChange={(range) => setTimeRange(range)}
-            onChangeTimeZone={() => {}}
-            onChangeFiscalYearStartMonth={() => {}}
-            onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
-            onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
-            onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
-            timeZone="browser"
-            fiscalYearStartMonth={0}
-          />
+          {caps.hasTime && (
+            <TimeRangePicker
+              value={timeRange}
+              onChange={(range) => setTimeRange(range)}
+              onChangeTimeZone={() => {}}
+              onChangeFiscalYearStartMonth={() => {}}
+              onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
+              onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
+              onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
+              timeZone="browser"
+              fiscalYearStartMonth={0}
+            />
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -358,12 +381,12 @@ export function LogsExplorer() {
           />
         </div>
 
-        {/* Toolbar */}
+        {/* Row 2: search + add filter */}
         <div className={styles.toolbar}>
           <SearchBar
             value={queryState.search}
             onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
-            onSearch={() => {}}  // re-query is driven by useEffect([executeQuery]) after the onChange dispatch
+            onSearch={() => {}}
             onAddFilter={onAddFilter}
             timeRange={timeRange}
             queryState={queryState}
@@ -511,7 +534,7 @@ export function LogsExplorer() {
               setSelectedRow(null);
             }}
             onViewTrace={
-              selectedRow['traceId']
+              caps.hasTraces && selectedRow['traceId']
                 ? (traceId) => {
                     window.location.href = `${PLUGIN_BASE_URL}/traces/${traceId}`;
                   }
@@ -538,13 +561,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(1)};
-    flex-wrap: wrap;
   `,
-  title: css`
-    font-size: ${theme.typography.h4.fontSize};
-    font-weight: ${theme.typography.fontWeightMedium};
-    color: ${theme.colors.text.primary};
-    margin: 0;
+  headerSpacer: css`
     flex: 1;
   `,
   toolbar: css`

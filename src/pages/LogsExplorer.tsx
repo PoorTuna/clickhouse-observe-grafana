@@ -164,8 +164,8 @@ export function LogsExplorer() {
       const volSql = buildVolumeQuery(config, queryState, intervalSec);
 
       const [logRows, volRows] = await Promise.all([
-        runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange }),
-        runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange }),
+        runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' }),
+        runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' }),
       ]);
 
       if (runRef.current !== runId) {

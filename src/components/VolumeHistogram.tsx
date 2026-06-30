@@ -117,7 +117,7 @@ export function VolumeHistogram({
   const selectionRef = useRef<SVGRectElement | null>(null);
   const [hovered, setHovered] = useState<HoveredBucket | null>(null);
 
-  const { bars, maxTotal, allLevels, totalCount, colorMap } = useMemo(() => {
+  const { bars, maxTotal, allLevels, colorMap } = useMemo(() => {
     if (!data.length) {
       return { bars: [], maxTotal: 0, allLevels: [] as string[], totalCount: 0, colorMap: {} as Record<string, string> };
     }

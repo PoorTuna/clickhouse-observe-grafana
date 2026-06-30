@@ -3,9 +3,9 @@
  * The CH datasource backend handles $__fromTime / $__toTime macro expansion.
  */
 
-import { DataQuery, DataQueryRequest, DataFrame, TimeRange } from '@grafana/data';
+import { DataQuery, DataQueryRequest, DataFrame, DataQueryResponse, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, from, Observable } from 'rxjs';
 
 // CH datasource format enum (Table = 1). Must match their src/types/sql.ts.
 const FORMAT_TABLE = 1;
@@ -49,7 +49,10 @@ export async function runQuery(options: RunQueryOptions): Promise<DataFrame[]> {
     startTime: Date.now(),
   };
 
-  const response = await lastValueFrom(ds.query(request));
+  const result = ds.query(request);
+  const response = await lastValueFrom(
+    (result instanceof Observable ? result : from(result)) as Observable<DataQueryResponse>
+  );
   return response.data as DataFrame[];
 }
 

@@ -292,10 +292,10 @@ describe('kqlToSql', () => {
     expect(result).toContain('notEmpty(toString(');
   });
 
-  it('service:* → exists check on ServiceName column (OTEL: ResourceAttributes[service.name])', () => {
+  it('service:* → exists check on ServiceName column', () => {
     const result = sql('service:*');
     expect(result).toContain('notEmpty(toString(');
-    expect(result).toContain('service.name');  // OTEL mapping: ResourceAttributes['service.name']
+    expect(result).toContain('ServiceName');  // OTEL column mapping: serviceName → 'ServiceName'
   });
 
   it('http.method:* → exists check via map accessor', () => {

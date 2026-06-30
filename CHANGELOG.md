@@ -10,6 +10,62 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.0] — 2026-06-30
+
+### Added
+
+#### Histogram interval + breakdown controls (Kibana parity)
+
+Two controls sit in a header bar above the volume histogram, framed as a panel card:
+
+- **Auto interval picker** — choose Auto (derived from time range), Second, Minute,
+  Hour, Day, Week, or Month. Fine units are greyed out with a tooltip when they would
+  produce more than 1 000 bars. Shows the resolved interval (e.g. "Auto - 30 minutes")
+  in the header meta caption alongside the event count.
+- **Breakdown picker** — searchable dropdown with three modes:
+  - **No breakdown** — plain single-color bars (`#54B399`).
+  - **Severity** (default when a severity column is mapped) — stacks bars by severity
+    level using the existing `SEVERITY_COLORS` palette.
+  - **Field breakdown** — choose any field; bars split into top-10 values + "Other"
+    catch-all computed server-side via a CTE. Categorical palette + legend row below
+    the chart.
+- Severity is the **default when detected** (set once at mount / on data-view change);
+  user's explicit choice (including "No breakdown") is never auto-reverted.
+
+#### Panel framing for the histogram
+
+The header bar + chart are wrapped in a single bordered card
+(`border: 1px solid border.weak`, `border-radius`, `background.primary`) so the
+controls read as the chart's title bar rather than a floating row. When no events
+match the current query a "No events in selected time range" placeholder fills the
+chart area at normal height.
+
+#### Bucket hover highlight
+
+Hovering a bucket shows a subtle full-height highlight band behind the bars at that
+column (`theme.colors.action.hover`), matching Kibana Discover's bucket hover UX.
+The band tracks the cursor, is hidden during drag-select, and clears on mouse leave.
+
+#### New constants (`src/constants.ts`)
+- `SINGLE_STACK_COLOR` — accent color for no-breakdown bars.
+- `BREAKDOWN_PALETTE` — 10-color categorical palette for field breakdown.
+- `OTHER_COLOR` — neutral grey for the "Other" series.
+
+#### New types (`src/types.ts`)
+- `IntervalMode` — `'auto' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'`
+- `BreakdownSel` — discriminated union `{ kind: 'none' } | { kind: 'severity' } | { kind: 'field'; field: FieldModel }`
+
+#### New components
+- `src/components/HistogramControls/IntervalPicker.tsx`
+- `src/components/HistogramControls/BreakdownPicker.tsx`
+
+#### Query builder (`src/sql/queryBuilder.ts`)
+`buildVolumeQuery` now accepts a typed `VolumeQueryOpts` object with explicit
+`breakdown` discriminated union (`none` / `severity` / `field`). Field breakdown uses
+a top-N CTE with server-side "Other" aggregation in a single round trip.
+
+---
+
 ## [0.1.0] — 2026-06-30
 
 ### Added
@@ -84,5 +140,6 @@ with a one-click copy button.
 
 ---
 
-[Unreleased]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/PoorTuna/clickhouse-grafana/releases/tag/v0.1.0

@@ -76,10 +76,14 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
   const negate = filter.op === '!=' || filter.op === 'not_contains';
 
   if (resolved === null) {
-    const bodyCol = config.columns.body;
-    return negate
-      ? `${bodyCol} NOT ILIKE ${quoteString('%' + value + '%')}`
-      : `${bodyCol} ILIKE ${quoteString('%' + value + '%')}`;
+    // Unknown field: treat the field name as a direct column, same as the KQL path.
+    // Avoids emitting `undefined ILIKE …` when body is unmapped.
+    const col = quoteIdentifier(sqlExprRaw);
+    const op = filterOpToSql(filter.op);
+    if (op === 'ILIKE' || op === 'NOT ILIKE') {
+      return `${col} ${op} ${quoteString('%' + value + '%')}`;
+    }
+    return `${col} ${op} ${quoteString(value)}`;
   }
 
   const { sqlExpr, kind } = resolved;
@@ -119,6 +123,10 @@ function buildSearchClause(search: string, config: SourceConfig): string {
 
   // Legacy fallback: tokenize and ILIKE/hasToken on body.
   const c = config.columns;
+  // No body column mapped → can't do free-text search; skip rather than emit hasToken(undefined,…).
+  if (!c.body) {
+    return '';
+  }
   const terms = term.match(/"[^"]*"|'[^']*'|\S+/g) ?? [term];
   const clauses = terms.map((t) => {
     const clean = t.replace(/^["']|["']$/g, '');

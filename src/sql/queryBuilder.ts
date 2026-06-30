@@ -157,8 +157,8 @@ export function buildLogsQuery(
   // Core aliases — always present; drawer + trace-link depend on these fixed names.
   // '*' exposes every raw table column so the log-detail drawer can show all fields.
   const coreSelect = [
-    `${c.timestamp} AS timestamp`,
-    `${c.body} AS body`,
+    c.timestamp ? `${c.timestamp} AS timestamp` : null,
+    c.body ? `${c.body} AS body` : null,
     c.severity ? `${c.severity} AS severity` : `'' AS severity`,
     c.traceId ? `${c.traceId} AS traceId` : `'' AS traceId`,
     c.spanId ? `${c.spanId} AS spanId` : `'' AS spanId`,
@@ -182,12 +182,12 @@ export function buildLogsQuery(
   return [
     `SELECT ${selectParts.join(', ')}`,
     `FROM ${tbl}`,
-    `WHERE ${conditions.join(' AND ')}`,
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
     `ORDER BY ${sortCol} ${sortDir}`,
     pagination
       ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
       : `LIMIT ${state.limit}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export type CHIntervalUnit = 'SECOND' | 'MINUTE' | 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR';
@@ -217,15 +217,17 @@ export function buildVolumeQuery(
   const conditions = buildWhereConditions(config, state);
   const condSql = conditions.join(' AND ');
 
+  const whereSql = condSql ? `WHERE ${condSql}` : '';
+
   if (breakdown.kind === 'none') {
     // Single series: constant empty-string level so the fold loop stays generic.
     return [
       `SELECT ${timeExpr} AS time, '' AS level, count() AS count`,
       `FROM ${tbl}`,
-      `WHERE ${condSql}`,
+      whereSql || null,
       `GROUP BY time, level`,
       `ORDER BY time ASC`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   if (breakdown.kind === 'severity') {
@@ -233,10 +235,10 @@ export function buildVolumeQuery(
     return [
       `SELECT ${timeExpr} AS time, ${breakdown.expr} AS level, count() AS count`,
       `FROM ${tbl}`,
-      `WHERE ${condSql}`,
+      whereSql || null,
       `GROUP BY time, level`,
       `ORDER BY time ASC`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   // Field breakdown: compute top-N server-side so 'Other' is one aggregated series.
@@ -246,17 +248,17 @@ export function buildVolumeQuery(
     `WITH top AS (`,
     `  SELECT ${exprStr} AS v`,
     `  FROM ${tbl}`,
-    `  WHERE ${condSql}`,
+    whereSql ? `  ${whereSql}` : null,
     `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
     `)`,
     `SELECT ${timeExpr} AS time,`,
     `       if(${exprStr} GLOBAL IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
     `       count() AS count`,
     `FROM ${tbl}`,
-    `WHERE ${condSql}`,
+    whereSql || null,
     `GROUP BY time, level`,
     `ORDER BY time ASC`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildFieldTopValuesQuery(
@@ -274,12 +276,13 @@ export function buildFieldTopValuesQuery(
   // Keeps query cost O(sampleSize) regardless of table size.
   // The scalar subquery returns total sampled rows so the UI can show
   // "Calculated from N records" with real percentages.
+  const condClause = conditions.length > 0 ? `  WHERE ${conditions.join(' AND ')}` : null;
   return [
     `WITH sample AS (`,
     `  SELECT toString(${sqlExpr}) AS value`,
     `  FROM ${tbl}`,
-    `  WHERE ${conditions.join(' AND ')}`,
-    `  ORDER BY ${tsCol} DESC`,
+    condClause,
+    tsCol ? `  ORDER BY ${tsCol} DESC` : null,
     `  LIMIT ${sampleSize}`,
     `)`,
     `SELECT value, count() AS count, sum(count()) OVER () AS total`,
@@ -288,7 +291,7 @@ export function buildFieldTopValuesQuery(
     `GROUP BY value`,
     `ORDER BY count DESC`,
     `LIMIT ${limit}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildSurroundingDocsQuery(

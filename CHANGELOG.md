@@ -10,6 +10,30 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.3] — 2026-06-30
+
+### Changed
+
+- **OTel is now explicit opt-in** — creating a data view no longer auto-infers the
+  OpenTelemetry schema. A checkbox "Apply OpenTelemetry preset" replaces the silent
+  auto-detect (`looksLikeOtelSchema`). OTel preset remains available via the checkbox
+  and the "Apply OTel preset" button in advanced config.
+- **Generic default config** — `DEFAULT_SOURCE_CONFIG` starts blank (`isOtel: false`,
+  empty column mapping, no table names). The `isOtel` flag now means exactly one thing:
+  the table has a `SeverityNumber` numeric column queryable by name in KQL.
+
+### Fixed
+
+- **Filter-pill unknown field** — fields not present in the column mapping now query
+  the column directly (e.g. `"level" = 'info'`) instead of emitting broken
+  `undefined ILIKE …` SQL. Matches the direct-column fallback added to the KQL path
+  in v0.2.2.
+- **Free-text search with no body column** — the legacy `hasToken` search path now
+  returns an empty clause instead of `hasToken(undefined, …)` on tables without a
+  mapped body column.
+
+---
+
 ## [0.2.2] — 2026-06-30
 
 ### Fixed
@@ -179,7 +203,8 @@ with a one-click copy button.
 
 ---
 
-[Unreleased]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.1.0...v0.2.0

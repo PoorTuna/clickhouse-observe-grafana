@@ -10,6 +10,34 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.2] — 2026-06-30
+
+### Fixed
+
+- **Severity breakdown**: Severity option now only appears (and is only defaulted) when
+  the mapped severity column actually exists in the real table schema — verified via
+  `system.columns` introspection, not just the config mapping string. Stale severity
+  selections auto-correct to "No breakdown" on view switch.
+- **Distributed table 500 on field breakdown**: replaced `IN (SELECT v FROM top)` with
+  `GLOBAL IN` — fixes _"double distributed in join"_ / _"set distributed_product_mode"_
+  errors on Distributed-engine tables without requiring settings changes (works for
+  read-only CH users too). Field-stats popover scalar subquery replaced with
+  `sum(count()) OVER ()` window aggregate for the same reason.
+- **"All fields" in log detail drawer**: `buildLogsQuery` now projects `SELECT *` so
+  every table column is available in the row object; the drawer deduplicates mapped /
+  aliased columns to avoid showing `Timestamp` and `timestamp` twice.
+- **Empty cells for sidebar-added columns**: `makeColumnKey` prefix changed from `_f_`
+  to `fld_` — the old prefix collided with the ClickHouse datasource's `_f_col_` Map
+  column strip in `dataFrameToRows`, causing user-added columns to render blank.
+- **Inspect SQL copy button**: falls back to `document.execCommand('copy')` when
+  `navigator.clipboard` is unavailable (Grafana iframe / non-secure context).
+- **TypeScript**: resolved all 10 pre-existing type errors — unused imports
+  (`dateTimeFormat`, `IconButton`, `AttributeGroup`), unknown icon name `chart-bar`,
+  `ConfirmModal` icon prop, unused variables (`totalHeight`, `totalCount`),
+  `ds.query()` Observable/Promise union wrapping, stale `active` field in test fixtures.
+
+---
+
 ## [0.2.1] — 2026-06-30
 
 ### Fixed
@@ -151,7 +179,8 @@ with a one-click copy button.
 
 ---
 
-[Unreleased]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/PoorTuna/clickhouse-grafana/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/PoorTuna/clickhouse-grafana/releases/tag/v0.1.0
+[Unreleased]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/PoorTuna/clickhouse-observe-grafana/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/PoorTuna/clickhouse-observe-grafana/releases/tag/v0.1.0

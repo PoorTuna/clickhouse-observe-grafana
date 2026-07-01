@@ -7,7 +7,7 @@
  */
 
 import { FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
-import { resolveField, buildLevelClause } from './fields';
+import { resolveField } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
 export function quoteIdentifier(name: string): string {
@@ -87,10 +87,6 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
   }
 
   const { sqlExpr, kind } = resolved;
-
-  if (kind === 'level') {
-    return buildLevelClause(sqlExpr, value, negate);
-  }
 
   if (kind === 'text') {
     return negate
@@ -336,6 +332,10 @@ export function buildTraceSearchQuery(
     conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search.trim() + '%')}`);
   }
 
+  // 'STATUS_CODE_ERROR' is the OTel span-status enum value — only meaningful
+  // when the user has mapped a status code column in the first place.
+  const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = 'STATUS_CODE_ERROR')` : '0';
+
   return [
     `SELECT`,
     `  ${c.traceId} AS traceId,`,
@@ -343,7 +343,7 @@ export function buildTraceSearchQuery(
     `  max(${c.timestamp}) AS endTime,`,
     `  ${c.serviceName} AS serviceName,`,
     `  count() AS spanCount,`,
-    `  countIf(StatusCode = 'STATUS_CODE_ERROR') AS errorCount,`,
+    `  ${errorCountExpr} AS errorCount,`,
     `  max(${c.duration}) AS durationNs`,
     `FROM ${tbl}`,
     `WHERE ${conditions.join(' AND ')}`,
@@ -357,17 +357,20 @@ export function buildTraceDetailQuery(config: SourceConfig, traceId: string): st
   const c = config.columns;
   const tbl = tableRef(config, config.tracesTable);
   const spanAttrSel = c.spanAttributes ? `${c.spanAttributes} AS tags` : `'' AS tags`;
+  const spanIdSel = c.spanId ? `${c.spanId} AS spanID` : `'' AS spanID`;
+  const spanNameSel = c.spanName ? `${c.spanName} AS operationName` : `'' AS operationName`;
+  const statusCodeSel = c.statusCode ? `${c.statusCode} AS statusCode` : `'' AS statusCode`;
 
   return [
     `SELECT`,
     `  ${c.traceId} AS traceID,`,
-    `  SpanId AS spanID,`,
+    `  ${spanIdSel},`,
     `  ${c.parentSpanId} AS parentSpanID,`,
     `  ${c.serviceName} AS serviceName,`,
-    `  SpanName AS operationName,`,
+    `  ${spanNameSel},`,
     `  ${c.timestamp} AS startTime,`,
     `  ${c.duration} AS durationNs,`,
-    `  StatusCode AS statusCode,`,
+    `  ${statusCodeSel},`,
     `  ${spanAttrSel}`,
     `FROM ${tbl}`,
     `WHERE ${c.traceId} = ${quoteString(traceId)}`,

@@ -19,12 +19,6 @@ export function applyOtelPreset(config: SourceConfig): SourceConfig {
   };
 }
 
-/** Heuristic: does this set of column names look like an OTel schema? */
-export function looksLikeOtelSchema(columnNames: string[]): boolean {
-  const markers = ['Timestamp', 'SeverityText', 'Body', 'TraceId', 'ResourceAttributes'];
-  return markers.filter((m) => columnNames.includes(m)).length >= 4;
-}
-
 export type AttributeGroup = 'resource' | 'log' | 'scope' | 'span';
 
 /** Return the Map column name for an attribute group, or '' if absent. */

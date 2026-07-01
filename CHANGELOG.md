@@ -10,6 +10,40 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.5] — 2026-07-01
+
+### Changed
+
+- **Removed hardcoded field aliases** — KQL/filter field resolution no longer
+  recognizes English synonym groups (`message`/`level`/`service`/`trace`/`span`
+  and variants). Every typed field must match a real mapped column name, an
+  already-qualified expression, or fall back to Map attribute lookup. No implicit
+  vocabulary, on any schema — OTel included.
+- **Removed hardcoded severity-level vocabulary** — the `error`/`warn`/`info`/…
+  synonym expansion (`LOG_LEVEL_TO_IN_CLAUSE`) is gone along with the `level`
+  alias that was its only caller. Severity queries now do plain exact/substring
+  matching on the mapped column, same as any other field.
+- **Trace queries no longer hardcode OTel column names** — `StatusCode`,
+  `SpanName`, and `SpanId` were emitted as bare literals in trace detail/search
+  queries regardless of the data view's mapping, breaking on non-OTel traces
+  tables. Added `spanName` and `statusCode` to Column Mapping (mappable in the
+  UI); `SpanId` now correctly uses the existing `spanId` mapping. Unmapped
+  fields degrade to empty/zero instead of emitting a broken column reference.
+- **`severityNumber` is now a real mapped column** instead of a hardcoded
+  `isOtel`-gated literal — add it in Column Mapping (OTel preset fills it
+  automatically) to enable numeric-severity queries on any schema.
+
+### Fixed
+
+- **`not <field> op value` on an unresolved field excluded all rows** —
+  unresolved range comparisons (e.g. `not duration > 10` when `duration` wasn't
+  mapped) emitted a `1=1` no-op sentinel that `NOT` flipped into "exclude
+  everything," producing a false "No logs found." Range comparisons now fall
+  back to the field name as a direct column, consistent with the `field:value`
+  path, so real columns work even when not explicitly mapped.
+
+---
+
 ## [0.2.4] — 2026-06-30
 
 ### Fixed

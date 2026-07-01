@@ -42,11 +42,11 @@ describe('buildWhereConditions — search clause', () => {
     expect(conds[1]).toContain('Body');
   });
 
-  it('level:error → IN clause in conditions', () => {
-    const conds = conditions('level:error');
+  it('SeverityText:error → exact match in conditions (no alias, no IN-list)', () => {
+    const conds = conditions('SeverityText:error');
     expect(conds).toHaveLength(2);
     expect(conds[1]).toContain('SeverityText');
-    expect(conds[1]).toContain('IN');
+    expect(conds[1]).toContain("= 'error'");
   });
 
   it('wildcard pay* → ILIKE in conditions', () => {

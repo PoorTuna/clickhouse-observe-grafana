@@ -69,26 +69,27 @@ describe('kqlToSql', () => {
   });
 
   // ── Text-kind wildcard (was shadowed by kind=text branch) ─────────────────
+  // Named field queries use the real mapped column name — no alias resolution.
 
-  it('message:err* → Body ILIKE prefix, NOT literal *', () => {
-    const result = sql('message:err*');
+  it('Body:err* → Body ILIKE prefix, NOT literal *', () => {
+    const result = sql('Body:err*');
     expect(result).toContain("ILIKE 'err%'");
     expect(result).not.toContain('err*');
   });
 
-  it('message:*error* → Body ILIKE contains via wildcards', () => {
-    const result = sql('message:*error*');
+  it('Body:*error* → Body ILIKE contains via wildcards', () => {
+    const result = sql('Body:*error*');
     expect(result).toContain("ILIKE '%error%'");
   });
 
-  it('message:foo → Body ILIKE contains (unquoted text = substring)', () => {
-    const result = sql('message:foo');
+  it('Body:foo → Body ILIKE contains (unquoted text = substring)', () => {
+    const result = sql('Body:foo');
     expect(result).toContain("ILIKE '%foo%'");
     expect(result).not.toContain('hasToken');
   });
 
-  it('message:"foo" → body phrase match()', () => {
-    const result = sql('message:"foo"');
+  it('Body:"foo" → body phrase match()', () => {
+    const result = sql('Body:"foo"');
     expect(result).toContain('match(');
     expect(result).toContain('foo');
     expect(result).not.toContain("ILIKE '%foo%'");
@@ -96,26 +97,26 @@ describe('kqlToSql', () => {
 
   // ── Exact-kind field: Kibana-faithful (unquoted=exact, quoted=exact) ──────
 
-  it('service:payment → exact = (unquoted exact field)', () => {
-    const result = sql('service:payment');
+  it('ServiceName:payment → exact = (unquoted exact field)', () => {
+    const result = sql('ServiceName:payment');
     expect(result).toContain("= 'payment'");
     expect(result).not.toContain('ILIKE');
   });
 
-  it('service:"payment" → exact = (quoted keyword field, NOT match())', () => {
-    const result = sql('service:"payment"');
+  it('ServiceName:"payment" → exact = (quoted keyword field, NOT match())', () => {
+    const result = sql('ServiceName:"payment"');
     expect(result).toContain("= 'payment'");
     expect(result).not.toContain('match(');
     expect(result).not.toContain('ILIKE');
   });
 
-  it('service:pay* → ILIKE wildcard on exact field', () => {
-    const result = sql('service:pay*');
+  it('ServiceName:pay* → ILIKE wildcard on exact field', () => {
+    const result = sql('ServiceName:pay*');
     expect(result).toContain("ILIKE 'pay%'");
   });
 
-  it('service:*ment → ILIKE suffix wildcard on exact field', () => {
-    const result = sql('service:*ment');
+  it('ServiceName:*ment → ILIKE suffix wildcard on exact field', () => {
+    const result = sql('ServiceName:*ment');
     expect(result).toContain("ILIKE '%ment'");
   });
 
@@ -133,8 +134,8 @@ describe('kqlToSql', () => {
 
   // ── Literal % and _ escaping (the "misleading %" reported bug) ───────────
 
-  it('message:50% → literal %, escaped so it does not act as ILIKE wildcard', () => {
-    const result = sql('message:50%');
+  it('Body:50% → literal %, escaped so it does not act as ILIKE wildcard', () => {
+    const result = sql('Body:50%');
     expect(result).toContain('ILIKE');
     // Must NOT produce '%50%%' (raw %, acts as wildcard)
     expect(result).not.toContain("'%50%%'");
@@ -142,8 +143,8 @@ describe('kqlToSql', () => {
     expect(result).toContain('50\\\\%');
   });
 
-  it('message:a_b → literal _, escaped so it does not act as ILIKE single-char wildcard', () => {
-    const result = sql('message:a_b');
+  it('Body:a_b → literal _, escaped so it does not act as ILIKE single-char wildcard', () => {
+    const result = sql('Body:a_b');
     expect(result).toContain('ILIKE');
     // Must NOT produce '%a_b%' (raw _, acts as any-char wildcard)
     expect(result).not.toContain("'%a_b%'");
@@ -151,16 +152,16 @@ describe('kqlToSql', () => {
     expect(result).toContain('a\\\\_b');
   });
 
-  it('service:50% → exact field with % is passed literally to = (no ILIKE escaping needed)', () => {
+  it('ServiceName:50% → exact field with % is passed literally to = (no ILIKE escaping needed)', () => {
     // % is only special in ILIKE, not in = comparisons
-    const result = sql('service:50%');
+    const result = sql('ServiceName:50%');
     expect(result).toContain("= '50%'");
     expect(result).not.toContain('ILIKE');
   });
 
   it('wildcard value with literal %: pay%* → escaped % + wildcard suffix', () => {
     // pay%* — the % is literal, * is the wildcard
-    const result = sql('service:pay%*');
+    const result = sql('ServiceName:pay%*');
     expect(result).toContain('ILIKE');
     // \\% is the escaped literal percent; the trailing % comes from the * wildcard
     expect(result).toContain('pay\\\\%');
@@ -168,8 +169,8 @@ describe('kqlToSql', () => {
 
   // ── Escaped \* is a literal asterisk ─────────────────────────────────────
 
-  it('service:pay\\* → literal asterisk in = (not wildcard)', () => {
-    const result = sql('service:pay\\*');
+  it('ServiceName:pay\\* → literal asterisk in = (not wildcard)', () => {
+    const result = sql('ServiceName:pay\\*');
     expect(result).toContain("= 'pay*'");
     expect(result).not.toContain('ILIKE');
   });
@@ -196,8 +197,8 @@ describe('kqlToSql', () => {
   });
 
   // Phrase on a non-text (exact/map) field stays exact, NOT match()
-  it('service:"payment" uses = not match() (keyword field Kibana semantics)', () => {
-    const result = sql('service:"payment"');
+  it('ServiceName:"payment" uses = not match() (keyword field Kibana semantics)', () => {
+    const result = sql('ServiceName:"payment"');
     expect(result).not.toContain('match(');
     expect(result).toContain("= 'payment'");
   });
@@ -209,74 +210,39 @@ describe('kqlToSql', () => {
     expect(result).not.toContain('match(');
   });
 
-  // ── Level ─────────────────────────────────────────────────────────────────
+  // ── Named field via mapped column — no alias resolution, no level vocab ───
+  // (SeverityText is just an exact-kind field like any other mapped column;
+  // severity synonym expansion was removed along with the hardcoded aliases.)
 
-  it('level:error → IN clause on SeverityText', () => {
-    const result = sql('level:error');
-    expect(result).toContain('SeverityText');
-    expect(result).toContain('IN');
-    expect(result).toContain("'error'");
+  it('SeverityText:error → exact = (no IN-list expansion)', () => {
+    const result = sql('SeverityText:error');
+    expect(result).toContain("= 'error'");
+    expect(result).not.toContain('IN (');
   });
 
-  it('level:warn → IN with warn/warning variants', () => {
-    const result = sql('level:warn');
-    expect(result).toContain("'warn'");
-    expect(result).toContain("'warning'");
-  });
-
-  it('level:info → IN clause includes Info/INFO', () => {
-    const result = sql('level:info');
-    expect(result).toContain("'info'");
-    expect(result).toContain("'INFO'");
-  });
-
-  it('level:critical → IN clause includes fatal/crit variants', () => {
-    const result = sql('level:critical');
-    expect(result).toContain("'critical'");
-    expect(result).toContain("'fatal'");
-  });
-
-  it('level:trace → IN clause on SeverityText', () => {
-    const result = sql('level:trace');
-    expect(result).toContain("'trace'");
-  });
-
-  it('level:unknown_custom → ILIKE fallback with _ escaped (not in predefined map)', () => {
-    const result = sql('level:my_custom_level');
-    expect(result).toContain('ILIKE');
-    // underscores in the level value are escaped (\_ so they match literally)
-    expect(result).toContain('my\\_custom\\_level');
-  });
-
-  it('level:err* → ILIKE wildcard on SeverityText', () => {
-    const result = sql('level:err*');
+  it('SeverityText:err* → ILIKE wildcard', () => {
+    const result = sql('SeverityText:err*');
     expect(result).toContain('SeverityText');
     expect(result).toContain("ILIKE 'err%'");
   });
 
-  it('level:"error" → IN clause (quoted level uses same IN logic)', () => {
-    const result = sql('level:"error"');
-    expect(result).toContain('SeverityText');
-    expect(result).toContain('IN');
-  });
-
   // ── Exact match ───────────────────────────────────────────────────────────
 
-  it('service:payment → = on ServiceName column', () => {
-    const result = sql('service:payment');
+  it('ServiceName:payment → = on ServiceName column', () => {
+    const result = sql('ServiceName:payment');
     expect(result).toContain("= 'payment'");
   });
 
-  it('traceId:abc123 → exact match on TraceId column', () => {
-    const result = sql('traceId:abc123');
+  it('TraceId:abc123 → exact match on TraceId column', () => {
+    const result = sql('TraceId:abc123');
     expect(result).toContain('TraceId');
     expect(result).toContain("= 'abc123'");
   });
 
   // ── Wildcard on named exact fields ────────────────────────────────────────
 
-  it('service:pay* → ILIKE with % substitution', () => {
-    const result = sql('service:pay*');
+  it('ServiceName:pay* → ILIKE with % substitution', () => {
+    const result = sql('ServiceName:pay*');
     expect(result).toContain("ILIKE 'pay%'");
   });
 
@@ -287,15 +253,15 @@ describe('kqlToSql', () => {
 
   // ── Exists ────────────────────────────────────────────────────────────────
 
-  it('traceId:* → notEmpty(toString(...))', () => {
-    const result = sql('traceId:*');
+  it('TraceId:* → notEmpty(toString(...))', () => {
+    const result = sql('TraceId:*');
     expect(result).toContain('notEmpty(toString(');
   });
 
-  it('service:* → exists check on ServiceName column', () => {
-    const result = sql('service:*');
+  it('ServiceName:* → exists check on ServiceName column', () => {
+    const result = sql('ServiceName:*');
     expect(result).toContain('notEmpty(toString(');
-    expect(result).toContain('ServiceName');  // OTEL column mapping: serviceName → 'ServiceName'
+    expect(result).toContain('ServiceName');
   });
 
   it('http.method:* → exists check via map accessor', () => {
@@ -334,24 +300,25 @@ describe('kqlToSql', () => {
     expect(result).toContain('>=');
   });
 
-  it('unknown field range → 1=1 (safe no-op)', () => {
+  it('unknown field range → direct column comparison (no no-op)', () => {
     const noMapConfig: SourceConfig = {
       ...config,
       columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
     };
     const result = kqlToSql(parseKql('unknownRange >= 100'), noMapConfig);
-    expect(result).toBe('1=1');
+    expect(result).toContain('"unknownRange"');
+    expect(result).toContain('>= 100');
   });
 
   // ── NOT ──────────────────────────────────────────────────────────────────
 
-  it('not level:debug → NOT (...)', () => {
-    const result = sql('not level:debug');
+  it('not SeverityText:debug → NOT (...)', () => {
+    const result = sql('not SeverityText:debug');
     expect(result).toMatch(/^NOT \(/);
   });
 
   it('NOT uppercase → NOT (...)', () => {
-    const result = sql('NOT service:payment');
+    const result = sql('NOT ServiceName:payment');
     expect(result).toMatch(/^NOT \(/);
     expect(result).toContain("= 'payment'");
   });
@@ -359,48 +326,48 @@ describe('kqlToSql', () => {
   // ── AND ──────────────────────────────────────────────────────────────────
 
   it('AND → both clauses joined with AND', () => {
-    const result = sql('level:error and service:api');
+    const result = sql('SeverityText:error and ServiceName:api');
     expect(result).toContain(') AND (');
   });
 
   // ── OR ───────────────────────────────────────────────────────────────────
 
   it('OR → both clauses joined with OR', () => {
-    const result = sql('level:error or level:warn');
+    const result = sql('SeverityText:error or SeverityText:warn');
     expect(result).toContain(') OR (');
   });
 
   // ── Nested conjunction ────────────────────────────────────────────────────
 
   it('nested and/or → correct parenthesisation', () => {
-    const result = sql('(level:error or level:warn) and service:api');
+    const result = sql('(SeverityText:error or SeverityText:warn) and ServiceName:api');
     expect(result).toContain(') AND (');
     expect(result).toContain(') OR (');
   });
 
   it('NOT inside AND: a and not b', () => {
-    const result = sql('level:error and not level:debug');
+    const result = sql('SeverityText:error and not SeverityText:debug');
     expect(result).toContain(') AND (');
     expect(result).toContain('NOT (');
   });
 
   // ── Value list ────────────────────────────────────────────────────────────
 
-  it('level:(error or warn) → OR of two level clauses', () => {
-    const result = sql('level:(error or warn)');
+  it('SeverityText:(error or warn) → OR of two exact clauses', () => {
+    const result = sql('SeverityText:(error or warn)');
     expect(result).toContain(') OR (');
     expect(result).toContain('SeverityText');
   });
 
-  it('service:(api or auth) → OR of two exact clauses', () => {
-    const result = sql('service:(api or auth)');
+  it('ServiceName:(api or auth) → OR of two exact clauses', () => {
+    const result = sql('ServiceName:(api or auth)');
     expect(result).toContain(') OR (');
     expect(result).toContain("= 'api'");
     expect(result).toContain("= 'auth'");
   });
 
-  it('service:(not api) → NOT clause', () => {
-    const result = sql('service:(not api)');
+  it('ServiceName:(not api) → NOT clause', () => {
+    const result = sql('ServiceName:(not api)');
     expect(result).toContain('NOT (');
     expect(result).toContain("= 'api'");
   });
@@ -457,7 +424,7 @@ describe('kqlToSql', () => {
   });
 
   it('field and bare term → AND', () => {
-    const result = sql('level:error timeout');
+    const result = sql('SeverityText:error timeout');
     expect(result).toContain(') AND (');
     expect(result).toContain('SeverityText');
     expect(result).toContain('Body');

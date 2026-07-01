@@ -2,14 +2,14 @@
  * Translate a KQL AST node into a ClickHouse WHERE clause fragment.
  *
  * Reuses existing helpers from the parent sql/ package:
- *   resolveField / buildLevelClause  (../fields)
+ *   resolveField                     (../fields)
  *   quoteString / quoteIdentifier    (../queryBuilder)
  */
 
 import { KqlNode, KqlIs, KqlRange } from './ast';
 import { WILDCARD_STAR, WILDCARD_QMARK } from './_lexer';
 import { SourceConfig } from '../../types';
-import { resolveField, buildLevelClause } from '../fields';
+import { resolveField } from '../fields';
 import { quoteString, quoteIdentifier } from '../queryBuilder';
 
 export function kqlToSql(node: KqlNode, config: SourceConfig): string {
@@ -18,8 +18,12 @@ export function kqlToSql(node: KqlNode, config: SourceConfig): string {
       return `(${kqlToSql(node.left, config)}) AND (${kqlToSql(node.right, config)})`;
     case 'or':
       return `(${kqlToSql(node.left, config)}) OR (${kqlToSql(node.right, config)})`;
-    case 'not':
-      return `NOT (${kqlToSql(node.operand, config)})`;
+    case 'not': {
+      const inner = kqlToSql(node.operand, config);
+      // '1=1' is a no-op sentinel (unresolvable field) — negating it would
+      // wrongly turn "ignore this clause" into "exclude everything".
+      return inner === '1=1' ? '1=1' : `NOT (${inner})`;
+    }
     case 'is':
       return kqlIsToSql(node, config);
     case 'range':
@@ -56,14 +60,6 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
   const { sqlExpr, kind } = resolved ?? { sqlExpr: node.field, kind: 'exact' as const };
   const val = node.value;
 
-  // Level — always use IN-clause logic; wildcard falls through to ILIKE.
-  if (kind === 'level') {
-    if (node.isWildcard) {
-      return `${maybeQuote(sqlExpr)} ILIKE ${quoteString(wildcardLike(val))}`;
-    }
-    return buildLevelClause(sqlExpr, val, false);
-  }
-
   // Wildcard — applies to all field kinds (text, exact, map).
   // Check before isPhrase so "err*" with quotes can't override.
   if (node.isWildcard) {
@@ -97,10 +93,8 @@ const OP_MAP: Record<string, string> = {
 
 function kqlRangeToSql(node: KqlRange, config: SourceConfig): string {
   const resolved = resolveField(node.field, config);
-  if (!resolved) {
-    return '1=1'; // unknown field — ignore range rather than crashing
-  }
-  const { sqlExpr, kind } = resolved;
+  // Unknown field: use the field name as a direct column, same as kqlIsToSql.
+  const { sqlExpr, kind } = resolved ?? { sqlExpr: node.field, kind: 'exact' as const };
   const op = OP_MAP[node.op];
   const numVal = Number(node.value);
   const isNumeric = Number.isFinite(numVal) && node.value.trim() !== '';

@@ -6,11 +6,17 @@ export interface ColumnMapping {
   timestamp: string;
   body: string;
   severity: string;
+  // Numeric severity column (e.g. OTel SeverityNumber) — empty means absent.
+  severityNumber: string;
   traceId: string;
   spanId: string;
   parentSpanId: string;
   serviceName: string;
   duration: string;
+  // Span name / operation name column — empty means absent.
+  spanName: string;
+  // Span status code column (e.g. OTel StatusCode) — empty means absent.
+  statusCode: string;
   // Map columns — empty string means column absent (non-OTel tables)
   resourceAttributes: string;
   logAttributes: string;
@@ -22,11 +28,14 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   timestamp: 'Timestamp',
   body: 'Body',
   severity: 'SeverityText',
+  severityNumber: 'SeverityNumber',
   traceId: 'TraceId',
   spanId: 'SpanId',
   parentSpanId: 'ParentSpanId',
   serviceName: 'ServiceName',
   duration: 'Duration',
+  spanName: 'SpanName',
+  statusCode: 'StatusCode',
   resourceAttributes: 'ResourceAttributes',
   logAttributes: 'LogAttributes',
   scopeAttributes: 'ScopeAttributes',
@@ -37,11 +46,14 @@ export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
   timestamp: '',
   body: '',
   severity: '',
+  severityNumber: '',
   traceId: '',
   spanId: '',
   parentSpanId: '',
   serviceName: '',
   duration: '',
+  spanName: '',
+  statusCode: '',
   resourceAttributes: '',
   logAttributes: '',
   scopeAttributes: '',
@@ -53,9 +65,8 @@ export interface SourceConfig {
   database: string;
   logsTable: string;
   tracesTable: string;
-  // true only when the table has the OTel SeverityNumber numeric column.
-  // Enables KQL `severitynumber` / `severity_number` field resolution.
-  // Has no effect on any other SQL generation — all other paths use columns.*.
+  // Legacy flag, no longer read by SQL generation — all paths use columns.* mapping.
+  // Kept for backwards-compat with persisted jsonData; new views leave it false.
   isOtel: boolean;
   columns: ColumnMapping;
 }

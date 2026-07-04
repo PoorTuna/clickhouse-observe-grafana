@@ -18,7 +18,7 @@ import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
-import { buildLogsQuery, buildVolumeQuery, resolveVolumeBreakdown } from '../sql/queryBuilder';
+import { buildLogsQuery, buildVolumeQuery, resolveVolumeBreakdown, CORE_ALIAS } from '../sql/queryBuilder';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
@@ -64,11 +64,13 @@ function defaultTimeRange(): TimeRange {
 function defaultColumns(config: ReturnType<typeof useContext<any>>): SelectedColumn[] {
   const c = config.columns;
   // Only include columns for which a mapping exists. Empty mapping = column not present in this view.
+  // `id` stays a stable plain name (used for React keys/reorder, unrelated to SQL); `key` must
+  // match the __-prefixed alias buildLogsQuery actually emits (see CORE_ALIAS).
   const cols: Array<{ id: string; key: string; sqlExpr: string; displayName: string; type: ColumnType }> = [
-    { id: 'timestamp', key: 'timestamp', sqlExpr: c.timestamp, displayName: 'Time', type: 'time' },
-    { id: 'severity', key: 'severity', sqlExpr: c.severity, displayName: 'Level', type: 'level' },
-    { id: 'serviceName', key: 'serviceName', sqlExpr: c.serviceName, displayName: 'Service', type: 'exact' },
-    { id: 'body', key: 'body', sqlExpr: c.body, displayName: 'Message', type: 'text' },
+    { id: 'timestamp', key: CORE_ALIAS.timestamp, sqlExpr: c.timestamp, displayName: 'Time', type: 'time' },
+    { id: 'severity', key: CORE_ALIAS.severity, sqlExpr: c.severity, displayName: 'Level', type: 'level' },
+    { id: 'serviceName', key: CORE_ALIAS.serviceName, sqlExpr: c.serviceName, displayName: 'Service', type: 'exact' },
+    { id: 'body', key: CORE_ALIAS.body, sqlExpr: c.body, displayName: 'Message', type: 'text' },
   ];
   return cols
     .filter((col) => Boolean(col.sqlExpr))
@@ -631,7 +633,7 @@ export function LogsExplorer() {
               setSelectedRow(null);
             }}
             onViewTrace={
-              caps.hasTraces && selectedRow['traceId']
+              caps.hasTraces && selectedRow[CORE_ALIAS.traceId]
                 ? (traceId) => {
                     window.location.href = `${PLUGIN_BASE_URL}/traces/${traceId}`;
                   }

@@ -5,6 +5,7 @@ import { useStyles2, Drawer, Button, Icon } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig } from '../types';
 import { groupAttributes } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
+import { CORE_ALIAS } from '../sql/queryBuilder';
 
 interface LogDetailDrawerProps {
   row: LogRow;
@@ -40,7 +41,7 @@ export function LogDetailDrawer({
     });
   };
 
-  const traceId = row['traceId'] ? String(row['traceId']) : null;
+  const traceId = row[CORE_ALIAS.traceId] ? String(row[CORE_ALIAS.traceId]) : null;
   const attrGroups = groupAttributes(row, config.columns);
 
   const filterMatch = (key: string, value: string): boolean => {
@@ -97,7 +98,7 @@ export function LogDetailDrawer({
             <span>Log line</span>
           </button>
           {expandedSections.has('logLine') && (
-            <div className={styles.logLine}>{String(row['body'] ?? '')}</div>
+            <div className={styles.logLine}>{String(row[CORE_ALIAS.body] ?? '')}</div>
           )}
         </section>
 
@@ -164,12 +165,13 @@ export function LogDetailDrawer({
                 // Keys shown in dedicated sections (aliases + their source columns) — skip in All fields.
                 const c = config.columns;
                 const hidden = new Set([
-                  // Fixed core aliases always added by buildLogsQuery
-                  'timestamp', 'body', 'severity', 'traceId', 'spanId', 'serviceName',
-                  // Raw mapped column names projected by SELECT * (duplicates of the aliases)
+                  // __-prefixed core aliases always added by buildLogsQuery
+                  CORE_ALIAS.timestamp, CORE_ALIAS.body, CORE_ALIAS.severity,
+                  CORE_ALIAS.traceId, CORE_ALIAS.spanId, CORE_ALIAS.serviceName,
+                  // Raw mapped column names projected by SELECT * (the aliases' source columns,
+                  // plus attribute Map columns, which are never aliased — shown in their own
+                  // groups above by reading the raw mapped name directly).
                   c.timestamp, c.body, c.severity, c.traceId, c.spanId, c.serviceName,
-                  // Attribute map columns shown in their own groups
-                  'ResourceAttributes', 'LogAttributes', 'ScopeAttributes', 'SpanAttributes',
                   c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes,
                 ]);
                 return Object.entries(row)

@@ -6,8 +6,6 @@ export interface ColumnMapping {
   timestamp: string;
   body: string;
   severity: string;
-  // Numeric severity column (e.g. OTel SeverityNumber) — empty means absent.
-  severityNumber: string;
   traceId: string;
   spanId: string;
   parentSpanId: string;
@@ -28,7 +26,6 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   timestamp: 'Timestamp',
   body: 'Body',
   severity: 'SeverityText',
-  severityNumber: 'SeverityNumber',
   traceId: 'TraceId',
   spanId: 'SpanId',
   parentSpanId: 'ParentSpanId',
@@ -46,7 +43,6 @@ export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
   timestamp: '',
   body: '',
   severity: '',
-  severityNumber: '',
   traceId: '',
   spanId: '',
   parentSpanId: '',

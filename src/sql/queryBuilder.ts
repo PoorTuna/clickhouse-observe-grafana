@@ -6,7 +6,7 @@
  * from the query request's time range automatically.
  */
 
-import { FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
+import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
 import { resolveField } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
@@ -205,7 +205,12 @@ export type VolumeBreakdown =
   | { kind: 'field'; expr: string; limit?: number };
 
 export interface VolumeQueryOpts {
-  interval: { unit: CHIntervalUnit; value: number };
+  /**
+   * Fixed bucket width, or `{ macro: true }` to defer bucketing to the CH datasource's
+   * `$__timeInterval(...)` macro — used when exporting to a dashboard panel so the bucket
+   * width adapts to whatever time range the dashboard is showing, not the range at export time.
+   */
+  interval: { unit: CHIntervalUnit; value: number } | { macro: true };
   breakdown: VolumeBreakdown;
 }
 
@@ -217,7 +222,9 @@ export function buildVolumeQuery(
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
   const { interval, breakdown } = opts;
-  const timeExpr = `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
+  const timeExpr = 'macro' in interval
+    ? `$__timeInterval(${c.timestamp})`
+    : `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
   const conditions = buildWhereConditions(config, state);
   const condSql = conditions.join(' AND ');
 
@@ -236,8 +243,10 @@ export function buildVolumeQuery(
 
   if (breakdown.kind === 'severity') {
     // Stack by severity column — no CTE, identical to the original behaviour.
+    // Lowercase in SQL (not just client-side) so mixed-case severity values (e.g. 'ERROR' vs
+    // 'error' from different log sources) group into one bucket/series instead of duplicating.
     return [
-      `SELECT ${timeExpr} AS time, ${breakdown.expr} AS level, count() AS count`,
+      `SELECT ${timeExpr} AS time, lower(toString(${breakdown.expr})) AS level, count() AS count`,
       `FROM ${tbl}`,
       whereSql || null,
       `GROUP BY time, level`,
@@ -263,6 +272,22 @@ export function buildVolumeQuery(
     `GROUP BY time, level`,
     `ORDER BY time ASC`,
   ].filter(Boolean).join('\n');
+}
+
+/**
+ * Map the UI-level breakdown selection to the SQL-level VolumeBreakdown.
+ * Shared by the live histogram query (LogsExplorer) and dashboard-panel export so the two
+ * never drift apart.
+ */
+export function resolveVolumeBreakdown(breakdown: BreakdownSel, config: SourceConfig): VolumeBreakdown {
+  switch (breakdown.kind) {
+    case 'none':
+      return { kind: 'none' };
+    case 'severity':
+      return { kind: 'severity', expr: config.columns.severity };
+    case 'field':
+      return { kind: 'field', expr: breakdown.field.sqlExpr };
+  }
 }
 
 export function buildFieldTopValuesQuery(

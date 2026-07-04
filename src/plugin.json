@@ -21,7 +21,7 @@
       "large": "img/logo.svg"
     },
     "screenshots": [],
-    "version": "0.2.5",
+    "version": "0.2.6",
     "updated": "%TODAY%"
   },
   "includes": [
@@ -51,6 +51,13 @@
     }
   ],
   "dependencies": {
-    "grafanaDependency": ">=10.0.0"
+    "grafanaDependency": ">=10.0.0",
+    "plugins": [
+      {
+        "type": "datasource",
+        "id": "grafana-clickhouse-datasource",
+        "name": "ClickHouse"
+      }
+    ]
   }
 }

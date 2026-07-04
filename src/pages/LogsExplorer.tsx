@@ -15,8 +15,10 @@ import { FieldsProvider } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
+import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
+import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
-import { buildLogsQuery, buildVolumeQuery } from '../sql/queryBuilder';
+import { buildLogsQuery, buildVolumeQuery, resolveVolumeBreakdown } from '../sql/queryBuilder';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
@@ -168,6 +170,8 @@ export function LogsExplorer() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showSqlInspect, setShowSqlInspect] = useState(false);
   const [sqlCopied, setSqlCopied] = useState(false);
+  const [addToDashboardOpen, setAddToDashboardOpen] = useState(false);
+  const canAddToDashboard = useMemo(() => canCreateDashboards(), []);
 
   // Pagination
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -215,12 +219,7 @@ export function LogsExplorer() {
       const resolved = resolveInterval(intervalMode, timeRange);
       const volSql = buildVolumeQuery(config, queryState, {
         interval: { unit: resolved.unit, value: resolved.value },
-        breakdown:
-          breakdown.kind === 'none'
-            ? { kind: 'none' }
-            : breakdown.kind === 'severity'
-            ? { kind: 'severity', expr: config.columns.severity }
-            : { kind: 'field', expr: breakdown.field.sqlExpr },
+        breakdown: resolveVolumeBreakdown(breakdown, config),
       });
 
       const volPromise = caps.hasTime
@@ -416,6 +415,16 @@ export function LogsExplorer() {
               fiscalYearStartMonth={0}
             />
           )}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="apps"
+            onClick={() => setAddToDashboardOpen(true)}
+            disabled={!canAddToDashboard}
+            tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
+          >
+            Add to dashboard
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -630,6 +639,15 @@ export function LogsExplorer() {
             }
           />
         )}
+
+        <AddToDashboardModal
+          isOpen={addToDashboardOpen}
+          onDismiss={() => setAddToDashboardOpen(false)}
+          config={config}
+          queryState={{ ...queryState, columns: effectiveColumns }}
+          breakdown={breakdown}
+          caps={caps}
+        />
       </div>
       </PluginPage>
     </FieldsProvider>

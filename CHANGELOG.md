@@ -10,6 +10,34 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.6] — 2026-07-04
+
+### Added
+
+- **"Add to dashboard"** — export the Logs Explorer's current logs table and/or volume
+  histogram as real Grafana panels onto a new or existing dashboard. Filters, search,
+  columns, sort, and breakdown are baked into the exported SQL (via `$__fromTime`/
+  `$__toTime`/`$__timeInterval` macros), so panels stay dashboard-time-relative instead of
+  freezing the range at export time. Gated behind `dashboards:create` permission.
+- **Per-field descriptions in Column Mapping** — each mapping field now states what it
+  actually enables (e.g. "Enables the trace-jump link…") instead of just a bare label.
+
+### Changed
+
+- **Removed the `severityNumber` mapping field** — it was never consumed by any SQL
+  generation or rendering; a dead, confusing leftover from the OTel adaptation.
+- **`grafana-clickhouse-datasource` declared as a plugin dependency** in `plugin.json`
+  (previously only present in the built copy). Requires a Grafana server restart to apply.
+
+### Fixed
+
+- **Severity breakdown case-duplication in histogram queries** — mixed-case severity values
+  (e.g. `ERROR` vs `error`) now normalize to lowercase in SQL (`lower(toString(...))`)
+  instead of only in client-side rendering, so exported dashboard panels — which have no
+  such client-side fold step — don't show duplicate legend entries per case variant.
+
+---
+
 ## [0.2.5] — 2026-07-01
 
 ### Changed

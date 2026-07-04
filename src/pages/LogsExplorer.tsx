@@ -18,7 +18,8 @@ import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
-import { buildLogsQuery, buildVolumeQuery, resolveVolumeBreakdown, CORE_ALIAS } from '../sql/queryBuilder';
+import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, CORE_ALIAS } from '../sql/queryBuilder';
+import { loadFieldValues } from '../sql/kql/_values';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
@@ -33,6 +34,7 @@ import {
   SavedSearch,
   SelectedColumn,
   ColumnType,
+  SourceConfig,
   VolumeDataPoint,
 } from '../types';
 import { PLUGIN_BASE_URL } from '../constants';
@@ -61,7 +63,7 @@ function defaultTimeRange(): TimeRange {
   };
 }
 
-function defaultColumns(config: ReturnType<typeof useContext<any>>): SelectedColumn[] {
+function defaultColumns(config: SourceConfig): SelectedColumn[] {
   const c = config.columns;
   // Only include columns for which a mapping exists. Empty mapping = column not present in this view.
   // `id` stays a stable plain name (used for React keys/reorder, unrelated to SQL); `key` must
@@ -206,7 +208,6 @@ export function LogsExplorer() {
       return;
     }
     const runId = ++runRef.current;
-    console.debug('[LogsExplorer] executeQuery runId=%d search=%o', runId, queryState.search);
     setLoading(true);
     setError(null);
 
@@ -234,11 +235,9 @@ export function LogsExplorer() {
       ]);
 
       if (runRef.current !== runId) {
-        console.debug('[LogsExplorer] runId=%d DISCARDED (current=%d)', runId, runRef.current);
         return;
       }
 
-      console.debug('[LogsExplorer] runId=%d ACCEPTED rows=%d', runId, logRows.length);
       setRows(logRows);
       setCurrentPage(0);
       setHasMore(!queryState.useRawSql && logRows.length === INITIAL_FETCH);
@@ -282,6 +281,17 @@ export function LogsExplorer() {
       filters: addFilterPill(queryState.filters, filter),
     });
   };
+
+  const logsLoadValues = useCallback(
+    (sqlExpr: string) =>
+      loadFieldValues(config, sqlExpr, {
+        table: config.logsTable,
+        conditions: buildWhereConditions(config, queryState),
+        timeRange,
+        cacheKey: JSON.stringify([queryState.search, queryState.filters]),
+      }),
+    [config, queryState, timeRange]
+  );
 
   const onToggleColumn = (col: SelectedColumn) => {
     if (effectiveColumns.some((c) => c.id === col.id)) {
@@ -443,15 +453,9 @@ export function LogsExplorer() {
             value={queryState.search}
             onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
             onSearch={() => {}}
-            onAddFilter={onAddFilter}
-            timeRange={timeRange}
-            queryState={queryState}
+            loadValues={logsLoadValues}
           />
-          <AddFilterPopover
-            queryState={queryState}
-            timeRange={timeRange}
-            onAddFilter={onAddFilter}
-          />
+          <AddFilterPopover loadValues={logsLoadValues} onAddFilter={onAddFilter} />
         </div>
 
         {/* Filter pills */}

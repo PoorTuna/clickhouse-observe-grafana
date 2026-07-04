@@ -13,6 +13,18 @@ export interface ViewCapabilities {
   hasResourceAttrs: boolean;
   /** Whether LogAttributes Map is mapped (enables log attr group + dotted-key filters). */
   hasLogAttrs: boolean;
+  /** Whether SpanKind is mapped (enables span-kind icon/filter). */
+  hasSpanKind: boolean;
+  /** Whether StatusMessage is mapped (enables status message row in span drawer). */
+  hasStatusMessage: boolean;
+  /**
+   * Whether the traces feature can show span Events (exception stack traces, etc).
+   * Traces is OTel-only by design, so this always tracks hasTraces — the `Events.*`
+   * nested-array columns are a fixed part of the assumed schema, not user-mapped.
+   */
+  hasSpanEvents: boolean;
+  /** Same rationale as hasSpanEvents — Links.* is a fixed OTel column, tracks hasTraces. */
+  hasSpanLinks: boolean;
 }
 
 /**
@@ -22,12 +34,17 @@ export interface ViewCapabilities {
  */
 export function viewCapabilities(config: SourceConfig): ViewCapabilities {
   const c = config.columns;
+  const hasTraces = Boolean(c.traceId && config.tracesTable);
   return {
     hasTime: Boolean(c.timestamp),
     hasSeverity: Boolean(c.severity),
     hasService: Boolean(c.serviceName),
-    hasTraces: Boolean(c.traceId && config.tracesTable),
+    hasTraces,
     hasResourceAttrs: Boolean(c.resourceAttributes),
     hasLogAttrs: Boolean(c.logAttributes),
+    hasSpanKind: Boolean(c.spanKind),
+    hasStatusMessage: Boolean(c.statusMessage),
+    hasSpanEvents: hasTraces,
+    hasSpanLinks: hasTraces,
   };
 }

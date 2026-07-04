@@ -4,7 +4,7 @@ import { GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
-import { buildFieldTopValuesQuery } from '../../sql/queryBuilder';
+import { buildFieldTopValuesQuery, buildWhereConditions } from '../../sql/queryBuilder';
 import { runQueryRows } from '../../data/runQuery';
 import { makeFilter } from '../../sql/filters';
 import { FilterPill, LogsQueryState, SourceConfig } from '../../types';
@@ -79,7 +79,12 @@ export function FieldStatsPopover({
     setLoading(true);
     setError(null);
     try {
-      const sql = buildFieldTopValuesQuery(config, queryState, field.sqlExpr, 10, 500);
+      const sql = buildFieldTopValuesQuery(config, field.sqlExpr, {
+        table: config.logsTable,
+        conditions: buildWhereConditions(config, queryState),
+        limit: 10,
+        sampleSize: 500,
+      });
       const rows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
       if (!mountedRef.current) {
         return;

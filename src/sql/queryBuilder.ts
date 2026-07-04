@@ -378,8 +378,10 @@ export function buildTraceSearchQuery(
     conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search.trim() + '%')}`);
   }
 
-  // 'STATUS_CODE_ERROR' is the OTel span-status enum value — only meaningful
-  // when the user has mapped a status code column in the first place.
+  // 'STATUS_CODE_ERROR' is the OTel span-status enum value. Unlike logs (which are fully
+  // schema-agnostic), the Traces feature is OTel-only by design — traceId/spanId/parentSpanId/
+  // status-code semantics all assume the OTel trace model, so this literal is intentional, not
+  // a hardcoded-schema bug. Still gated on statusCode being mapped in the first place.
   const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = 'STATUS_CODE_ERROR')` : '0';
   const serviceNameSel = c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`;
   const startTimeSel = c.timestamp ? `min(${c.timestamp}) AS startTime` : `0 AS startTime`;

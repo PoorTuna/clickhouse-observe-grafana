@@ -10,6 +10,21 @@ import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig } from
 import { resolveField } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
+/**
+ * Row-object keys for buildLogsQuery's core (fixed-role) columns. `__`-prefixed so they can't
+ * collide with an arbitrary table's own real column of the same plain name — see buildLogsQuery.
+ * Consumers (LogsTable, LogDetailDrawer, defaultColumns()) import this instead of hardcoding the
+ * literal strings so the two sides can't drift.
+ */
+export const CORE_ALIAS = {
+  timestamp: '__timestamp',
+  body: '__body',
+  severity: '__severity',
+  traceId: '__traceId',
+  spanId: '__spanId',
+  serviceName: '__serviceName',
+} as const;
+
 export function quoteIdentifier(name: string): string {
   if (name.includes('[') || name.includes('(') || name.includes('.')) {
     return name;
@@ -158,21 +173,21 @@ export function buildLogsQuery(
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
-  // Core aliases for mapped columns only — omitted entirely when unmapped (not a constant
-  // '' fallback) so an arbitrary table's own same-named column, exposed via '*', never collides
-  // with a phantom empty column of the same alias. Consumers already treat an absent key the
-  // same as an empty one (falsy checks throughout), so dropping the column changes nothing
-  // downstream.
+  // Core aliases for mapped columns only, omitted entirely when unmapped. Aliased under a
+  // `__`-prefixed name (CORE_ALIAS.*) rather than the field's plain name — an arbitrary table's
+  // own real column can legitimately be named `timestamp`/`body`/`severity`/etc (unrelated to
+  // what the user mapped to that role); a `__`-prefixed alias can't collide with a pre-existing
+  // column the way a bare name can, closing off the whole collision class rather than special-
+  // casing individual instances of it. Note: ResourceAttributes/LogAttributes/ScopeAttributes
+  // are deliberately NOT aliased here — groupAttributes() (schema.ts) already reads them by
+  // their raw mapped column name via SELECT *, so a fixed alias was dead weight.
   const coreSelect = [
-    c.timestamp ? `${c.timestamp} AS timestamp` : null,
-    c.body ? `${c.body} AS body` : null,
-    c.severity ? `${c.severity} AS severity` : null,
-    c.traceId ? `${c.traceId} AS traceId` : null,
-    c.spanId ? `${c.spanId} AS spanId` : null,
-    c.serviceName ? `${c.serviceName} AS serviceName` : null,
-    c.resourceAttributes ? `${c.resourceAttributes} AS ResourceAttributes` : null,
-    c.logAttributes ? `${c.logAttributes} AS LogAttributes` : null,
-    c.scopeAttributes ? `${c.scopeAttributes} AS ScopeAttributes` : null,
+    c.timestamp ? `${c.timestamp} AS ${CORE_ALIAS.timestamp}` : null,
+    c.body ? `${c.body} AS ${CORE_ALIAS.body}` : null,
+    c.severity ? `${c.severity} AS ${CORE_ALIAS.severity}` : null,
+    c.traceId ? `${c.traceId} AS ${CORE_ALIAS.traceId}` : null,
+    c.spanId ? `${c.spanId} AS ${CORE_ALIAS.spanId}` : null,
+    c.serviceName ? `${c.serviceName} AS ${CORE_ALIAS.serviceName}` : null,
   ].filter(Boolean) as string[];
 
   // Extra SELECT for user-added non-core columns
@@ -183,7 +198,7 @@ export function buildLogsQuery(
   const selectParts = ['*', ...coreSelect, ...extraSelect];
   const conditions = buildWhereConditions(config, state);
 
-  const sortCol = state.sort?.col ?? (c.timestamp ? 'timestamp' : null);
+  const sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);
   const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
 
   return [

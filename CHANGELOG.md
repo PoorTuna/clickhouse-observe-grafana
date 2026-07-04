@@ -10,6 +10,30 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.8] — 2026-07-04
+
+### Fixed
+
+- **Core column aliases can no longer collide with a real column on an arbitrary table** —
+  `buildLogsQuery`'s fixed columns (timestamp/body/severity/traceId/spanId/serviceName) are now
+  aliased under `__`-prefixed names (`__timestamp`, `__severity`, ...) instead of their plain
+  field name. Previously, if a table happened to have its own unrelated column literally named
+  e.g. `severity` (distinct from whatever was mapped to that role), the query would emit two
+  output columns with the same name — silently losing one via last-column-wins overwrite, or for
+  `timestamp`/`body` specifically, failing outright with an ambiguous `ORDER BY`. This can no
+  longer happen since a `__`-prefixed alias can't coincide with a real column name.
+- Removed the `ResourceAttributes`/`LogAttributes`/`ScopeAttributes` aliases from
+  `buildLogsQuery` entirely — dead code; the attribute-group UI already reads by the raw mapped
+  column name, never by that alias.
+
+### Note
+
+- If you had manually reordered or removed one of the 4 default log columns, that customization
+  is keyed by the old alias name and will silently stop applying after this update — just
+  re-toggle the column from the field sidebar. No data loss, cosmetic only.
+
+---
+
 ## [0.2.7] — 2026-07-04
 
 ### Fixed

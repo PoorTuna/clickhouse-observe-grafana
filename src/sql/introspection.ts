@@ -19,7 +19,11 @@ export function buildColumnsQuery(database: string, table: string): string {
   );
 }
 
-/** Discover distinct Map keys for a given Map column over the current time range. */
+/**
+ * Discover distinct Map keys for a given Map column, bounded to the current time range when a
+ * timestamp column is mapped — a Map column can be mapped independently of a timestamp column,
+ * so this must degrade to an unbounded scan rather than emit `undefined >= $__fromTime`.
+ */
 export function buildMapKeysQuery(
   config: SourceConfig,
   mapColumn: string,
@@ -30,7 +34,7 @@ export function buildMapKeysQuery(
   return [
     `SELECT DISTINCT arrayJoin(mapKeys(${mapColumn})) AS k`,
     `FROM ${tbl}`,
-    `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime`,
+    ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
     `LIMIT ${limit}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

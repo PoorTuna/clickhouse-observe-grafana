@@ -158,15 +158,18 @@ export function buildLogsQuery(
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
-  // Core aliases — always present; drawer + trace-link depend on these fixed names.
-  // '*' exposes every raw table column so the log-detail drawer can show all fields.
+  // Core aliases for mapped columns only — omitted entirely when unmapped (not a constant
+  // '' fallback) so an arbitrary table's own same-named column, exposed via '*', never collides
+  // with a phantom empty column of the same alias. Consumers already treat an absent key the
+  // same as an empty one (falsy checks throughout), so dropping the column changes nothing
+  // downstream.
   const coreSelect = [
     c.timestamp ? `${c.timestamp} AS timestamp` : null,
     c.body ? `${c.body} AS body` : null,
-    c.severity ? `${c.severity} AS severity` : `'' AS severity`,
-    c.traceId ? `${c.traceId} AS traceId` : `'' AS traceId`,
-    c.spanId ? `${c.spanId} AS spanId` : `'' AS spanId`,
-    c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`,
+    c.severity ? `${c.severity} AS severity` : null,
+    c.traceId ? `${c.traceId} AS traceId` : null,
+    c.spanId ? `${c.spanId} AS spanId` : null,
+    c.serviceName ? `${c.serviceName} AS serviceName` : null,
     c.resourceAttributes ? `${c.resourceAttributes} AS ResourceAttributes` : null,
     c.logAttributes ? `${c.logAttributes} AS LogAttributes` : null,
     c.scopeAttributes ? `${c.scopeAttributes} AS ScopeAttributes` : null,
@@ -220,6 +223,12 @@ export function buildVolumeQuery(
   opts: VolumeQueryOpts
 ): string {
   const c = config.columns;
+  // Bucketing by time is the entire point of a volume query — meaningless without a mapped
+  // timestamp column. Callers already gate execution on caps.hasTime, but the builder itself
+  // shouldn't rely on every caller remembering that (panelExport.ts is a second such caller).
+  if (!c.timestamp) {
+    return '';
+  }
   const tbl = tableRef(config, config.logsTable);
   const { interval, breakdown } = opts;
   const timeExpr = 'macro' in interval
@@ -330,12 +339,17 @@ export function buildSurroundingDocsQuery(
   direction: 'before' | 'after' = 'before'
 ): string {
   const c = config.columns;
+  // Finding "surrounding" docs is inherently a time-proximity query — meaningless without a
+  // mapped timestamp column, so gate the whole function rather than emit `undefined` into SQL.
+  if (!c.timestamp) {
+    return '';
+  }
   const tbl = tableRef(config, config.logsTable);
   const op = direction === 'before' ? '<' : '>';
   const order = direction === 'before' ? 'DESC' : 'ASC';
 
   return [
-    `SELECT ${c.timestamp} AS timestamp, ${c.body} AS body,`,
+    `SELECT ${c.timestamp} AS timestamp, ${c.body || "''"} AS body,`,
     `  ${c.severity || "''"} AS severity, ${c.serviceName || "''"} AS serviceName`,
     `FROM ${tbl}`,
     `WHERE ${c.timestamp} ${op} ${quoteString(rowTimestamp)}`,
@@ -350,51 +364,71 @@ export function buildTraceSearchQuery(
   limit = 100
 ): string {
   const c = config.columns;
+  // No traceId mapped → no trace concept at all; same gating style as buildLogsByTraceIdQuery.
+  if (!c.traceId) {
+    return '';
+  }
   const tbl = tableRef(config, config.tracesTable);
 
-  const conditions: string[] = [`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`];
-  if (search.trim()) {
+  const conditions: string[] = [];
+  if (c.timestamp) {
+    conditions.push(`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`);
+  }
+  if (search.trim() && c.serviceName) {
     conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search.trim() + '%')}`);
   }
 
   // 'STATUS_CODE_ERROR' is the OTel span-status enum value — only meaningful
   // when the user has mapped a status code column in the first place.
   const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = 'STATUS_CODE_ERROR')` : '0';
+  const serviceNameSel = c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`;
+  const startTimeSel = c.timestamp ? `min(${c.timestamp}) AS startTime` : `0 AS startTime`;
+  const endTimeSel = c.timestamp ? `max(${c.timestamp}) AS endTime` : `0 AS endTime`;
+  const durationSel = c.duration ? `max(${c.duration}) AS durationNs` : `0 AS durationNs`;
 
   return [
     `SELECT`,
     `  ${c.traceId} AS traceId,`,
-    `  min(${c.timestamp}) AS startTime,`,
-    `  max(${c.timestamp}) AS endTime,`,
-    `  ${c.serviceName} AS serviceName,`,
+    `  ${startTimeSel},`,
+    `  ${endTimeSel},`,
+    `  ${serviceNameSel},`,
     `  count() AS spanCount,`,
     `  ${errorCountExpr} AS errorCount,`,
-    `  max(${c.duration}) AS durationNs`,
+    `  ${durationSel}`,
     `FROM ${tbl}`,
-    `WHERE ${conditions.join(' AND ')}`,
-    `GROUP BY traceId, serviceName`,
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
+    // Constant selects (unmapped serviceName) don't need to appear in GROUP BY.
+    `GROUP BY traceId${c.serviceName ? ', serviceName' : ''}`,
     `ORDER BY startTime DESC`,
     `LIMIT ${limit}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildTraceDetailQuery(config: SourceConfig, traceId: string): string {
   const c = config.columns;
+  // No traceId mapped → no trace concept at all; same gating style as buildLogsByTraceIdQuery.
+  if (!c.traceId) {
+    return '';
+  }
   const tbl = tableRef(config, config.tracesTable);
   const spanAttrSel = c.spanAttributes ? `${c.spanAttributes} AS tags` : `'' AS tags`;
   const spanIdSel = c.spanId ? `${c.spanId} AS spanID` : `'' AS spanID`;
+  const parentSpanIdSel = c.parentSpanId ? `${c.parentSpanId} AS parentSpanID` : `'' AS parentSpanID`;
+  const serviceNameSel = c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`;
   const spanNameSel = c.spanName ? `${c.spanName} AS operationName` : `'' AS operationName`;
   const statusCodeSel = c.statusCode ? `${c.statusCode} AS statusCode` : `'' AS statusCode`;
+  const startTimeSel = c.timestamp ? `${c.timestamp} AS startTime` : `0 AS startTime`;
+  const durationSel = c.duration ? `${c.duration} AS durationNs` : `0 AS durationNs`;
 
   return [
     `SELECT`,
     `  ${c.traceId} AS traceID,`,
     `  ${spanIdSel},`,
-    `  ${c.parentSpanId} AS parentSpanID,`,
-    `  ${c.serviceName} AS serviceName,`,
+    `  ${parentSpanIdSel},`,
+    `  ${serviceNameSel},`,
     `  ${spanNameSel},`,
-    `  ${c.timestamp} AS startTime,`,
-    `  ${c.duration} AS durationNs,`,
+    `  ${startTimeSel},`,
+    `  ${durationSel},`,
     `  ${statusCodeSel},`,
     `  ${spanAttrSel}`,
     `FROM ${tbl}`,

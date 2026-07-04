@@ -49,3 +49,17 @@ export const BREAKDOWN_PALETTE = [
 
 /** Color used for the "Other" series in breakdown mode. */
 export const OTHER_COLOR = '#98A2B3';
+
+/**
+ * Deterministic service → color mapping, shared by the trace list, waterfall, and service map so
+ * the same service always renders the same color everywhere. Uses the same BREAKDOWN_PALETTE as
+ * the logs histogram for visual consistency across the plugin.
+ */
+export function serviceColor(serviceName: string): string {
+  let hash = 0;
+  for (let i = 0; i < serviceName.length; i++) {
+    hash = (hash * 31 + serviceName.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % BREAKDOWN_PALETTE.length;
+  return BREAKDOWN_PALETTE[idx];
+}

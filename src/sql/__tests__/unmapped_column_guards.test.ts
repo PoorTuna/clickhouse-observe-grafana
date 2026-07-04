@@ -7,32 +7,13 @@
  */
 
 import {
+  buildLogsByTraceIdQuery,
   buildSurroundingDocsQuery,
-  buildTraceDetailQuery,
-  buildTraceSearchQuery,
   buildVolumeQuery,
+  resolveVolumeBreakdown,
 } from '../queryBuilder';
 import { buildMapKeysQuery } from '../introspection';
-import { EMPTY_COLUMN_MAPPING, OTEL_COLUMN_MAPPING, SourceConfig } from '../../types';
-
-const otelConfig: SourceConfig = {
-  datasourceUid: 'test',
-  database: 'default',
-  logsTable: 'otel_logs',
-  tracesTable: 'otel_traces',
-  isOtel: true,
-  columns: OTEL_COLUMN_MAPPING,
-};
-
-const noTraceIdConfig: SourceConfig = {
-  ...otelConfig,
-  columns: { ...OTEL_COLUMN_MAPPING, traceId: '' },
-};
-
-const noTimestampTracesConfig: SourceConfig = {
-  ...otelConfig,
-  columns: { ...OTEL_COLUMN_MAPPING, timestamp: '', duration: '', serviceName: '' },
-};
+import { EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
 
 const arbitraryConfig: SourceConfig = {
   datasourceUid: 'test',
@@ -43,39 +24,8 @@ const arbitraryConfig: SourceConfig = {
   columns: { ...EMPTY_COLUMN_MAPPING, timestamp: 'ts' },
 };
 
-describe('buildTraceSearchQuery', () => {
-  it('returns empty string when traceId is unmapped', () => {
-    expect(buildTraceSearchQuery(noTraceIdConfig, '')).toBe('');
-  });
-
-  it('degrades gracefully (no "undefined") when timestamp/serviceName/duration are unmapped', () => {
-    const sql = buildTraceSearchQuery(noTimestampTracesConfig, 'checkout');
-    expect(sql).not.toContain('undefined');
-    expect(sql).toContain("'' AS serviceName");
-    expect(sql).toContain('0 AS startTime');
-    expect(sql).toContain('0 AS durationNs');
-    expect(sql).not.toContain('WHERE'); // no timestamp filter, no service search applied
-  });
-});
-
-describe('buildTraceDetailQuery', () => {
-  it('returns empty string when traceId is unmapped', () => {
-    expect(buildTraceDetailQuery(noTraceIdConfig, 'abc')).toBe('');
-  });
-
-  it('degrades gracefully when parentSpanId/serviceName/timestamp/duration are unmapped', () => {
-    const cfg: SourceConfig = {
-      ...otelConfig,
-      columns: { ...OTEL_COLUMN_MAPPING, parentSpanId: '', serviceName: '', timestamp: '', duration: '' },
-    };
-    const sql = buildTraceDetailQuery(cfg, 'abc');
-    expect(sql).not.toContain('undefined');
-    expect(sql).toContain("'' AS parentSpanID");
-    expect(sql).toContain("'' AS serviceName");
-    expect(sql).toContain('0 AS startTime');
-    expect(sql).toContain('0 AS durationNs');
-  });
-});
+// buildTraceListQuery / buildTraceDetailQuery / buildTraceVolumeQuery guard coverage now lives in
+// build_trace_queries.test.ts alongside their other behavior.
 
 describe('buildVolumeQuery', () => {
   it('returns empty string when timestamp is unmapped', () => {
@@ -99,6 +49,45 @@ describe('buildMapKeysQuery', () => {
   it('includes the time filter when timestamp is mapped', () => {
     const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
     expect(sql).toContain('WHERE ts >= $__fromTime');
+  });
+});
+
+describe('buildLogsByTraceIdQuery', () => {
+  it('returns empty string when traceId is unmapped', () => {
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, timestamp: 'ts', body: 'msg' } };
+    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
+  });
+
+  it('returns empty string when timestamp is unmapped', () => {
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', body: 'msg' } };
+    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
+  });
+
+  it('returns empty string when body is unmapped', () => {
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', timestamp: 'ts' } };
+    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
+  });
+
+  it('builds a query with no undefined tokens when all required columns are mapped', () => {
+    const cfg: SourceConfig = {
+      ...arbitraryConfig,
+      columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', timestamp: 'ts', body: 'msg' },
+    };
+    const sql = buildLogsByTraceIdQuery(cfg, 'abc123');
+    expect(sql).not.toContain('undefined');
+    expect(sql).toContain('SELECT ts AS timestamp, msg AS body');
+  });
+});
+
+describe('resolveVolumeBreakdown', () => {
+  it('falls back to "none" when severity breakdown is selected but severity is unmapped', () => {
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING } };
+    expect(resolveVolumeBreakdown({ kind: 'severity' }, cfg)).toEqual({ kind: 'none' });
+  });
+
+  it('uses the mapped severity column when available', () => {
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, severity: 'sev' } };
+    expect(resolveVolumeBreakdown({ kind: 'severity' }, cfg)).toEqual({ kind: 'severity', expr: 'sev' });
   });
 });
 

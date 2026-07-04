@@ -10,28 +10,24 @@
 
 import React, {
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
   KeyboardEvent,
 } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, TimeRange } from '@grafana/data';
+import { GrafanaTheme2 } from '@grafana/data';
 import { Button, Icon, useStyles2 } from '@grafana/ui';
-import { FilterPill, LogsQueryState } from '../types';
 import { useFields } from './FieldsContext';
-import { SourceConfigContext } from './App/App';
 import { getSuggestions, resolveValueContext, Suggestion } from '../sql/kql/suggest';
-import { loadFieldValues } from '../sql/kql/_values';
+import { FieldValue } from '../sql/kql/_values';
 
 interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
   onSearch: () => void;
-  onAddFilter: (filter: FilterPill) => void;
-  timeRange: TimeRange;
-  queryState: LogsQueryState;
+  /** Page-supplied value lookup (Logs and Traces each bind their own table/filters). */
+  loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
   placeholder?: string;
 }
 
@@ -39,12 +35,10 @@ export function SearchBar({
   value,
   onChange,
   onSearch,
-  timeRange,
-  queryState,
+  loadValues,
   placeholder = 'Filter logs with KQL  ·  level:error and service:payment*  ·  responseTime > 500',
 }: SearchBarProps) {
   const styles = useStyles2(getStyles);
-  const config = useContext(SourceConfigContext);
   const { fields } = useFields();
 
   const [inputValue, setInputValue] = useState(value);
@@ -101,7 +95,7 @@ export function SearchBar({
         clearTimeout(debounceRef.current);
       }
       debounceRef.current = setTimeout(async () => {
-        const fetched = await loadFieldValues(config, queryState, timeRange, vctx.sqlExpr, 20);
+        const fetched = await loadValues(vctx.sqlExpr);
         if (!mountedRef.current) {
           return;
         }
@@ -112,7 +106,7 @@ export function SearchBar({
         setOpen(withValues.suggestions.length > 0);
       }, 250);
     },
-    [config, fields, queryState, timeRange]
+    [fields, loadValues]
   );
 
   // ── Input handlers ────────────────────────────────────────────────────────

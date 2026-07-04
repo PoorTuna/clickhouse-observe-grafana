@@ -130,7 +130,8 @@ The Docker dev environment (`npm run server`) runs Grafana with unsigned plugin 
 | Path | Contents |
 |------|----------|
 | `src/pages/` | Top-level page components: `LogsExplorer.tsx`, `TraceExplorer.tsx` |
-| `src/components/` | Shared UI: `SearchBar`, `LogsTable`, `LogDetailDrawer`, `VolumeHistogram`, `TraceWaterfall`, `FilterPills`, `PaginationBar` |
+| `src/components/` | Shared UI: `SearchBar`, `LogsTable`, `LogDetailDrawer`, `VolumeHistogram`, `FilterPills`, `PaginationBar` |
+| `src/components/trace/` | Trace UI: `TraceWaterfall`, `TraceMinimap`, `TraceHeaderStats`, `ServiceMap`, `SpanDetailDrawer` |
 | `src/components/AddFilter/` | Structured filter builder popup (`AddFilterPopover`) |
 | `src/components/FieldSidebar/` | Field discovery sidebar, per-field stats popover |
 | `src/components/AppConfig/` | Plugin configuration page |

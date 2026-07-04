@@ -6,7 +6,7 @@
  * from the query request's time range automatically.
  */
 
-import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
+import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig, TraceListFilters } from '../types';
 import { resolveField } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
@@ -117,7 +117,7 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
   return `${col} ${op} ${quoteString(value)}`;
 }
 
-function buildSearchClause(search: string, config: SourceConfig): string {
+export function buildSearchClause(search: string, config: SourceConfig): string {
   const term = search.trim();
   if (!term) {
     return '';
@@ -308,21 +308,28 @@ export function resolveVolumeBreakdown(breakdown: BreakdownSel, config: SourceCo
     case 'none':
       return { kind: 'none' };
     case 'severity':
-      return { kind: 'severity', expr: config.columns.severity };
+      return config.columns.severity ? { kind: 'severity', expr: config.columns.severity } : { kind: 'none' };
     case 'field':
       return { kind: 'field', expr: breakdown.field.sqlExpr };
   }
 }
 
+export interface FieldTopValuesOpts {
+  /** Table to sample from (e.g. config.logsTable or config.tracesTable). */
+  table: string;
+  /** Pre-built WHERE conditions (from buildWhereConditions / buildTraceWhereConditions). */
+  conditions: string[];
+  limit?: number;
+  sampleSize?: number;
+}
+
 export function buildFieldTopValuesQuery(
   config: SourceConfig,
-  state: LogsQueryState,
   sqlExpr: string,
-  limit = 10,
-  sampleSize = 500
+  opts: FieldTopValuesOpts
 ): string {
-  const tbl = tableRef(config, config.logsTable);
-  const conditions = buildWhereConditions(config, state);
+  const { table, conditions, limit = 10, sampleSize = 500 } = opts;
+  const tbl = tableRef(config, table);
   const tsCol = config.columns.timestamp;
 
   // Sample the most-recent sampleSize rows then aggregate within the sample.
@@ -373,10 +380,88 @@ export function buildSurroundingDocsQuery(
   ].join('\n');
 }
 
-export function buildTraceSearchQuery(
+// Traces is OTel-only by design (see buildTraceListQuery / buildTraceDetailQuery below): traceId/
+// spanId/parentSpanId/status-code semantics, the Events.*/Links.* nested columns, and the
+// `<table>_trace_id_ts` materialized-view naming convention all assume the ClickHouse OTel exporter
+// schema. This mirrors the STATUS_CODE_ERROR literal already used before this file was extended.
+const OTEL_STATUS_ERROR = 'STATUS_CODE_ERROR';
+
+/**
+ * Build the WHERE conditions for trace list + trace volume queries.
+ * Mirrors buildWhereConditions (logs) but traces has no body column, so free-text search falls
+ * back to a spanName ILIKE instead of a hasToken/body search when KQL parsing doesn't apply.
+ */
+export function buildTraceWhereConditions(config: SourceConfig, filters: TraceListFilters): string[] {
+  const c = config.columns;
+  const conditions: string[] = [];
+
+  if (c.timestamp) {
+    conditions.push(`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`);
+  }
+  const search = filters.search.trim();
+  if (search) {
+    const clause = buildSearchClause(search, config);
+    // '' → no body column and KQL parse failed outright; '1=1' → kqlToSql's own no-op sentinel
+    // for a bare term it can't resolve without a body column (see kql/toSql.ts). Both mean
+    // "the term went nowhere" — fall back to matching the operation name instead of silently
+    // dropping the search (empty string) or silently matching everything ('1=1').
+    if (clause && clause !== '1=1') {
+      conditions.push(clause);
+    } else if (c.spanName) {
+      conditions.push(`${c.spanName} ILIKE ${quoteString('%' + search + '%')}`);
+    }
+  }
+  if (filters.service.trim() && c.serviceName) {
+    conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + filters.service.trim() + '%')}`);
+  }
+  if (filters.spanName.trim() && c.spanName) {
+    conditions.push(`${c.spanName} ILIKE ${quoteString('%' + filters.spanName.trim() + '%')}`);
+  }
+  if (filters.spanKind.trim() && c.spanKind) {
+    conditions.push(`${c.spanKind} = ${quoteString(filters.spanKind.trim())}`);
+  }
+  if (filters.status !== 'any' && c.statusCode) {
+    conditions.push(
+      filters.status === 'error'
+        ? `${c.statusCode} = ${quoteString(OTEL_STATUS_ERROR)}`
+        : `${c.statusCode} != ${quoteString(OTEL_STATUS_ERROR)}`
+    );
+  }
+  if (c.duration) {
+    if (filters.minDurationNs !== undefined) {
+      conditions.push(`${c.duration} >= ${filters.minDurationNs}`);
+    }
+    if (filters.maxDurationNs !== undefined) {
+      conditions.push(`${c.duration} <= ${filters.maxDurationNs}`);
+    }
+  }
+  for (const f of filters.pills) {
+    conditions.push(buildFilterClause(f, config));
+  }
+  return conditions;
+}
+
+export interface TraceListSort {
+  col: 'startTime' | 'duration';
+  dir: 'asc' | 'desc';
+}
+
+export interface TraceListPagination {
+  limit: number;
+  offset: number;
+}
+
+/**
+ * One row per trace, aggregated over the traces table. Root service/operation are derived from
+ * the span whose parentSpanId is empty (the true root span); if no root span is present in the
+ * window (e.g. it fell outside the time range, or was sampled out), falls back to the
+ * earliest-starting span so the row is never blank.
+ */
+export function buildTraceListQuery(
   config: SourceConfig,
-  search: string,
-  limit = 100
+  filters: TraceListFilters,
+  sort: TraceListSort = { col: 'startTime', dir: 'desc' },
+  pagination: TraceListPagination = { limit: 100, offset: 0 }
 ): string {
   const c = config.columns;
   // No traceId mapped → no trace concept at all; same gating style as buildLogsByTraceIdQuery.
@@ -384,80 +469,151 @@ export function buildTraceSearchQuery(
     return '';
   }
   const tbl = tableRef(config, config.tracesTable);
+  const conditions = buildTraceWhereConditions(config, filters);
 
-  const conditions: string[] = [];
-  if (c.timestamp) {
-    conditions.push(`${c.timestamp} >= $__fromTime AND ${c.timestamp} <= $__toTime`);
-  }
-  if (search.trim() && c.serviceName) {
-    conditions.push(`${c.serviceName} ILIKE ${quoteString('%' + search.trim() + '%')}`);
-  }
+  const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = ${quoteString(OTEL_STATUS_ERROR)})` : '0';
+  const serviceCountExpr = c.serviceName ? `uniqExact(${c.serviceName})` : '0';
+  const isRoot = c.parentSpanId ? `${c.parentSpanId} = ''` : null;
 
-  // 'STATUS_CODE_ERROR' is the OTel span-status enum value. Unlike logs (which are fully
-  // schema-agnostic), the Traces feature is OTel-only by design — traceId/spanId/parentSpanId/
-  // status-code semantics all assume the OTel trace model, so this literal is intentional, not
-  // a hardcoded-schema bug. Still gated on statusCode being mapped in the first place.
-  const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = 'STATUS_CODE_ERROR')` : '0';
-  const serviceNameSel = c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`;
-  const startTimeSel = c.timestamp ? `min(${c.timestamp}) AS startTime` : `0 AS startTime`;
-  const endTimeSel = c.timestamp ? `max(${c.timestamp}) AS endTime` : `0 AS endTime`;
-  const durationSel = c.duration ? `max(${c.duration}) AS durationNs` : `0 AS durationNs`;
+  const rootServiceSel = !c.serviceName
+    ? `'' AS rootServiceName`
+    : isRoot && c.timestamp
+    ? `if(countIf(${isRoot}) > 0, argMinIf(${c.serviceName}, ${c.timestamp}, ${isRoot}), argMin(${c.serviceName}, ${c.timestamp})) AS rootServiceName`
+    : `any(${c.serviceName}) AS rootServiceName`;
+  const rootOperationSel = !c.spanName
+    ? `'' AS rootOperationName`
+    : isRoot && c.timestamp
+    ? `if(countIf(${isRoot}) > 0, argMinIf(${c.spanName}, ${c.timestamp}, ${isRoot}), argMin(${c.spanName}, ${c.timestamp})) AS rootOperationName`
+    : `any(${c.spanName}) AS rootOperationName`;
+
+  // Compute start/end/duration entirely in nanoseconds server-side, then convert to epoch-ms
+  // client-side exactly once (see SpanRow/TraceRow doc comments in types.ts). Timestamp is assumed
+  // DateTime64(9) per the OTel exporter schema, so toUnixTimestamp64Nano is always valid here.
+  const startNsSel = c.timestamp ? `toUnixTimestamp64Nano(min(${c.timestamp})) AS startNs` : `0 AS startNs`;
+  const endNsSel =
+    c.timestamp && c.duration
+      ? `max(toUnixTimestamp64Nano(${c.timestamp}) + ${c.duration}) AS endNs`
+      : c.timestamp
+      ? `toUnixTimestamp64Nano(max(${c.timestamp})) AS endNs`
+      : `0 AS endNs`;
+
+  const sortCol = sort.col === 'duration' ? 'durationNs' : 'startNs';
 
   return [
     `SELECT`,
     `  ${c.traceId} AS traceId,`,
-    `  ${startTimeSel},`,
-    `  ${endTimeSel},`,
-    `  ${serviceNameSel},`,
+    `  ${startNsSel},`,
+    `  ${endNsSel},`,
+    `  ${rootServiceSel},`,
+    `  ${rootOperationSel},`,
     `  count() AS spanCount,`,
     `  ${errorCountExpr} AS errorCount,`,
-    `  ${durationSel}`,
+    `  ${serviceCountExpr} AS serviceCount,`,
+    `  (endNs - startNs) AS durationNs`,
     `FROM ${tbl}`,
     conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
-    // Constant selects (unmapped serviceName) don't need to appear in GROUP BY.
-    `GROUP BY traceId${c.serviceName ? ', serviceName' : ''}`,
-    `ORDER BY startTime DESC`,
-    `LIMIT ${limit}`,
+    `GROUP BY traceId`,
+    `ORDER BY ${sortCol} ${sort.dir.toUpperCase()}`,
+    `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`,
   ].filter(Boolean).join('\n');
 }
 
-export function buildTraceDetailQuery(config: SourceConfig, traceId: string): string {
+export interface TraceDetailOpts {
+  /** Hard cap on spans returned; the caller shows a "trace truncated" notice when hit. */
+  limit?: number;
+  /**
+   * Use the `<tracesTable>_trace_id_ts` materialized view (created by the standard ClickHouse
+   * OTel exporter) to bound the main table scan to the trace's own [Start, End] window instead of
+   * a full-table `WHERE TraceId = ...` scan. Falls back to a plain scan (still LIMIT-bounded) when
+   * the MV doesn't exist in a given deployment — callers should retry with this set to false if
+   * the indexed query errors (e.g. "table doesn't exist").
+   */
+  useTraceIdIndex?: boolean;
+}
+
+const DEFAULT_TRACE_DETAIL_LIMIT = 10_000;
+
+export function buildTraceDetailQuery(
+  config: SourceConfig,
+  traceId: string,
+  opts: TraceDetailOpts = {}
+): string {
   const c = config.columns;
   // No traceId mapped → no trace concept at all; same gating style as buildLogsByTraceIdQuery.
   if (!c.traceId) {
     return '';
   }
+  const limit = opts.limit ?? DEFAULT_TRACE_DETAIL_LIMIT;
+  const useIndex = opts.useTraceIdIndex ?? true;
   const tbl = tableRef(config, config.tracesTable);
-  const spanAttrSel = c.spanAttributes ? `${c.spanAttributes} AS tags` : `'' AS tags`;
-  const spanIdSel = c.spanId ? `${c.spanId} AS spanID` : `'' AS spanID`;
-  const parentSpanIdSel = c.parentSpanId ? `${c.parentSpanId} AS parentSpanID` : `'' AS parentSpanID`;
+  const quotedId = quoteString(traceId);
+
+  const spanAttrSel = c.spanAttributes ? `${c.spanAttributes} AS attributes` : `map() AS attributes`;
+  const resourceAttrSel = c.resourceAttributes
+    ? `${c.resourceAttributes} AS resourceAttributes`
+    : `map() AS resourceAttributes`;
+  const spanIdSel = c.spanId ? `${c.spanId} AS spanId` : `'' AS spanId`;
+  const parentSpanIdSel = c.parentSpanId ? `${c.parentSpanId} AS parentSpanId` : `'' AS parentSpanId`;
   const serviceNameSel = c.serviceName ? `${c.serviceName} AS serviceName` : `'' AS serviceName`;
   const spanNameSel = c.spanName ? `${c.spanName} AS operationName` : `'' AS operationName`;
+  const spanKindSel = c.spanKind ? `${c.spanKind} AS spanKind` : `'' AS spanKind`;
   const statusCodeSel = c.statusCode ? `${c.statusCode} AS statusCode` : `'' AS statusCode`;
-  const startTimeSel = c.timestamp ? `${c.timestamp} AS startTime` : `0 AS startTime`;
+  const statusMessageSel = c.statusMessage ? `${c.statusMessage} AS statusMessage` : `'' AS statusMessage`;
+  // Same ns-precision rationale as buildTraceListQuery: compute nanosecond epoch server-side once,
+  // convert to ms client-side once — never mix units in between.
+  const startNsSel = c.timestamp ? `toUnixTimestamp64Nano(${c.timestamp}) AS startNs` : `0 AS startNs`;
   const durationSel = c.duration ? `${c.duration} AS durationNs` : `0 AS durationNs`;
+
+  // Events.*/Links.* are fixed OTel exporter columns (not user-mapped) — see OTEL_STATUS_ERROR comment.
+  // Events.Timestamp is converted to numeric nanosecond-epoch server-side (same as startNs) so the
+  // client never has to guess how the datasource serializes a nested Array(DateTime64) column.
+  const eventsSel = `arrayMap(x -> toUnixTimestamp64Nano(x), Events.Timestamp) AS eventsTimestamp, Events.Name AS eventsName, Events.Attributes AS eventsAttributes`;
+  const linksSel = `Links.TraceId AS linksTraceId, Links.SpanId AS linksSpanId, Links.Attributes AS linksAttributes`;
+
+  const traceIdTsTable = tableRef(config, `${config.tracesTable}_trace_id_ts`);
+  // Bounding the scan by [Start, End] is meaningless without a mapped timestamp column to compare
+  // against — skip it rather than emit a comparison against an empty column reference.
+  //
+  // The standard ClickHouse OTel exporter schema stores Start/End as second-precision `DateTime`
+  // even though they're computed via min/max(Timestamp) over a DateTime64(9) column — the insert
+  // silently truncates to the start of that second. `Timestamp <= End` would then wrongly exclude
+  // any span landing after :00 within that final second (i.e. almost every real span, since
+  // sub-second timestamps are the norm). Padding the upper bound by one second keeps the scan
+  // bounded — still far cheaper than a full-table scan — without losing spans to the truncation.
+  const boundsCondition = useIndex && c.timestamp
+    ? [
+        `${c.timestamp} >= (SELECT min(Start) FROM ${traceIdTsTable} WHERE TraceId = ${quotedId})`,
+        `${c.timestamp} <= (SELECT max(End) FROM ${traceIdTsTable} WHERE TraceId = ${quotedId}) + INTERVAL 1 SECOND`,
+      ]
+    : [];
 
   return [
     `SELECT`,
-    `  ${c.traceId} AS traceID,`,
+    `  ${c.traceId} AS traceId,`,
     `  ${spanIdSel},`,
     `  ${parentSpanIdSel},`,
     `  ${serviceNameSel},`,
     `  ${spanNameSel},`,
-    `  ${startTimeSel},`,
+    `  ${spanKindSel},`,
+    `  ${startNsSel},`,
     `  ${durationSel},`,
     `  ${statusCodeSel},`,
-    `  ${spanAttrSel}`,
+    `  ${statusMessageSel},`,
+    `  ${spanAttrSel},`,
+    `  ${resourceAttrSel},`,
+    `  ${eventsSel},`,
+    `  ${linksSel}`,
     `FROM ${tbl}`,
-    `WHERE ${c.traceId} = ${quoteString(traceId)}`,
-    `ORDER BY startTime ASC`,
+    [`WHERE ${c.traceId} = ${quotedId}`, ...boundsCondition].join(' AND '),
+    `ORDER BY startNs ASC`,
+    `LIMIT ${limit}`,
   ].join('\n');
 }
 
 export function buildLogsByTraceIdQuery(config: SourceConfig, traceId: string): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
-  if (!c.traceId) {
+  if (!c.traceId || !c.timestamp || !c.body) {
     return '';
   }
   return [
@@ -467,4 +623,64 @@ export function buildLogsByTraceIdQuery(config: SourceConfig, traceId: string): 
     `ORDER BY timestamp ASC`,
     `LIMIT 500`,
   ].join('\n');
+}
+
+/** Trace-list histogram: same bucketing/breakdown shape as buildVolumeQuery, over the traces table. */
+export function buildTraceVolumeQuery(
+  config: SourceConfig,
+  filters: TraceListFilters,
+  opts: VolumeQueryOpts
+): string {
+  const c = config.columns;
+  if (!c.timestamp) {
+    return '';
+  }
+  const tbl = tableRef(config, config.tracesTable);
+  const { interval, breakdown } = opts;
+  const timeExpr = 'macro' in interval
+    ? `$__timeInterval(${c.timestamp})`
+    : `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
+  const conditions = buildTraceWhereConditions(config, filters);
+  const condSql = conditions.join(' AND ');
+  const whereSql = condSql ? `WHERE ${condSql}` : '';
+
+  if (breakdown.kind === 'none') {
+    return [
+      `SELECT ${timeExpr} AS time, '' AS level, count() AS count`,
+      `FROM ${tbl}`,
+      whereSql || null,
+      `GROUP BY time, level`,
+      `ORDER BY time ASC`,
+    ].filter(Boolean).join('\n');
+  }
+
+  if (breakdown.kind === 'severity') {
+    // Reused for "status" breakdown on traces (breakdown.expr = statusCode column) — the kind name
+    // is generic in VolumeBreakdown, only the expr differs from the logs severity case.
+    return [
+      `SELECT ${timeExpr} AS time, lower(toString(${breakdown.expr})) AS level, count() AS count`,
+      `FROM ${tbl}`,
+      whereSql || null,
+      `GROUP BY time, level`,
+      `ORDER BY time ASC`,
+    ].filter(Boolean).join('\n');
+  }
+
+  const limit = breakdown.limit ?? 10;
+  const exprStr = `toString(${breakdown.expr})`;
+  return [
+    `WITH top AS (`,
+    `  SELECT ${exprStr} AS v`,
+    `  FROM ${tbl}`,
+    whereSql ? `  ${whereSql}` : null,
+    `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
+    `)`,
+    `SELECT ${timeExpr} AS time,`,
+    `       if(${exprStr} GLOBAL IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
+    `       count() AS count`,
+    `FROM ${tbl}`,
+    whereSql || null,
+    `GROUP BY time, level`,
+    `ORDER BY time ASC`,
+  ].filter(Boolean).join('\n');
 }

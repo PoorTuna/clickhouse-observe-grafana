@@ -9,12 +9,12 @@ import { SourceConfig } from '../types';
 const columnCache = new Map<string, FieldModel[]>();
 const mapKeyCache = new Map<string, string[]>();
 
-function columnCacheKey(config: SourceConfig): string {
-  return `${config.datasourceUid}:${config.database}:${config.logsTable}`;
+function columnCacheKey(config: SourceConfig, table: string): string {
+  return `${config.datasourceUid}:${config.database}:${table}`;
 }
 
-function mapKeyCacheKey(config: SourceConfig, mapCol: string, bucket: string): string {
-  return `${config.datasourceUid}:${config.database}:${config.logsTable}:${mapCol}:${bucket}`;
+function mapKeyCacheKey(config: SourceConfig, table: string, mapCol: string, bucket: string): string {
+  return `${config.datasourceUid}:${config.database}:${table}:${mapCol}:${bucket}`;
 }
 
 export function coarseTimeBucket(timeRange: TimeRange): string {
@@ -47,10 +47,21 @@ export function useFields(): FieldsContextValue {
 interface FieldsProviderProps {
   config: SourceConfig;
   timeRange: TimeRange;
+  /** Table to introspect. Defaults to config.logsTable (existing Logs behavior). */
+  table?: string;
+  /** Map(String,String) columns to expand into individual key fields. Defaults to the logs Map columns. */
+  mapColumns?: string[];
   children: React.ReactNode;
 }
 
-export function FieldsProvider({ config, timeRange, children }: FieldsProviderProps) {
+export function FieldsProvider({ config, timeRange, table, mapColumns, children }: FieldsProviderProps) {
+  const resolvedTable = table ?? config.logsTable;
+  const resolvedMapColumns = useMemo(
+    () =>
+      mapColumns ?? [config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mapColumns, config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes]
+  );
   const [fields, setFields] = useState<FieldModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +74,7 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
       return;
     }
     const runId = ++runRef.current;
-    const cKey = columnCacheKey(config);
+    const cKey = columnCacheKey(config, resolvedTable);
 
     if (invalidateColumns) {
       columnCache.delete(cKey);
@@ -78,7 +89,7 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
       try {
         const rows = await runQueryRows({
           datasourceUid: config.datasourceUid,
-          sql: buildColumnsQuery(config.database, config.logsTable),
+          sql: buildColumnsQuery(config.database, resolvedTable),
           timeRange,
         });
         columns = rows
@@ -111,15 +122,11 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
     }
 
     // Phase B: Map keys (time-bounded, cached per table + coarse bucket)
-    const mapCols = [
-      config.columns.resourceAttributes,
-      config.columns.logAttributes,
-      config.columns.scopeAttributes,
-    ].filter(Boolean);
+    const mapCols = resolvedMapColumns.filter(Boolean);
 
     const mapFields: FieldModel[] = [];
     for (const mapCol of mapCols) {
-      const mKey = mapKeyCacheKey(config, mapCol, bucket);
+      const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
       let keys: string[];
       if (mapKeyCache.has(mKey)) {
         keys = mapKeyCache.get(mKey)!;
@@ -127,7 +134,7 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
         try {
           const rows = await runQueryRows({
             datasourceUid: config.datasourceUid,
-            sql: buildMapKeysQuery(config, mapCol),
+            sql: buildMapKeysQuery(config, mapCol, 500, resolvedTable),
             timeRange,
           });
           keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
@@ -162,7 +169,7 @@ export function FieldsProvider({ config, timeRange, children }: FieldsProviderPr
   useEffect(() => {
     loadFields();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.datasourceUid, config.database, config.logsTable, bucket]);
+  }, [config.datasourceUid, config.database, resolvedTable, bucket]);
 
   return (
     <FieldsContext.Provider value={{ fields, loading, error, refresh }}>

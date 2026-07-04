@@ -10,6 +10,31 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.9] — 2026-07-05
+
+### Added
+
+- **Traces explorer** — a new OTel-native trace view: waterfall (virtualized span tree),
+  service map, per-trace header stats, and a span detail drawer with events/links/attributes.
+  Correlates from a log row to its trace, and from a span back to its surrounding logs.
+
+### Fixed
+
+- `buildLogsByTraceIdQuery` now bails out (returns an empty query) when `timestamp` or `body`
+  isn't mapped, instead of interpolating `undefined` into the SQL.
+- `resolveVolumeBreakdown` falls back to no breakdown when `severity` isn't mapped, instead of
+  emitting `lower(toString())` with an empty expression.
+- The trace detail view no longer discards span/resource attributes — the drawer's "Span
+  Attributes" and "Resource Attributes" sections were always empty due to a row-mapping bug.
+- `LogsExplorer`'s default-columns resolver was typed to accept `any`, silently swallowing any
+  future rename/typo on `SourceConfig.columns`; now typed properly.
+
+### Removed
+
+- Committed build artifacts and scratch recordings accidentally left in the working tree.
+
+---
+
 ## [0.2.8] — 2026-07-04
 
 ### Fixed

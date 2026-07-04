@@ -9,15 +9,14 @@
  * multi-value (one_of / not_one_of) and custom label are preserved.
  */
 
-import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2, SelectableValue, TimeRange } from '@grafana/data';
+import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { Button, Icon, Input, Portal, Select, useStyles2 } from '@grafana/ui';
-import { FilterPill, FilterOp, LogsQueryState } from '../../types';
+import { FilterPill, FilterOp } from '../../types';
 import { makeFilter } from '../../sql/filters';
-import { loadFieldValues } from '../../sql/kql/_values';
+import { FieldValue } from '../../sql/kql/_values';
 import { useFields } from '../FieldsContext';
-import { SourceConfigContext } from '../App/App';
 
 // ── Operator definitions (Kibana ordering) ────────────────────────────────────
 
@@ -51,14 +50,13 @@ function opDef(op: FilterOp): OpDef {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface AddFilterPopoverProps {
-  queryState: LogsQueryState;
-  timeRange: TimeRange;
+  /** Page-supplied value lookup (Logs and Traces each bind their own table/filters). */
+  loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
   onAddFilter: (pill: FilterPill) => void;
 }
 
-export function AddFilterPopover({ queryState, timeRange, onAddFilter }: AddFilterPopoverProps) {
+export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverProps) {
   const styles = useStyles2(getStyles);
-  const config = useContext(SourceConfigContext);
   const { fields } = useFields();
 
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -92,7 +90,7 @@ export function AddFilterPopover({ queryState, timeRange, onAddFilter }: AddFilt
     }
     let cancelled = false;
     setLoadingValues(true);
-    loadFieldValues(config, queryState, timeRange, selectedFieldExpr).then((vals) => {
+    loadValues(selectedFieldExpr).then((vals) => {
       if (!cancelled) {
         setValueOptions(vals.map((v) => ({ label: v.value, value: v.value })));
         setLoadingValues(false);
@@ -101,7 +99,7 @@ export function AddFilterPopover({ queryState, timeRange, onAddFilter }: AddFilt
     return () => {
       cancelled = true;
     };
-  }, [selectedFieldExpr, selectedOp, config, queryState, timeRange]);
+  }, [selectedFieldExpr, selectedOp, loadValues]);
 
   const openPopover = useCallback(() => {
     if (anchorRef.current) {

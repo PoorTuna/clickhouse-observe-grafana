@@ -27,9 +27,10 @@ export function buildColumnsQuery(database: string, table: string): string {
 export function buildMapKeysQuery(
   config: SourceConfig,
   mapColumn: string,
-  limit = 500
+  limit = 500,
+  table: string = config.logsTable
 ): string {
-  const tbl = `"${config.database}"."${config.logsTable}"`;
+  const tbl = `"${config.database}"."${table}"`;
   const ts = config.columns.timestamp;
   return [
     `SELECT DISTINCT arrayJoin(mapKeys(${mapColumn})) AS k`,

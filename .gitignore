@@ -34,6 +34,10 @@ dist/
 artifacts/
 work/
 ci/
+poortuna-*/
+
+# Demo/scratch recordings (scripts/record-demo.ts, Playwright)
+*.webm
 
 # e2e test directories
 /test-results/

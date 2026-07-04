@@ -62,6 +62,16 @@ export const COL_FIELDS: Array<{
     description: 'Traces page only — no effect on Logs Explorer.',
   },
   {
+    key: 'statusMessage',
+    label: 'Span status message column',
+    description: 'Traces page only — shown in the span detail drawer when the span has an error.',
+  },
+  {
+    key: 'spanKind',
+    label: 'Span kind column',
+    description: 'Traces page only — enables the client/server/internal icon on each waterfall row.',
+  },
+  {
     key: 'resourceAttributes',
     label: 'Resource Attributes Map column',
     description: 'Adds a "Resource Attributes" section to the log detail drawer and enables autocomplete for its keys.',

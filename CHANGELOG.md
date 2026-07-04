@@ -10,6 +10,21 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.7] — 2026-07-04
+
+### Fixed
+
+- **Query builders no longer emit `undefined`/duplicate columns for unmapped fields on
+  arbitrary tables** — `buildLogsQuery`'s `severity`/`traceId`/`spanId`/`serviceName` phantom
+  `'' AS x` fallbacks are now dropped entirely when unmapped (previously always emitted,
+  risking a duplicate-column collision with `SELECT *` and an ambiguous `ORDER BY timestamp`
+  on tables that happen to have a same-named column). `buildTraceSearchQuery` /
+  `buildTraceDetailQuery` now gate on `traceId` and degrade unmapped fields to constants
+  instead of interpolating `undefined`. `buildVolumeQuery`, `buildMapKeysQuery`, and
+  `buildSurroundingDocsQuery` now gate on `timestamp` being mapped instead of assuming it.
+
+---
+
 ## [0.2.6] — 2026-07-04
 
 ### Added

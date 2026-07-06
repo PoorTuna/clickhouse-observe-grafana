@@ -12,6 +12,7 @@ import {
   Switch,
   TabsBar,
   Tab,
+  Spinner,
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
 import { groupAttributes } from '../sql/schema';
@@ -21,7 +22,19 @@ import { formatTimestamp, severityColor } from './LogsTable';
 import { makeColumnKey } from './FieldSidebar/FieldSidebar';
 
 interface LogDetailDrawerProps {
+  /** Narrow (grid-projection) row — always present, used for the header summary which must
+   * open instantly regardless of whether the full row has hydrated yet. */
   row: LogRow;
+  /**
+   * Full-row data (all columns, incl. Map attribute columns), fetched lazily by the caller and
+   * matched to `row` by content key — see logRowKey() in sql/queryBuilder.ts. Undefined while
+   * unhydrated/hydrating, or in raw-SQL mode where `row` already *is* the full row. Attribute
+   * groups, "All fields", and the JSON tab fall back to `row` when this is absent, so they never
+   * show nothing — just less than once hydration lands.
+   */
+  detailRow?: LogRow;
+  /** True while a hydrate fetch for detailRow's page is in flight. */
+  detailLoading?: boolean;
   config: SourceConfig;
   /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
   columns: SelectedColumn[];
@@ -46,6 +59,8 @@ interface SelectionPopover {
 
 export function LogDetailDrawer({
   row,
+  detailRow,
+  detailLoading,
   config,
   columns,
   onClose,
@@ -77,11 +92,19 @@ export function LogDetailDrawer({
     });
   };
 
+  // Header summary reads the narrow `row` directly — it must render instantly, before/without
+  // the full row ever arriving. Attribute groups / All fields / JSON below read `effectiveRow`,
+  // which is the hydrated full row once available, falling back to the narrow row (never blank).
   const traceId = row[CORE_ALIAS.traceId] ? String(row[CORE_ALIAS.traceId]) : null;
   const timestamp = formatTimestamp(row[CORE_ALIAS.timestamp]);
   const severity = row[CORE_ALIAS.severity] ? String(row[CORE_ALIAS.severity]) : null;
   const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
-  const attrGroups = useMemo(() => groupAttributes(row, config.columns), [row, config.columns]);
+  const effectiveRow = detailRow ?? row;
+  const hydrating = Boolean(detailLoading) && !detailRow;
+  const attrGroups = useMemo(
+    () => groupAttributes(effectiveRow, config.columns),
+    [effectiveRow, config.columns]
+  );
 
   const isColumnSelected = (clickhouseField: string): boolean =>
     columns.some((c) => c.sqlExpr === clickhouseField);
@@ -239,16 +262,21 @@ export function LogDetailDrawer({
       {activeTab === 'json' ? (
         <div className={styles.jsonWrap}>
           <div className={styles.jsonToolbar}>
+            {hydrating && (
+              <span className={styles.hydratingNote}>
+                <Spinner size="sm" /> Loading full row…
+              </span>
+            )}
             <ClipboardButton
               icon="clipboard-alt"
               size="sm"
               variant="secondary"
-              getText={() => JSON.stringify(row, null, 2)}
+              getText={() => JSON.stringify(effectiveRow, null, 2)}
             >
               Copy JSON
             </ClipboardButton>
           </div>
-          <pre className={styles.jsonPre}>{JSON.stringify(row, null, 2)}</pre>
+          <pre className={styles.jsonPre}>{JSON.stringify(effectiveRow, null, 2)}</pre>
         </div>
       ) : (
         <div className={styles.content} onMouseDown={clearSelectionPopover}>
@@ -347,10 +375,11 @@ export function LogDetailDrawer({
             <button className={styles.sectionHeader} onClick={() => toggleSection('raw')}>
               <Icon name={expandedSections.has('raw') ? 'angle-down' : 'angle-right'} />
               <span>All fields</span>
+              {hydrating && <Spinner size="sm" className={styles.hydratingSpinner} />}
             </button>
             {expandedSections.has('raw') && (
               <div className={styles.attrList}>
-                {Object.entries(row)
+                {Object.entries(effectiveRow)
                   .filter(([k]) => !hiddenKeys.has(k) && k !== '')
                   .filter(([k, v]) => filterMatch(k, String(v ?? '')))
                   .filter(([k]) => !selectedOnly || isColumnSelected(k))
@@ -442,7 +471,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   jsonToolbar: css`
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: ${theme.spacing(1)};
+  `,
+  hydratingNote: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.secondary};
+    margin-right: auto;
+  `,
+  hydratingSpinner: css`
+    margin-left: auto;
   `,
   jsonPre: css`
     flex: 1;

@@ -31,6 +31,14 @@ interface SearchBarProps {
   placeholder?: string;
 }
 
+/** Readable short labels for the autocomplete badge — replaces the old single-letter badge. */
+const SUGGESTION_TYPE_LABEL: Record<Suggestion['type'], string> = {
+  field: 'field',
+  operator: 'op',
+  value: 'value',
+  conjunction: 'and/or',
+};
+
 export function SearchBar({
   value,
   onChange,
@@ -241,7 +249,7 @@ export function SearchBar({
                 }}
               >
                 <span className={`${styles.itemBadge} ${styles[`badge_${s.type}`]}`}>
-                  {s.type[0].toUpperCase()}
+                  {SUGGESTION_TYPE_LABEL[s.type]}
                 </span>
                 <span className={styles.itemText}>{s.text}</span>
                 {s.description && (
@@ -347,11 +355,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
   itemBadge: css`
     font-size: 10px;
     font-weight: ${theme.typography.fontWeightMedium};
-    padding: 1px 4px;
+    padding: 1px 6px;
     border-radius: 3px;
     flex-shrink: 0;
-    min-width: 18px;
+    min-width: 40px;
     text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
   `,
   // Per-type badge colors (Kibana-inspired)
   badge_field: css`

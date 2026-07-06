@@ -10,6 +10,33 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.10] — 2026-07-07
+
+### Changed
+
+- **Log detail drawer overhaul** — rebuilt as an Elastic-Discover-style document view: sticky
+  header summary (time, severity, service, prev/next navigation), `Table` / `JSON` tabs, a real
+  two-column field/value layout (long field names now wrap cleanly instead of breaking
+  mid-word), a "selected only" filter, and select-text-in-log-line → "line contains" filtering.
+- **Logs table polish** — per-row severity color stripe, UI-font headers (was monospace), a
+  wrap-lines toggle, `↑`/`↓`/`Enter` keyboard navigation, and proper loading/empty states.
+- **Volume histogram** — added a y-axis scale, horizontal gridlines, several x-axis time ticks
+  (previously just two bare endpoint labels), and a legend in severity mode.
+- Search bar autocomplete badges relabeled from single letters to readable short labels.
+
+### Fixed
+
+- The Log explorer page now scrolls only within the log table, not the whole page — it never
+  adopted the `useAvailableHeight` fix already used by the Traces page for the same Grafana
+  `PageLayoutType.Custom` chrome quirk.
+- "Edit as SQL" no longer sends an empty query when first opened, no longer re-runs the query on
+  every keystroke, and no longer fires an extra request just from toggling the mode on — typing
+  is local until you click **Run query** or press **Ctrl+Enter**.
+- The raw-SQL toggle button's label no longer reads as two different actions ("Edit as SQL" /
+  "Edit SQL") — now a clear "Edit as SQL" / "Back to query builder" pair.
+
+---
+
 ## [0.2.9] — 2026-07-05
 
 ### Added

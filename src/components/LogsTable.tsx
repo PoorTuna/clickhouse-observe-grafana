@@ -1,7 +1,7 @@
-import React from 'react';
-import { css } from '@emotion/css';
+import React, { useState } from 'react';
+import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
-import { Icon, useStyles2 } from '@grafana/ui';
+import { Icon, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
 import { LogRow, SelectedColumn } from '../types';
 import { SEVERITY_COLORS } from '../constants';
 
@@ -15,16 +15,20 @@ interface LogsTableProps {
   onRemoveColumn?: (col: SelectedColumn) => void;
   onMoveColumn?: (id: string, direction: 'left' | 'right') => void;
   selectedRow?: LogRow | null;
+  /** Wrap the message/body cell instead of truncating with an ellipsis. */
+  wrapLines?: boolean;
 }
 
-function severityColor(severity: unknown): string {
+/** Shared with LogDetailDrawer's header summary so the row and detail view agree on color. */
+export function severityColor(severity: unknown): string {
   const s = String(severity || '').toLowerCase();
   return SEVERITY_COLORS[s] ?? SEVERITY_COLORS['unknown'];
 }
 
 const TS_FORMAT = { format: 'YYYY-MM-DD HH:mm:ss.SSS', timeZone: 'browser' } as const;
 
-function formatTimestamp(ts: unknown): string {
+/** Shared with LogDetailDrawer's header summary. */
+export function formatTimestamp(ts: unknown): string {
   if (ts === null || ts === undefined) {
     return '';
   }
@@ -74,21 +78,56 @@ export function LogsTable({
   onRemoveColumn,
   onMoveColumn,
   selectedRow,
+  wrapLines = false,
 }: LogsTableProps) {
   const styles = useStyles2(getStyles);
+  // Roving keyboard focus, independent of `selectedRow` (which opens the detail drawer).
+  // Arrow keys move this; Enter opens the row under it.
+  const [focusIndex, setFocusIndex] = useState(-1);
 
   if (loading) {
-    return <div className={styles.empty}>Loading…</div>;
+    return (
+      <div className={styles.empty}>
+        <LoadingPlaceholder text="Running query…" />
+      </div>
+    );
   }
   if (!loading && rows.length === 0) {
-    return <div className={styles.empty}>No logs found for the selected time range and filters.</div>;
+    return (
+      <div className={styles.empty}>
+        <EmptyState
+          variant="not-found"
+          hideImage
+          message="No logs found for the selected time range and filters."
+        />
+      </div>
+    );
   }
 
+  const onTableKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFocusIndex((i) => Math.min(rows.length - 1, i + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusIndex((i) => Math.max(0, i - 1));
+    } else if (e.key === 'Enter' && focusIndex >= 0 && focusIndex < rows.length) {
+      e.preventDefault();
+      onRowClick(rows[focusIndex]);
+    }
+  };
+
   return (
-    <div className={styles.tableWrapper}>
+    <div
+      className={styles.tableWrapper}
+      role="grid"
+      tabIndex={0}
+      onKeyDown={onTableKeyDown}
+    >
       <table className={styles.table}>
         <thead>
           <tr>
+            <th className={cx(styles.th, styles.expandTh)} aria-hidden="true" />
             {columns.map((col, idx) => {
               const isSorted = sort?.col === col.key;
               return (
@@ -150,27 +189,39 @@ export function LogsTable({
         <tbody>
           {rows.map((row, i) => {
             const isSelected = selectedRow === row;
+            const isFocused = focusIndex === i;
+            const levelCol = columns.find((c) => c.type === 'level');
+            const stripeColor = levelCol ? severityColor(row[levelCol.key]) : 'transparent';
             return (
               <tr
                 key={i}
-                className={`${styles.tr} ${isSelected ? styles.trSelected : ''}`}
-                onClick={() => onRowClick(row)}
+                className={cx(styles.tr, isSelected && styles.trSelected, isFocused && styles.trFocused)}
+                style={{ borderLeftColor: stripeColor }}
+                onClick={() => {
+                  setFocusIndex(i);
+                  onRowClick(row);
+                }}
+                aria-selected={isSelected}
               >
+                <td className={cx(styles.td, styles.expandTd)}>
+                  <Icon name="angle-right" size="xs" className={styles.expandIcon} />
+                </td>
                 {columns.map((col) => (
                   <td
                     key={col.id}
-                    className={`${styles.td} ${col.type === 'text' ? styles.bodyCell : ''}`}
+                    className={cx(styles.td, col.type === 'text' && styles.bodyCell)}
                   >
                     <span
-                      className={
+                      className={cx(
                         col.type === 'time'
                           ? styles.timestamp
                           : col.type === 'level'
                           ? styles.severity
                           : col.type === 'text'
                           ? styles.body
-                          : styles.cell
-                      }
+                          : styles.cell,
+                        col.type === 'text' && wrapLines && styles.wrapped
+                      )}
                     >
                       {renderCell(col, row)}
                     </span>
@@ -193,18 +244,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: 1px solid ${theme.colors.border.weak};
     border-radius: ${theme.shape.radius.default};
     background: ${theme.colors.background.primary};
+    outline: none;
+    &:focus-visible {
+      box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
+    }
   `,
   table: css`
     width: 100%;
     border-collapse: collapse;
     font-size: ${theme.typography.bodySmall.fontSize};
-    font-family: ${theme.typography.fontFamilyMonospace};
   `,
   th: css`
     padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
     text-align: left;
     font-weight: ${theme.typography.fontWeightMedium};
     font-size: ${theme.typography.bodySmall.fontSize};
+    font-family: ${theme.typography.fontFamily};
     color: ${theme.colors.text.secondary};
     border-bottom: 1px solid ${theme.colors.border.medium};
     background: ${theme.colors.background.secondary};
@@ -212,6 +267,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: sticky;
     top: 0;
     z-index: 1;
+  `,
+  expandTh: css`
+    width: 24px;
+    padding-left: ${theme.spacing(1)};
+    padding-right: 0;
+  `,
+  expandTd: css`
+    width: 24px;
+    padding-left: ${theme.spacing(1)};
+    padding-right: 0;
+  `,
+  expandIcon: css`
+    color: ${theme.colors.text.disabled};
   `,
   thInner: css`
     display: flex;
@@ -246,14 +314,23 @@ const getStyles = (theme: GrafanaTheme2) => ({
   tr: css`
     cursor: pointer;
     border-bottom: 1px solid ${theme.colors.border.weak};
+    border-left: 2px solid transparent;
+    transition: background-color 150ms ease;
     &:hover { background: ${theme.colors.action.hover}; }
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
   `,
   trSelected: css`
     background: ${theme.colors.action.selected} !important;
   `,
+  trFocused: css`
+    box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
+  `,
   td: css`
     padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
     vertical-align: top;
+    font-family: ${theme.typography.fontFamilyMonospace};
   `,
   bodyCell: css`
     max-width: 0;
@@ -264,6 +341,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     font-size: 11px;
     display: block;
+    font-variant-numeric: tabular-nums;
   `,
   severity: css`
     font-weight: ${theme.typography.fontWeightMedium};
@@ -277,6 +355,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     text-overflow: ellipsis;
     white-space: nowrap;
     color: ${theme.colors.text.primary};
+  `,
+  wrapped: css`
+    white-space: pre-wrap;
+    word-break: break-word;
   `,
   cell: css`
     color: ${theme.colors.text.secondary};

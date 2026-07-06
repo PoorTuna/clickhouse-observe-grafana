@@ -260,10 +260,29 @@ export function VolumeHistogram({
 
   const hoveredBar = hovered !== null ? bars[hovered.index] : null;
 
+  // A handful of evenly-spaced x-axis tick labels (first/last/quartiles) so the chart reads as a
+  // real timeline instead of two bare endpoint labels.
+  const xTicks = useMemo(() => {
+    if (bars.length === 0) {
+      return [];
+    }
+    const n = bars.length;
+    const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
+    return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
+  }, [bars]);
+
+  const yMid = Math.round(maxTotal / 2);
+
   return (
     <div className={styles.wrapper}>
-      {/* SVG bar chart */}
-      <div className={styles.container} style={{ height }}>
+      {/* SVG bar chart, with a y-axis gutter to its left for scale reference */}
+      <div className={styles.chartRow}>
+        <div className={styles.yAxis} style={{ height }}>
+          <span>{maxTotal.toLocaleString()}</span>
+          <span>{yMid.toLocaleString()}</span>
+          <span>0</span>
+        </div>
+        <div className={styles.container} style={{ height }}>
         <svg
           ref={svgRef}
           width="100%"
@@ -280,6 +299,11 @@ export function VolumeHistogram({
             setHovered(null);
           }}
         >
+          {/* Horizontal gridlines at 0 / 50% / 100% — reference points for reading bar magnitude */}
+          <line x1="0%" x2="100%" y1={0} y2={0} className={styles.gridline} />
+          <line x1="0%" x2="100%" y1={height / 2} y2={height / 2} className={styles.gridline} />
+          <line x1="0%" x2="100%" y1={height - 1} y2={height - 1} className={styles.gridline} />
+
           {/* Hover highlight band — sits behind bars, hidden during drag */}
           {hovered !== null && dragStart.current === null && (
             <rect
@@ -337,10 +361,13 @@ export function VolumeHistogram({
             style={{ pointerEvents: 'none' }}
           />
         </svg>
+        </div>
       </div>
 
-      {/* Breakdown legend — only shown in field-breakdown mode */}
-      {colorMode === 'breakdown' && allLevels.length > 0 && (
+      {/* Legend — severity mode and field-breakdown mode both benefit from it; 'single' has
+          only one color so a legend would add nothing (color-not-only is still satisfied via
+          the numeric tooltip, which never depends on color alone). */}
+      {(colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0 && (
         <div className={styles.legend}>
           {allLevels.map((level) => (
             <div key={level} className={styles.legendItem}>
@@ -354,6 +381,17 @@ export function VolumeHistogram({
         </div>
       )}
 
+      {/* x-axis ticks — evenly spaced reference points across the selected time range, offset by
+          the same gutter width as the y-axis so they stay aligned under the bars. */}
+      <div className={styles.axisRow}>
+        <div className={styles.yAxisSpacer} />
+        <div className={styles.axis}>
+          {xTicks.map((tick) => (
+            <span key={tick.time}>{tick.label}</span>
+          ))}
+        </div>
+      </div>
+
       {/* Hover tooltip */}
       {hoveredBar && hovered && (
         <div
@@ -361,7 +399,8 @@ export function VolumeHistogram({
           style={{
             position: 'fixed',
             left: hovered.clientX + 14,
-            top: hovered.clientY - 80,
+            // Clamp so the tooltip never gets clipped off the top of the viewport.
+            top: Math.max(8, hovered.clientY - 80),
             zIndex: 1000,
             pointerEvents: 'none',
           }}
@@ -408,11 +447,39 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     gap: 2px;
   `,
+  chartRow: css`
+    display: flex;
+    align-items: stretch;
+    gap: ${theme.spacing(0.5)};
+  `,
+  yAxis: css`
+    width: 34px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    text-align: right;
+    font-size: 10px;
+    color: ${theme.colors.text.disabled};
+    font-variant-numeric: tabular-nums;
+    padding: 1px 0;
+  `,
+  yAxisSpacer: css`
+    width: 34px;
+    flex-shrink: 0;
+  `,
   container: css`
     width: 100%;
+    flex: 1;
+    min-width: 0;
   `,
   svg: css`
     display: block;
+  `,
+  gridline: css`
+    stroke: ${theme.colors.border.weak};
+    stroke-width: 1;
+    shape-rendering: crispEdges;
   `,
   highlightBand: css`
     fill: ${theme.colors.action.hover};
@@ -426,6 +493,21 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-wrap: wrap;
     gap: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
     padding: 0 2px ${theme.spacing(0.5)};
+  `,
+  axisRow: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+  `,
+  axis: css`
+    display: flex;
+    justify-content: space-between;
+    flex: 1;
+    min-width: 0;
+    padding: 0 2px;
+    font-size: 10px;
+    color: ${theme.colors.text.disabled};
+    font-variant-numeric: tabular-nums;
   `,
   legendItem: css`
     display: flex;

@@ -2,7 +2,7 @@ import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, us
 import { css } from '@emotion/css';
 import { dateTime, GrafanaTheme2, PageLayoutType, TimeRange } from '@grafana/data';
 import { PluginPage } from '@grafana/runtime';
-import { Button, Icon, Spinner, useStyles2, TimeRangePicker } from '@grafana/ui';
+import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker } from '@grafana/ui';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
@@ -39,17 +39,7 @@ import {
 } from '../types';
 import { PLUGIN_BASE_URL } from '../constants';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
-
-function fallbackCopy(text: string): void {
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
-  document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
-  try { document.execCommand('copy'); } catch { /* best-effort */ }
-  document.body.removeChild(ta);
-}
+import { useAvailableHeight } from '../utils/useAvailableHeight';
 
 const INITIAL_FETCH = 200;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
@@ -143,6 +133,12 @@ export function LogsExplorer() {
   const [queryState, dispatch] = useReducer(queryReducer, DEFAULT_LOGS_QUERY_STATE);
   const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange);
 
+  // Grafana's PageLayoutType.Custom chrome doesn't clamp to the viewport (see useAvailableHeight's
+  // doc comment) — height:100% resolves against nothing, so without this the whole page scrolls
+  // instead of just the log table. Same fix as TraceExplorer.tsx.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const availableHeight = useAvailableHeight(containerRef);
+
   // Reset query state when the active data view changes so stale field refs don't carry over.
   const prevViewId = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -173,7 +169,10 @@ export function LogsExplorer() {
   // Sidebar collapse
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showSqlInspect, setShowSqlInspect] = useState(false);
-  const [sqlCopied, setSqlCopied] = useState(false);
+  const [wrapLines, setWrapLines] = useState(false);
+  // Uncommitted raw-SQL textarea contents — kept local so typing never re-runs the query.
+  // Only `runRawSql` (Run button / Ctrl+Enter) commits it to queryState.rawSql.
+  const [rawSqlDraft, setRawSqlDraft] = useState('');
   const [addToDashboardOpen, setAddToDashboardOpen] = useState(false);
   const canAddToDashboard = useMemo(() => canCreateDashboards(), []);
 
@@ -216,8 +215,10 @@ export function LogsExplorer() {
         ...queryState,
         columns: effectiveColumns,
       };
+      // Fall back to the builder-generated query if rawSql is empty (e.g. raw mode was just
+      // enabled and nothing has been explicitly run yet) — never send a blank query.
       const sql = queryState.useRawSql
-        ? queryState.rawSql
+        ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 })
         : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 });
       const resolved = resolveInterval(intervalMode, timeRange);
       const volSql = buildVolumeQuery(config, queryState, {
@@ -271,9 +272,21 @@ export function LogsExplorer() {
     latestExecuteQuery.current = executeQuery;
   });
 
+  // Tracks the previous useRawSql value so the auto-run effect below can tell "just switched
+  // into raw mode" apart from any other queryState change.
+  const prevUseRawSql = useRef(queryState.useRawSql);
+
   useEffect(() => {
+    // Entering raw-SQL mode alone shouldn't fetch: the textarea is seeded with whatever query
+    // is already on screen (see onToggleRawSql), so there's nothing new to run yet — only the
+    // explicit Run button / Ctrl+Enter (runRawSql) should trigger a request from here on.
+    const enteringRawMode = !prevUseRawSql.current && queryState.useRawSql;
+    prevUseRawSql.current = queryState.useRawSql;
+    if (enteringRawMode) {
+      return;
+    }
     executeQuery();
-  }, [executeQuery]);
+  }, [executeQuery, queryState.useRawSql]);
 
   const onAddFilter = (filter: FilterPill) => {
     dispatch({
@@ -391,19 +404,33 @@ export function LogsExplorer() {
     setCurrentPage(0);
   }, []);
 
-  const effectiveSql = queryState.useRawSql
-    ? queryState.rawSql
-    : buildLogsQuery(config, { ...queryState, columns: effectiveColumns });
+  // What the visual builder would produce right now — used for the "Inspect SQL" preview/copy
+  // and as the seed value when switching into raw-SQL mode (see onToggleRawSql below).
+  const builderSql = buildLogsQuery(config, { ...queryState, columns: effectiveColumns });
+
+  const onToggleRawSql = () => {
+    if (!queryState.useRawSql) {
+      // Entering raw mode: show the last query that actually ran (custom SQL if one was run
+      // before, otherwise the builder's current query) — never start from a blank textarea.
+      setRawSqlDraft(queryState.rawSql || builderSql);
+    }
+    dispatch({ type: 'TOGGLE_RAW_SQL' });
+  };
+
+  const runRawSql = () => dispatch({ type: 'SET_RAW_SQL', sql: rawSqlDraft });
 
   const pageRows = useMemo(
     () => rows.slice(currentPage * pageSize, currentPage * pageSize + pageSize),
     [rows, currentPage, pageSize]
   );
+  // Reference-equality lookup — pageRows are slices of the same row objects, so this holds
+  // even across re-renders as long as selectedRow came from onRowClick(row).
+  const selectedIndex = selectedRow ? pageRows.indexOf(selectedRow) : -1;
 
   return (
     <FieldsProvider config={config} timeRange={timeRange}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
-      <div className={styles.container}>
+      <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
         {/* Row 1: view picker (left) + controls (right) */}
         <div className={styles.header}>
           <DataViewPicker />
@@ -473,50 +500,59 @@ export function LogsExplorer() {
           <div className={styles.sqlActions}>
             <button
               className={styles.sqlToggle}
-              onClick={() => dispatch({ type: 'TOGGLE_RAW_SQL' })}
-              title="For regex, ClickHouse functions, and other advanced queries, switch to raw SQL"
+              onClick={onToggleRawSql}
+              title={
+                queryState.useRawSql
+                  ? 'Discard raw SQL and go back to the visual query builder'
+                  : 'For regex, ClickHouse functions, and other advanced queries, switch to raw SQL'
+              }
             >
-              {queryState.useRawSql ? '▾ Edit SQL' : '▸ Edit as SQL'}
+              <Icon name={queryState.useRawSql ? 'angle-down' : 'angle-right'} size="xs" />
+              {queryState.useRawSql ? 'Back to query builder' : 'Edit as SQL'}
             </button>
             <button
               className={styles.sqlToggle}
               onClick={() => setShowSqlInspect((v) => !v)}
               title="Inspect the SQL query that will be sent to ClickHouse"
             >
-              {showSqlInspect ? '▾ Hide SQL' : '▸ Inspect SQL'}
+              <Icon name={showSqlInspect ? 'angle-down' : 'angle-right'} size="xs" />
+              {showSqlInspect ? 'Hide SQL' : 'Inspect SQL'}
             </button>
           </div>
           {queryState.useRawSql && (
-            <textarea
-              className={styles.sqlEditor}
-              value={queryState.rawSql || effectiveSql}
-              onChange={(e) => dispatch({ type: 'SET_RAW_SQL', sql: e.target.value })}
-              rows={6}
-            />
+            <>
+              <textarea
+                className={styles.sqlEditor}
+                value={rawSqlDraft}
+                onChange={(e) => setRawSqlDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    runRawSql();
+                  }
+                }}
+                rows={6}
+              />
+              <div className={styles.sqlRunRow}>
+                <Button size="sm" variant="primary" onClick={runRawSql}>
+                  Run query
+                </Button>
+                <span className={styles.sqlRunHint}>Ctrl+Enter</span>
+              </div>
+            </>
           )}
           {showSqlInspect && !queryState.useRawSql && (
             <div className={styles.sqlInspect}>
-              <pre className={styles.sqlInspectPre}>{effectiveSql}</pre>
-              <button
+              <pre className={styles.sqlInspectPre}>{builderSql}</pre>
+              <ClipboardButton
                 className={styles.sqlCopyBtn}
-                onClick={() => {
-                  const copied = () => {
-                    setSqlCopied(true);
-                    setTimeout(() => setSqlCopied(false), 2000);
-                  };
-                  if (navigator.clipboard) {
-                    navigator.clipboard.writeText(effectiveSql).then(copied).catch(() => {
-                      fallbackCopy(effectiveSql);
-                      copied();
-                    });
-                  } else {
-                    fallbackCopy(effectiveSql);
-                    copied();
-                  }
-                }}
+                size="sm"
+                variant="secondary"
+                icon="clipboard-alt"
+                getText={() => builderSql}
               >
-                {sqlCopied ? 'Copied!' : 'Copy'}
-              </button>
+                Copy
+              </ClipboardButton>
             </div>
           )}
         </div>
@@ -594,7 +630,10 @@ export function LogsExplorer() {
           )}
 
           <div className={styles.results}>
-            {loading && (
+            {/* Only overlay when we already have rows to show underneath (a refetch) —
+                the initial-load case is handled by LogsTable's own loading state, so the
+                two never show at once. */}
+            {loading && rows.length > 0 && (
               <div className={styles.loadingOverlay}>
                 <div className={styles.loadingContent}>
                   <Spinner size="xl" />
@@ -602,6 +641,13 @@ export function LogsExplorer() {
                 </div>
               </div>
             )}
+            <div className={styles.tableToolbar}>
+              <div className={styles.headerSpacer} />
+              <label className={styles.wrapToggleLabel}>
+                <Switch value={wrapLines} onChange={(e) => setWrapLines(e.currentTarget.checked)} />
+                Wrap lines
+              </label>
+            </div>
             <LogsTable
               rows={pageRows}
               loading={loading && rows.length === 0}
@@ -612,6 +658,7 @@ export function LogsExplorer() {
               onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
               onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
               selectedRow={selectedRow}
+              wrapLines={wrapLines}
             />
             <PaginationBar
               page={currentPage}
@@ -631,11 +678,13 @@ export function LogsExplorer() {
           <LogDetailDrawer
             row={selectedRow}
             config={config}
+            columns={effectiveColumns}
             onClose={() => setSelectedRow(null)}
             onAddFilter={(f) => {
               onAddFilter(f);
               setSelectedRow(null);
             }}
+            onToggleColumn={onToggleColumn}
             onViewTrace={
               caps.hasTraces && selectedRow[CORE_ALIAS.traceId]
                 ? (traceId) => {
@@ -643,6 +692,13 @@ export function LogsExplorer() {
                   }
                 : undefined
             }
+            onPrev={selectedIndex > 0 ? () => setSelectedRow(pageRows[selectedIndex - 1]) : undefined}
+            onNext={
+              selectedIndex >= 0 && selectedIndex < pageRows.length - 1
+                ? () => setSelectedRow(pageRows[selectedIndex + 1])
+                : undefined
+            }
+            navLabel={selectedIndex >= 0 ? `${selectedIndex + 1} of ${pageRows.length}` : undefined}
           />
         )}
 
@@ -696,6 +752,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: center;
   `,
   sqlToggle: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
     background: transparent;
     border: none;
     cursor: pointer;
@@ -745,6 +804,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.primary};
     resize: vertical;
     outline: none;
+  `,
+  sqlRunRow: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+  `,
+  sqlRunHint: css`
+    font-size: 11px;
+    color: ${theme.colors.text.disabled};
   `,
   error: css`
     padding: ${theme.spacing(1)};
@@ -797,6 +865,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: relative;
     display: flex;
     flex-direction: column;
+  `,
+  tableToolbar: css`
+    display: flex;
+    align-items: center;
+    padding-bottom: ${theme.spacing(0.5)};
+  `,
+  wrapToggleLabel: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.75)};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.secondary};
+    cursor: pointer;
+    white-space: nowrap;
   `,
   sidebarRail: css`
     width: 28px;

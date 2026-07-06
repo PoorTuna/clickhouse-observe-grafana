@@ -10,6 +10,21 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.12] — 2026-07-07
+
+### Changed
+
+- **Logs Explorer list query no longer sends `SELECT *`.** The grid query now projects only the
+  columns it renders; the detail drawer lazily fetches the full row (Map attribute columns,
+  "All fields", JSON tab) per page on first open, matched to the grid row by content key
+  (timestamp+body+severity+service) rather than row offset, so it can never attach the wrong
+  row's attributes. Raw-SQL mode is unaffected — those rows already carry whatever the user's
+  own query selected. Cuts the data transferred per page/load-more substantially on tables with
+  large `Map(String,String)` columns (e.g. OTel `ResourceAttributes`/`LogAttributes`/
+  `ScopeAttributes`).
+
+---
+
 ## [0.2.11] — 2026-07-07
 
 ### Fixed

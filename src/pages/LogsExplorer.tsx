@@ -18,7 +18,7 @@ import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
-import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, CORE_ALIAS } from '../sql/queryBuilder';
+import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
 import { loadFieldValues } from '../sql/kql/_values';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
@@ -145,6 +145,20 @@ export function LogsExplorer() {
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
 
+  // Detail-drawer hydration: the grid query is narrowed (no SELECT *, see executeQuery below),
+  // so the drawer's full row (Map attribute columns, "All fields", JSON) is fetched lazily per
+  // page, keyed by logRowKey() rather than row offset/index — see buildLogsQuery's
+  // BuildLogsQueryOpts doc comment for why offset-based matching isn't safe here.
+  // State (not a ref) because detailRow below reads it during render — a ref's `.current` can
+  // only be read in effects/handlers, not render.
+  const [hydratedRows, setHydratedRows] = useState<Map<string, LogRow>>(new Map());
+  // Pages whose full rows are already cached (success only — a failed fetch is retryable).
+  const hydratedPagesRef = useRef<Set<number>>(new Set());
+  // Pages with a hydrate fetch in flight, so re-opening the drawer on the same page while the
+  // first fetch is still running doesn't fire a second identical query.
+  const hydratingPagesRef = useRef<Set<number>>(new Set());
+  const [detailLoading, setDetailLoading] = useState(false);
+
   // Histogram controls.
   // Breakdown initial value is set once at mount — no effect ever forces it back,
   // so user choices (including "No breakdown") always persist.
@@ -210,6 +224,11 @@ export function LogsExplorer() {
     const runId = ++runRef.current;
     setLoading(true);
     setError(null);
+    // A new list query invalidates any previously hydrated detail rows/pages — they were
+    // fetched under the old filters/time range/sort and would otherwise mismatch the new rows.
+    setHydratedRows(new Map());
+    hydratedPagesRef.current = new Set();
+    hydratingPagesRef.current = new Set();
 
     try {
       const stateWithCols: LogsQueryState = {
@@ -217,10 +236,13 @@ export function LogsExplorer() {
         columns: effectiveColumns,
       };
       // Fall back to the builder-generated query if rawSql is empty (e.g. raw mode was just
-      // enabled and nothing has been explicitly run yet) — never send a blank query.
+      // enabled and nothing has been explicitly run yet) — never send a blank query. Builder-mode
+      // requests project only the grid's columns (no SELECT *) — the drawer lazily hydrates the
+      // full row per page instead (see hydratePage below). Raw-SQL mode is untouched: whatever
+      // the user wrote runs as-is, and the drawer reads straight off those rows, same as before.
       const sql = queryState.useRawSql
         ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 })
-        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 });
+        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' });
       const resolved = resolveInterval(intervalMode, timeRange);
       const volSql = buildVolumeQuery(config, queryState, {
         interval: { unit: resolved.unit, value: resolved.value },
@@ -268,6 +290,67 @@ export function LogsExplorer() {
       }
     }
   }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown, caps.hasTime]);
+
+  // Fetches the full ('full' projection) rows for one grid page, so the detail drawer can show
+  // Map attribute columns / "All fields" / JSON without the live list query paying SELECT *'s
+  // cost for every row. Raw-SQL mode is exempt: those rows already carry whatever the user's own
+  // query selected, so there's nothing to hydrate (see the `detailRow` memo below).
+  const hydratePage = useCallback(
+    async (pageIndex: number) => {
+      if (
+        queryState.useRawSql ||
+        !config.datasourceUid ||
+        hydratedPagesRef.current.has(pageIndex) ||
+        hydratingPagesRef.current.has(pageIndex)
+      ) {
+        return;
+      }
+      hydratingPagesRef.current.add(pageIndex);
+      const runId = runRef.current;
+      setDetailLoading(true);
+      try {
+        const stateWithCols: LogsQueryState = {
+          ...queryState,
+          columns: effectiveColumns,
+        };
+        const sql = buildLogsQuery(
+          config,
+          stateWithCols,
+          { limit: pageSize, offset: pageIndex * pageSize },
+          { projection: 'full' }
+        );
+        const fullRows = await runQueryRows({
+          datasourceUid: config.datasourceUid,
+          sql,
+          timeRange,
+          refId: 'detail',
+        });
+        // Discard if a new list query (executeQuery) started while this was in flight — its
+        // reset already cleared hydratedRows, so writing into it here would resurrect stale
+        // data under the new query's key space.
+        if (runRef.current !== runId) {
+          return;
+        }
+        setHydratedRows((prev) => {
+          const next = new Map(prev);
+          for (const r of fullRows) {
+            next.set(logRowKey(r), r);
+          }
+          return next;
+        });
+        hydratedPagesRef.current.add(pageIndex);
+      } catch {
+        // Leave the page unmarked as hydrated so the next drawer-open on this page retries,
+        // rather than permanently degrading to summary-only after one transient failure.
+      } finally {
+        hydratingPagesRef.current.delete(pageIndex);
+        if (runRef.current === runId) {
+          setDetailLoading(false);
+        }
+      }
+    },
+    [config, queryState, effectiveColumns, timeRange, pageSize]
+  );
 
   useLayoutEffect(() => {
     latestExecuteQuery.current = executeQuery;
@@ -362,10 +445,14 @@ export function LogsExplorer() {
           columns: effectiveColumns,
         };
         const chunkSize = needed - currentRows.length;
-        const sql = buildLogsQuery(config, stateWithCols, {
-          limit: chunkSize,
-          offset: currentRows.length,
-        });
+        // Load-more chunks are builder-mode only (raw-SQL is excluded above), so narrow the
+        // same way the initial fetch in executeQuery does.
+        const sql = buildLogsQuery(
+          config,
+          stateWithCols,
+          { limit: chunkSize, offset: currentRows.length },
+          { projection: 'grid' }
+        );
         const chunk = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
         if (runRef.current !== runId) {
           return currentRows;
@@ -406,8 +493,16 @@ export function LogsExplorer() {
   }, []);
 
   // What the visual builder would produce right now — used for the "Inspect SQL" preview/copy
-  // and as the seed value when switching into raw-SQL mode (see onToggleRawSql below).
-  const builderSql = buildLogsQuery(config, { ...queryState, columns: effectiveColumns });
+  // and as the seed value when switching into raw-SQL mode (see onToggleRawSql below). Uses the
+  // same 'grid' projection as the live list query so this always reflects what's actually sent
+  // to ClickHouse (raw mode, once entered, has no hydration — the user can add columns/`*` by
+  // hand if they need the full row while hand-editing).
+  const builderSql = buildLogsQuery(
+    config,
+    { ...queryState, columns: effectiveColumns },
+    undefined,
+    { projection: 'grid' }
+  );
 
   const onToggleRawSql = () => {
     if (!queryState.useRawSql) {
@@ -427,6 +522,30 @@ export function LogsExplorer() {
   // Reference-equality lookup — pageRows are slices of the same row objects, so this holds
   // even across re-renders as long as selectedRow came from onRowClick(row).
   const selectedIndex = selectedRow ? pageRows.indexOf(selectedRow) : -1;
+
+  // Ensure the current page's full rows are hydrated whenever the drawer is open (covers both
+  // opening a row and paging prev/next across a page boundary while it's open).
+  useEffect(() => {
+    if (selectedRow) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      hydratePage(currentPage);
+    }
+  }, [selectedRow, currentPage, hydratePage]);
+
+  // Looks up the lazily-hydrated full row by content key. Undefined here covers two cases the
+  // drawer treats identically (falls back to the narrow `row` prop): "not hydrated yet" in
+  // builder mode, and raw-SQL mode — hydratePage never populates hydratedRows there, since
+  // `row` itself already carries whatever the user's own query selected (no narrowing happens
+  // in raw mode). Deliberately NOT branching on queryState.useRawSql here: toggling that flag
+  // alone (before running anything) doesn't change `rows`/selectedRow, so a lookup keyed only
+  // on the row's content stays stable across the toggle — no flicker of previously-hydrated
+  // attributes just from opening the raw-SQL editor.
+  const detailRow = useMemo(() => {
+    if (!selectedRow) {
+      return undefined;
+    }
+    return hydratedRows.get(logRowKey(selectedRow));
+  }, [selectedRow, hydratedRows]);
 
   return (
     <FieldsProvider config={config} timeRange={timeRange}>
@@ -678,6 +797,8 @@ export function LogsExplorer() {
         {selectedRow && (
           <LogDetailDrawer
             row={selectedRow}
+            detailRow={detailRow}
+            detailLoading={detailLoading}
             config={config}
             columns={effectiveColumns}
             onClose={() => setSelectedRow(null)}

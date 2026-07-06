@@ -25,6 +25,24 @@ export const CORE_ALIAS = {
   serviceName: '__serviceName',
 } as const;
 
+/**
+ * Content key for matching a narrow ('grid' projection) row to its later-hydrated ('full'
+ * projection) counterpart — used by LogsExplorer to attach full-row data (Map attribute columns,
+ * "All fields", JSON) to the detail drawer without depending on row offset/order, which
+ * ClickHouse doesn't guarantee to be stable across two separate queries when sort keys tie.
+ * Built only from the `__`-aliased core values both projections always emit identically, so it
+ * needs no knowledge of which columns are mapped — unmapped ones are simply `undefined` on both
+ * sides and still compare equal.
+ */
+export function logRowKey(row: Record<string, unknown>): string {
+  return JSON.stringify([
+    row[CORE_ALIAS.timestamp] ?? null,
+    row[CORE_ALIAS.body] ?? null,
+    row[CORE_ALIAS.severity] ?? null,
+    row[CORE_ALIAS.serviceName] ?? null,
+  ]);
+}
+
 export function quoteIdentifier(name: string): string {
   if (name.includes('[') || name.includes('(') || name.includes('.')) {
     return name;
@@ -165,10 +183,21 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
   return conditions;
 }
 
+export interface BuildLogsQueryOpts {
+  /**
+   * 'full' (default): SELECT * plus the core/extra aliases — every column, needed by the log
+   * detail drawer (Resource/Log/Scope/Span Attributes, "All fields", JSON tab all read the raw
+   * row). 'grid': omit the `*` — only the core/extra aliases the results grid actually renders.
+   * Callers that don't pass this get the historical SELECT * behavior unchanged.
+   */
+  projection?: 'grid' | 'full';
+}
+
 export function buildLogsQuery(
   config: SourceConfig,
   state: LogsQueryState,
-  pagination?: { limit: number; offset: number }
+  pagination?: { limit: number; offset: number },
+  opts?: BuildLogsQueryOpts
 ): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
@@ -195,7 +224,12 @@ export function buildLogsQuery(
     .filter((col) => !col.isCore)
     .map((col) => `${col.sqlExpr} AS ${col.key}`);
 
-  const selectParts = ['*', ...coreSelect, ...extraSelect];
+  // Grid projection only ever omits `*` when there's at least one aliased/extra column to take
+  // its place — an arbitrary table with nothing mapped and no user-added columns would otherwise
+  // produce an empty (invalid) SELECT list, so fall back to `*` in that case.
+  const gridSelect = [...coreSelect, ...extraSelect];
+  const selectParts =
+    opts?.projection === 'grid' && gridSelect.length > 0 ? gridSelect : ['*', ...coreSelect, ...extraSelect];
   const conditions = buildWhereConditions(config, state);
 
   const sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);

@@ -139,19 +139,6 @@ export function LogsExplorer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const availableHeight = useAvailableHeight(containerRef);
 
-  // Reset query state when the active data view changes so stale field refs don't carry over.
-  const prevViewId = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const viewId = activeView?.id;
-    if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
-      dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
-      // Re-derive capabilities from the latest config (updates with activeView).
-      const newCaps = viewCapabilities(config);
-      setBreakdown(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
-    }
-    prevViewId.current = viewId;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeView?.id]);
   const [rows, setRows] = useState<LogRow[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -165,6 +152,20 @@ export function LogsExplorer() {
   const [breakdown, setBreakdown] = useState<BreakdownSel>(() =>
     caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' }
   );
+
+  // Reset query state when the active data view changes so stale field refs don't carry over.
+  const prevViewId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const viewId = activeView?.id;
+    if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
+      dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
+      // Re-derive capabilities from the latest config (updates with activeView).
+      const newCaps = viewCapabilities(config);
+      setBreakdown(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
+    }
+    prevViewId.current = viewId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView?.id]);
 
   // Sidebar collapse
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -228,7 +229,7 @@ export function LogsExplorer() {
 
       const volPromise = caps.hasTime
         ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' })
-        : Promise.resolve<ReturnType<typeof Object>[]>([]);
+        : Promise.resolve<Array<ReturnType<typeof Object>>>([]);
 
       const [logRows, volRows] = await Promise.all([
         runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' }),
@@ -266,7 +267,7 @@ export function LogsExplorer() {
         setLoading(false);
       }
     }
-  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown]);
+  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown, caps.hasTime]);
 
   useLayoutEffect(() => {
     latestExecuteQuery.current = executeQuery;

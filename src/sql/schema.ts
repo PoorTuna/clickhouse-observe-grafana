@@ -72,7 +72,7 @@ export function parseMapValue(raw: unknown): Record<string, string> {
 export function groupAttributes(
   row: Record<string, unknown>,
   columns: ColumnMapping
-): { group: AttributeGroup; label: string; col: string; attrs: Record<string, string> }[] {
+): Array<{ group: AttributeGroup; label: string; col: string; attrs: Record<string, string> }> {
   const groups: Array<{ group: AttributeGroup; label: string; col: string }> = [
     { group: 'resource', label: 'Resource Attributes', col: columns.resourceAttributes },
     { group: 'log', label: 'Log Attributes', col: columns.logAttributes },

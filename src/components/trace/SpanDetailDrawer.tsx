@@ -54,11 +54,14 @@ export function SpanDetailDrawer({
       return next;
     });
 
+  // Fetches logs for this trace async and mirrors loading/error/result into state — an
+  // external fetch synced to React, not a render-time update.
   useEffect(() => {
     if (!config.datasourceUid || !config.columns.traceId || !config.logsTable) {
       return;
     }
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLogsLoading(true);
     setLogsError(null);
     const sql = buildLogsByTraceIdQuery(config, span.traceId);

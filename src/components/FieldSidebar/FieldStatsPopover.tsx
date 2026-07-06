@@ -112,8 +112,11 @@ export function FieldStatsPopover({
     }
   }, [config, field.sqlExpr, queryState, timeRange]);
 
+  // load() fetches top values async and mirrors the result into state — an external fetch
+  // synced to React, not a render-time update.
   useEffect(() => {
     mountedRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     return () => {
       mountedRef.current = false;

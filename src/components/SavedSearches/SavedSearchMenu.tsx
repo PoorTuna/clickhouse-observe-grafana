@@ -26,11 +26,14 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad, activeDataViewI
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Re-reads localStorage (an external source, not React state) each time the menu opens,
+  // so saved/deleted searches from other tabs/components show up on next open.
   useEffect(() => {
     if (open) {
       const all = loadSavedSearches();
       // Show searches for the active view + legacy searches (no dataViewId) when a view is set;
       // show all when no view is active (shouldn't happen in practice).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSearches(
         activeDataViewId
           ? all.filter((s) => !s.dataViewId || s.dataViewId === activeDataViewId)

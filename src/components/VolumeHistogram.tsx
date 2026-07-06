@@ -44,9 +44,9 @@ export interface ResolvedInterval {
 }
 
 function formatDuration(sec: number): string {
-  if (sec < 60)    return `${sec} second${sec !== 1 ? 's' : ''}`;
-  if (sec < 3_600) return `${sec / 60} minute${sec / 60 !== 1 ? 's' : ''}`;
-  if (sec < 86_400) return `${sec / 3_600} hour${sec / 3_600 !== 1 ? 's' : ''}`;
+  if (sec < 60)    {return `${sec} second${sec !== 1 ? 's' : ''}`;}
+  if (sec < 3_600) {return `${sec / 60} minute${sec / 60 !== 1 ? 's' : ''}`;}
+  if (sec < 86_400) {return `${sec / 3_600} hour${sec / 3_600 !== 1 ? 's' : ''}`;}
   return `${sec / 86_400} day${sec / 86_400 !== 1 ? 's' : ''}`;
 }
 
@@ -113,7 +113,11 @@ export function VolumeHistogram({
 }: VolumeHistogramProps) {
   const styles = useStyles2(getStyles);
   const svgRef = useRef<SVGSVGElement>(null);
+  // dragStart holds the live drag-anchor value used by the imperative mouse-move math below.
+  // isDragging mirrors "is a drag in progress" into state so the render below (hover band
+  // visibility) doesn't read a ref during render.
   const dragStart = useRef<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const selectionRef = useRef<SVGRectElement | null>(null);
   const [hovered, setHovered] = useState<HoveredBucket | null>(null);
 
@@ -180,6 +184,18 @@ export function VolumeHistogram({
     return { bars, maxTotal, allLevels, totalCount, colorMap };
   }, [data, colorMode]);
 
+  // A handful of evenly-spaced x-axis tick labels (first/last/quartiles) so the chart reads as a
+  // real timeline instead of two bare endpoint labels. Computed before the early return below so
+  // hook order stays stable across renders.
+  const xTicks = useMemo(() => {
+    if (bars.length === 0) {
+      return [];
+    }
+    const n = bars.length;
+    const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
+    return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
+  }, [bars]);
+
   if (!data.length) {
     return null;
   }
@@ -207,6 +223,7 @@ export function VolumeHistogram({
       return;
     }
     dragStart.current = getSvgXPct(e);
+    setIsDragging(true);
     setHovered(null);
   };
 
@@ -239,12 +256,14 @@ export function VolumeHistogram({
   const handleMouseUp = (e: React.MouseEvent<SVGSVGElement>) => {
     if (dragStart.current === null || !onSelectRange) {
       dragStart.current = null;
+      setIsDragging(false);
       return;
     }
     const end = getSvgXPct(e);
     const x1 = Math.min(dragStart.current, end);
     const x2 = Math.max(dragStart.current, end);
     dragStart.current = null;
+    setIsDragging(false);
     if (selectionRef.current) {
       selectionRef.current.setAttribute('display', 'none');
     }
@@ -259,17 +278,6 @@ export function VolumeHistogram({
   };
 
   const hoveredBar = hovered !== null ? bars[hovered.index] : null;
-
-  // A handful of evenly-spaced x-axis tick labels (first/last/quartiles) so the chart reads as a
-  // real timeline instead of two bare endpoint labels.
-  const xTicks = useMemo(() => {
-    if (bars.length === 0) {
-      return [];
-    }
-    const n = bars.length;
-    const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
-    return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
-  }, [bars]);
 
   const yMid = Math.round(maxTotal / 2);
 
@@ -293,6 +301,7 @@ export function VolumeHistogram({
           onMouseUp={handleMouseUp}
           onMouseLeave={() => {
             dragStart.current = null;
+            setIsDragging(false);
             if (selectionRef.current) {
               selectionRef.current.setAttribute('display', 'none');
             }
@@ -305,7 +314,7 @@ export function VolumeHistogram({
           <line x1="0%" x2="100%" y1={height - 1} y2={height - 1} className={styles.gridline} />
 
           {/* Hover highlight band — sits behind bars, hidden during drag */}
-          {hovered !== null && dragStart.current === null && (
+          {hovered !== null && !isDragging && (
             <rect
               x={`${(hovered.index / bars.length) * 100}%`}
               y={0}

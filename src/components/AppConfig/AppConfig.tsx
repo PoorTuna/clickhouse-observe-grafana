@@ -32,14 +32,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
 
-  const [dsOptions, setDsOptions] = useState<Array<{ label: string; value: string }>>([]);
-  React.useEffect(() => {
+  // Datasource list is read synchronously from getDataSourceSrv() (no fetch), so it's
+  // lazy-initialized here instead of populated from an effect.
+  const [dsOptions] = useState<Array<{ label: string; value: string }>>(() => {
     try {
       const list = getDataSourceSrv().getList();
       const ch = list.filter((ds) => (ds.type ?? '').toLowerCase().includes('clickhouse'));
-      setDsOptions(ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name })));
-    } catch {}
-  }, []);
+      return ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name }));
+    } catch {
+      return [];
+    }
+  });
 
   function patchView(id: string, patch: Partial<DataView>) {
     setViews((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));

@@ -57,11 +57,11 @@ export async function runQuery(options: RunQueryOptions): Promise<DataFrame[]> {
 }
 
 /** Convert a DataFrame into an array of plain row objects. */
-export function dataFrameToRows(frame: DataFrame): Record<string, unknown>[] {
+export function dataFrameToRows(frame: DataFrame): Array<Record<string, unknown>> {
   if (!frame || frame.length === 0) {
     return [];
   }
-  const rows: Record<string, unknown>[] = [];
+  const rows: Array<Record<string, unknown>> = [];
   for (let i = 0; i < frame.length; i++) {
     const row: Record<string, unknown> = {};
     for (const field of frame.fields) {
@@ -78,7 +78,7 @@ export function dataFrameToRows(frame: DataFrame): Record<string, unknown>[] {
 /** Run a query and return rows from the first DataFrame. */
 export async function runQueryRows(
   options: RunQueryOptions
-): Promise<Record<string, unknown>[]> {
+): Promise<Array<Record<string, unknown>>> {
   const frames = await runQuery(options);
   if (!frames || frames.length === 0) {
     return [];

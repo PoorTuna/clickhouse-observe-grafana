@@ -58,8 +58,10 @@ export function SearchBar({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
-  // Sync when external value changes (e.g. loading a saved search)
+  // Sync when external value changes (e.g. loading a saved search) — `value` is the
+  // external/controlled prop, `inputValue` the local draft; this mirrors external -> local.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInputValue(value);
   }, [value]);
 

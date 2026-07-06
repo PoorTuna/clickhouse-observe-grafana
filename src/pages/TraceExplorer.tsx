@@ -252,8 +252,11 @@ export function TraceExplorer() {
     latestSearchList.current = searchTraces;
   });
 
+  // searchTraces fetches the trace list/volume async and mirrors the result into state —
+  // an external fetch synced to React, not a render-time update.
   useEffect(() => {
     if (!urlTraceId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       searchTraces();
     }
   }, [searchTraces, urlTraceId]);
@@ -345,8 +348,11 @@ export function TraceExplorer() {
     [config]
   );
 
+  // urlTraceId is an external (URL/nav) signal; selecting + loading the trace here is the
+  // intended sync to that external source, not a render-time update.
   useEffect(() => {
     if (urlTraceId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedTraceId(urlTraceId);
       loadTrace(urlTraceId);
     }

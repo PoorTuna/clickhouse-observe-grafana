@@ -45,11 +45,15 @@ export const DataViewContext = createContext<DataViewContextValue>({
   deletePersonalView: () => {},
 });
 
+// Stable fallback so `jsonData` doesn't get a fresh object identity every render when
+// `props.meta.jsonData` is unset — otherwise the useMemo below would never hit its cache.
+const EMPTY_JSON_DATA: AppJsonData = {};
+
 function App(props: AppRootProps<AppJsonData>) {
-  const jsonData = props.meta.jsonData ?? {};
+  const jsonData = props.meta.jsonData ?? EMPTY_JSON_DATA;
 
   // Shared views from jsonData (admin-managed); migrate from legacy sourceConfig if needed.
-  const sharedViews = useMemo(() => migrateLegacyConfig(jsonData), [props.meta.jsonData]);
+  const sharedViews = useMemo(() => migrateLegacyConfig(jsonData), [jsonData]);
 
   // Personal views from localStorage (per-browser, per-user).
   const [personalViews, setPersonalViews] = useState<DataView[]>(() => loadPersonalViews());

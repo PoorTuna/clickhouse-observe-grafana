@@ -59,7 +59,7 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
   const resolvedMapColumns = useMemo(
     () =>
       mapColumns ?? [config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     [mapColumns, config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes]
   );
   const [fields, setFields] = useState<FieldModel[]>([]);
@@ -166,7 +166,10 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
 
   const refresh = () => loadFields(true);
 
+  // loadFields fetches columns/map-keys async and mirrors the result into state — an
+  // external fetch synced to React, not a render-time update.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadFields();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.datasourceUid, config.database, resolvedTable, bucket]);

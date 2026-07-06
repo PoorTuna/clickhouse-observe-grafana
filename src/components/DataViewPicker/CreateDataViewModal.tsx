@@ -3,11 +3,10 @@
  * Step 1: choose datasource → database → table.
  * Step 2: map timestamp + body columns, auto-detect OTel, configure name → save.
  */
-import React, { ChangeEvent, useContext, useEffect, useState } from 'react';
-import { dateTime, TimeRange } from '@grafana/data';
+import React, { ChangeEvent, useCallback, useContext, useEffect, useState } from 'react';
+import { dateTime, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, Checkbox, Field, Input, Modal, Select, Spinner } from '@grafana/ui';
-import { SelectableValue } from '@grafana/data';
 import { DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
@@ -48,8 +47,17 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
   // Step tracking
   const [step, setStep] = useState<Step>('location');
 
-  // Step 1 state
-  const [dsOptions, setDsOptions] = useState<Array<SelectableValue<string>>>([]);
+  // Step 1 state. Datasource list is read synchronously from getDataSourceSrv() (no
+  // fetch), so it's lazy-initialized here instead of populated from an effect.
+  const [dsOptions] = useState<Array<SelectableValue<string>>>(() => {
+    try {
+      const list = getDataSourceSrv().getList();
+      const ch = list.filter((ds) => (ds.type ?? '').toLowerCase().includes('clickhouse'));
+      return ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name }));
+    } catch {
+      return [];
+    }
+  });
   const [datasourceUid, setDatasourceUid] = useState('');
   const [dbOptions, setDbOptions] = useState<Array<SelectableValue<string>>>([]);
   const [database, setDatabase] = useState('');
@@ -71,14 +79,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Reset on open/close
-  useEffect(() => {
-    if (isOpen) {
-      resetAll();
-    }
-  }, [isOpen]);
-
-  function resetAll() {
+  const resetAll = useCallback(() => {
     setStep('location');
     setDatasourceUid('');
     setDatabase('');
@@ -93,16 +94,16 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     setApplyOtel(false);
     setName('');
     setError('');
-  }
-
-  // Populate datasource picker on mount
-  useEffect(() => {
-    try {
-      const list = getDataSourceSrv().getList();
-      const ch = list.filter((ds) => (ds.type ?? '').toLowerCase().includes('clickhouse'));
-      setDsOptions(ch.map((ds) => ({ label: ds.name, value: ds.uid ?? ds.name })));
-    } catch {}
   }, []);
+
+  // Reset on open/close. isOpen is an external (parent-controlled) signal, so re-deriving
+  // the modal's internal state from it here is the intended sync, not a render-time update.
+  useEffect(() => {
+    if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      resetAll();
+    }
+  }, [isOpen, resetAll]);
 
   // Fetch databases when datasource selected
   async function onDatasourceChange(uid: string) {

@@ -10,6 +10,21 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.11] — 2026-07-07
+
+### Fixed
+
+- Cleared all 30 ESLint errors surfaced by the new hooks lint rules: hook-order bugs (state
+  declared after use in `LogsExplorer`, `CreateDataViewModal`), a real `react-hooks/rules-of-hooks`
+  violation in `VolumeHistogram` (a `useMemo` sat after an early `return null`), a ref read
+  during render in the histogram's hover-band logic, and ten `set-state-in-effect` cases —
+  converted synchronous datasource-list reads to lazy `useState` init, scoped-disabled genuine
+  async-fetch/external-sync effects with justification comments.
+- Fixed `App.tsx`'s `jsonData` fallback recreating a new object every render, which silently
+  broke the `sharedViews` memoization.
+
+---
+
 ## [0.2.10] — 2026-07-07
 
 ### Changed

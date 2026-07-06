@@ -1,8 +1,7 @@
 import React from 'react';
 import { css } from '@emotion/css';
-import { GrafanaTheme2 } from '@grafana/data';
+import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { Pagination, Select, Spinner, useStyles2 } from '@grafana/ui';
-import { SelectableValue } from '@grafana/data';
 
 interface PaginationBarProps {
   page: number; // 0-based

@@ -81,10 +81,13 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
     description: f.sqlExpr !== f.displayName ? f.sqlExpr : undefined,
   }));
 
-  // Load distinct values when field or op changes
+  // Load distinct values when field or op changes. This mirrors an async fetch (loadValues)
+  // into state, so the reset-to-empty branch below is part of the same sync, not a
+  // render-time side effect.
   useEffect(() => {
     const op = opDef(selectedOp);
     if (!selectedFieldExpr || !op.hasValue) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setValueOptions([]);
       return;
     }

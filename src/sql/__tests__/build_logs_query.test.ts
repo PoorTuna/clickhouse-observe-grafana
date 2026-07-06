@@ -6,7 +6,7 @@
  *   name, so they can't collide with an arbitrary table's own same-named real column.
  */
 
-import { buildLogsQuery, CORE_ALIAS } from '../queryBuilder';
+import { buildLogsQuery, logRowKey, CORE_ALIAS } from '../queryBuilder';
 import { DEFAULT_LOGS_QUERY_STATE, EMPTY_COLUMN_MAPPING, OTEL_COLUMN_MAPPING, SourceConfig } from '../../types';
 
 const otelConfig: SourceConfig = {
@@ -70,5 +70,68 @@ describe('buildLogsQuery core SELECT list', () => {
     expect(sql).not.toContain('AS ResourceAttributes');
     expect(sql).not.toContain('AS LogAttributes');
     expect(sql).not.toContain('AS ScopeAttributes');
+  });
+
+  it('defaults to SELECT * (full projection) when no opts are passed — existing callers unaffected', () => {
+    const sql = buildLogsQuery(otelConfig, DEFAULT_LOGS_QUERY_STATE);
+    expect(sql).toMatch(/^SELECT \*,/);
+  });
+
+  it("projection: 'full' is explicitly the same as the default", () => {
+    const sql = buildLogsQuery(otelConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'full' });
+    expect(sql).toMatch(/^SELECT \*,/);
+  });
+
+  it("projection: 'grid' omits SELECT * but keeps core aliases, extra columns, and WHERE/ORDER/LIMIT", () => {
+    const state = {
+      ...DEFAULT_LOGS_QUERY_STATE,
+      columns: [
+        { id: 'extra', key: 'fld_extra', sqlExpr: 'my_col', displayName: 'My col', type: 'string' as const, isCore: false },
+      ],
+    };
+    const sql = buildLogsQuery(otelConfig, state, { limit: 50, offset: 100 }, { projection: 'grid' });
+    expect(sql).not.toMatch(/^SELECT \*/);
+    expect(sql).not.toContain('SELECT *,');
+    expect(sql).toContain(`AS ${CORE_ALIAS.timestamp}`);
+    expect(sql).toContain(`AS ${CORE_ALIAS.severity}`);
+    expect(sql).toContain('my_col AS fld_extra');
+    expect(sql).toContain('WHERE');
+    expect(sql).toContain('ORDER BY');
+    expect(sql).toContain('LIMIT 50 OFFSET 100');
+  });
+
+  it("projection: 'grid' falls back to SELECT * when there are no core or extra columns at all", () => {
+    // Arbitrary table with nothing mapped and no user-added columns — an empty SELECT list
+    // would be invalid SQL, so 'grid' must degrade to '*' rather than producing "SELECT FROM t".
+    const emptyConfig: SourceConfig = {
+      datasourceUid: 'test',
+      database: 'default',
+      logsTable: 'my_table',
+      tracesTable: '',
+      isOtel: false,
+      columns: { ...EMPTY_COLUMN_MAPPING },
+    };
+    const sql = buildLogsQuery(emptyConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).toMatch(/^SELECT \*/);
+  });
+});
+
+describe('logRowKey', () => {
+  it('produces equal keys for rows with equal core values', () => {
+    const a = { [CORE_ALIAS.timestamp]: 1000, [CORE_ALIAS.body]: 'hello', [CORE_ALIAS.severity]: 'info', [CORE_ALIAS.serviceName]: 'svc' };
+    const b = { [CORE_ALIAS.timestamp]: 1000, [CORE_ALIAS.body]: 'hello', [CORE_ALIAS.severity]: 'info', [CORE_ALIAS.serviceName]: 'svc', extra: 'ignored' };
+    expect(logRowKey(a)).toBe(logRowKey(b));
+  });
+
+  it('produces different keys when any core value differs', () => {
+    const a = { [CORE_ALIAS.timestamp]: 1000, [CORE_ALIAS.body]: 'hello' };
+    const b = { [CORE_ALIAS.timestamp]: 1001, [CORE_ALIAS.body]: 'hello' };
+    expect(logRowKey(a)).not.toBe(logRowKey(b));
+  });
+
+  it('tolerates unmapped/undefined core values on both sides', () => {
+    const a = { [CORE_ALIAS.timestamp]: 1000 };
+    const b = { [CORE_ALIAS.timestamp]: 1000 };
+    expect(logRowKey(a)).toBe(logRowKey(b));
   });
 });

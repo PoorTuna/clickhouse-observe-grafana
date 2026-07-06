@@ -1,6 +1,6 @@
 {
   "name": "clickhouse-observe",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",

@@ -121,29 +121,34 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
       return;
     }
 
-    // Phase B: Map keys (time-bounded, cached per table + coarse bucket)
+    // Phase B: Map keys (time-bounded, cached per table + coarse bucket). Fired concurrently —
+    // each column writes its own cache key, so there's no cross-column dependency.
     const mapCols = resolvedMapColumns.filter(Boolean);
 
-    const mapFields: FieldModel[] = [];
-    for (const mapCol of mapCols) {
-      const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
-      let keys: string[];
-      if (mapKeyCache.has(mKey)) {
-        keys = mapKeyCache.get(mKey)!;
-      } else {
+    const perColKeys = await Promise.all(
+      mapCols.map(async (mapCol) => {
+        const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
+        const cached = mapKeyCache.get(mKey);
+        if (cached) {
+          return { mapCol, keys: cached };
+        }
         try {
           const rows = await runQueryRows({
             datasourceUid: config.datasourceUid,
             sql: buildMapKeysQuery(config, mapCol, 500, resolvedTable),
             timeRange,
           });
-          keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
+          const keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
           mapKeyCache.set(mKey, keys);
+          return { mapCol, keys };
         } catch {
-          keys = [];
+          return { mapCol, keys: [] as string[] };
         }
-      }
+      })
+    );
 
+    const mapFields: FieldModel[] = [];
+    for (const { mapCol, keys } of perColKeys) {
       for (const k of keys) {
         mapFields.push({
           id: `map:${mapCol}:${k}`,

@@ -7,7 +7,8 @@ import { useFields } from '../FieldsContext';
 import { FieldItem } from './FieldItem';
 import { FilterPill, LogsQueryState, SelectedColumn, ColumnType } from '../../types';
 
-function makeColumnKey(id: string): string {
+/** Sanitize a field id into a SQL-safe alias. Shared with LogDetailDrawer's "add as column" action. */
+export function makeColumnKey(id: string): string {
   return 'fld_' + id.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').slice(0, 40);
 }
 

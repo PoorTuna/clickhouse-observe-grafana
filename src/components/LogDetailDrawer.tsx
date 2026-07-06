@@ -1,33 +1,69 @@
-import React, { useState } from 'react';
-import { css } from '@emotion/css';
+import React, { useMemo, useState } from 'react';
+import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { useStyles2, Drawer, Button, Icon } from '@grafana/ui';
-import { LogRow, FilterPill, SourceConfig } from '../types';
+import {
+  useStyles2,
+  Drawer,
+  Button,
+  Icon,
+  IconButton,
+  ClipboardButton,
+  Input,
+  Switch,
+  TabsBar,
+  Tab,
+} from '@grafana/ui';
+import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
 import { groupAttributes } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
+import { formatTimestamp, severityColor } from './LogsTable';
+import { makeColumnKey } from './FieldSidebar/FieldSidebar';
 
 interface LogDetailDrawerProps {
   row: LogRow;
   config: SourceConfig;
+  /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
+  columns: SelectedColumn[];
   onClose: () => void;
   onAddFilter: (filter: FilterPill) => void;
+  onToggleColumn?: (col: SelectedColumn) => void;
   onViewTrace?: (traceId: string) => void;
+  /** Step to the previous/next row on the current page. Omit to hide the nav control. */
+  onPrev?: () => void;
+  onNext?: () => void;
+  /** e.g. "3 of 50" */
+  navLabel?: string;
 }
 
+type DrawerTab = 'table' | 'json';
+
+interface SelectionPopover {
+  left: number;
+  top: number;
+  text: string;
+}
 
 export function LogDetailDrawer({
   row,
   config,
+  columns,
   onClose,
   onAddFilter,
+  onToggleColumn,
   onViewTrace,
+  onPrev,
+  onNext,
+  navLabel,
 }: LogDetailDrawerProps) {
   const styles = useStyles2(getStyles);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(['logLine', 'resource', 'log'])
   );
   const [searchAttr, setSearchAttr] = useState('');
+  const [activeTab, setActiveTab] = useState<DrawerTab>('table');
+  const [selectedOnly, setSelectedOnly] = useState(false);
+  const [selectionPopover, setSelectionPopover] = useState<SelectionPopover | null>(null);
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => {
@@ -42,7 +78,32 @@ export function LogDetailDrawer({
   };
 
   const traceId = row[CORE_ALIAS.traceId] ? String(row[CORE_ALIAS.traceId]) : null;
-  const attrGroups = groupAttributes(row, config.columns);
+  const timestamp = formatTimestamp(row[CORE_ALIAS.timestamp]);
+  const severity = row[CORE_ALIAS.severity] ? String(row[CORE_ALIAS.severity]) : null;
+  const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
+  const attrGroups = useMemo(() => groupAttributes(row, config.columns), [row, config.columns]);
+
+  const isColumnSelected = (clickhouseField: string): boolean =>
+    columns.some((c) => c.sqlExpr === clickhouseField);
+
+  const toggleAsColumn = (field: string, clickhouseField: string) => {
+    if (!onToggleColumn) {
+      return;
+    }
+    const existing = columns.find((c) => c.sqlExpr === clickhouseField);
+    if (existing) {
+      onToggleColumn(existing);
+      return;
+    }
+    onToggleColumn({
+      id: clickhouseField,
+      key: 'fld_' + makeColumnKey(clickhouseField),
+      sqlExpr: clickhouseField,
+      displayName: field,
+      type: 'string',
+      isCore: false,
+    });
+  };
 
   const filterMatch = (key: string, value: string): boolean => {
     if (!searchAttr) {
@@ -54,161 +115,372 @@ export function LogDetailDrawer({
 
   const renderAttrRow = (field: string, value: string, mapCol?: string) => {
     const clickhouseField = mapCol ? `${mapCol}['${field}']` : field;
+    const isSelected = isColumnSelected(clickhouseField);
+    if (selectedOnly && !isSelected) {
+      return null;
+    }
     return (
-      <div key={field} className={`${styles.attrRow} attr-row`}>
-        <div className={`${styles.attrActions} attr-actions`}>
-          <button
-            className={styles.attrAction}
-            title="Include in filter"
-            onClick={() => onAddFilter(makeFilter(clickhouseField, value, '='))}
-          >
-            +
-          </button>
-          <button
-            className={styles.attrAction}
-            title="Exclude from filter"
-            onClick={() => onAddFilter(makeFilter(clickhouseField, value, '!='))}
-          >
-            −
-          </button>
-        </div>
-        <span className={styles.attrKey}>{field}</span>
+      <div key={field} className={styles.attrRow}>
+        <span className={styles.attrKey} title={field}>{field}</span>
         <span className={styles.attrValue}>{value}</span>
+        <div className={styles.attrActions}>
+          <IconButton
+            name="filter-plus"
+            size="sm"
+            tooltip="Filter for value"
+            onClick={() => onAddFilter(makeFilter(clickhouseField, value, '='))}
+          />
+          <IconButton
+            name="filter-minus"
+            size="sm"
+            tooltip="Filter out value"
+            onClick={() => onAddFilter(makeFilter(clickhouseField, value, '!='))}
+          />
+          <ClipboardButton
+            icon="clipboard-alt"
+            size="sm"
+            variant="secondary"
+            fill="text"
+            tooltip="Copy value"
+            aria-label={`Copy value of ${field}`}
+            getText={() => value}
+          />
+          {onToggleColumn && (
+            <IconButton
+              name="plus-square"
+              size="sm"
+              variant={isSelected ? 'primary' : undefined}
+              tooltip={isSelected ? 'Remove column' : 'Add as column'}
+              onClick={() => toggleAsColumn(field, clickhouseField)}
+            />
+          )}
+        </div>
       </div>
     );
   };
 
+  const onLogLineMouseUp = () => {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? '';
+    if (!text || !sel || sel.rangeCount === 0 || !config.columns.body) {
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    setSelectionPopover({ left: rect.left + rect.width / 2, top: rect.top, text });
+  };
+
+  const clearSelectionPopover = () => setSelectionPopover(null);
+
+  const bodyText = String(row[CORE_ALIAS.body] ?? '');
+
+  // Keys shown in dedicated sections (aliases + their source columns) — skip in All fields.
+  const c = config.columns;
+  const hiddenKeys = useMemo(
+    () =>
+      new Set([
+        CORE_ALIAS.timestamp, CORE_ALIAS.body, CORE_ALIAS.severity,
+        CORE_ALIAS.traceId, CORE_ALIAS.spanId, CORE_ALIAS.serviceName,
+        c.timestamp, c.body, c.severity, c.traceId, c.spanId, c.serviceName,
+        c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes,
+      ]),
+    [c]
+  );
+
   return (
-    <Drawer title="Log Detail" onClose={onClose} size="md" scrollableContent>
-      <div className={styles.content}>
-        {/* Search within attributes */}
-        <div className={styles.attrSearch}>
-          <input
-            className={styles.attrSearchInput}
-            placeholder="Search field names and values"
-            value={searchAttr}
-            onChange={(e) => setSearchAttr(e.target.value)}
-          />
-        </div>
-
-        {/* Log line */}
-        <section className={styles.section}>
-          <button className={styles.sectionHeader} onClick={() => toggleSection('logLine')}>
-            <Icon name={expandedSections.has('logLine') ? 'angle-down' : 'angle-right'} />
-            <span>Log line</span>
-          </button>
-          {expandedSections.has('logLine') && (
-            <div className={styles.logLine}>{String(row[CORE_ALIAS.body] ?? '')}</div>
+    <Drawer
+      title="Log detail"
+      onClose={onClose}
+      size="md"
+      scrollableContent={activeTab === 'table'}
+      subtitle={
+        <div className={styles.summary}>
+          <span className={styles.summaryTime}>{timestamp}</span>
+          {severity && (
+            <span
+              className={styles.severityChip}
+              style={{ color: severityColor(severity), borderColor: severityColor(severity) }}
+            >
+              {severity.toUpperCase()}
+            </span>
           )}
-        </section>
+          {service && (
+            <span className={styles.serviceChip}>
+              <Icon name="apps" size="xs" />
+              {service}
+            </span>
+          )}
+          <div className={styles.summarySpacer} />
+          {(onPrev || onNext) && (
+            <div className={styles.navGroup}>
+              <IconButton name="angle-up" size="sm" tooltip="Previous log" onClick={onPrev} disabled={!onPrev} />
+              {navLabel && <span className={styles.navLabel}>{navLabel}</span>}
+              <IconButton name="angle-down" size="sm" tooltip="Next log" onClick={onNext} disabled={!onNext} />
+            </div>
+          )}
+        </div>
+      }
+      tabs={
+        <TabsBar>
+          <Tab
+            label="Table"
+            icon="table-collapse-all"
+            active={activeTab === 'table'}
+            onChangeTab={() => setActiveTab('table')}
+          />
+          <Tab
+            label="JSON"
+            icon="brackets-curly"
+            active={activeTab === 'json'}
+            onChangeTab={() => setActiveTab('json')}
+          />
+        </TabsBar>
+      }
+    >
+      {activeTab === 'json' ? (
+        <div className={styles.jsonWrap}>
+          <div className={styles.jsonToolbar}>
+            <ClipboardButton
+              icon="clipboard-alt"
+              size="sm"
+              variant="secondary"
+              getText={() => JSON.stringify(row, null, 2)}
+            >
+              Copy JSON
+            </ClipboardButton>
+          </div>
+          <pre className={styles.jsonPre}>{JSON.stringify(row, null, 2)}</pre>
+        </div>
+      ) : (
+        <div className={styles.content} onMouseDown={clearSelectionPopover}>
+          {/* Field/value search + selected-only toggle */}
+          <div className={styles.toolbarRow}>
+            <Input
+              prefix={<Icon name="search" />}
+              placeholder="Search field names and values"
+              value={searchAttr}
+              onChange={(e) => setSearchAttr(e.currentTarget.value)}
+              className={styles.attrSearch}
+            />
+            <label className={styles.selectedOnlyLabel}>
+              <Switch value={selectedOnly} onChange={(e) => setSelectedOnly(e.currentTarget.checked)} />
+              Selected only
+            </label>
+          </div>
 
-        {/* Trace / Log links */}
-        {(traceId || onViewTrace) && (
+          {/* Log line */}
           <section className={styles.section}>
-            <button className={styles.sectionHeader} onClick={() => toggleSection('links')}>
-              <Icon name={expandedSections.has('links') ? 'angle-down' : 'angle-right'} />
-              <span>Links</span>
-            </button>
-            {expandedSections.has('links') && traceId && (
-              <div className={styles.linksBody}>
-                <span className={styles.attrKey}>traceID</span>
-                <span className={styles.attrValue}>{traceId}</span>
-                {onViewTrace && (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    icon="link"
-                    onClick={() => onViewTrace(traceId)}
-                    className={styles.linkBtn}
-                  >
-                    View trace
-                  </Button>
-                )}
+            <div className={styles.sectionHeader}>
+              <button className={styles.sectionToggle} onClick={() => toggleSection('logLine')}>
+                <Icon name={expandedSections.has('logLine') ? 'angle-down' : 'angle-right'} />
+                <span>Log line</span>
+              </button>
+              <ClipboardButton
+                icon="clipboard-alt"
+                size="sm"
+                variant="secondary"
+                fill="text"
+                tooltip="Copy log line"
+                aria-label="Copy log line"
+                getText={() => bodyText}
+              />
+            </div>
+            {expandedSections.has('logLine') && (
+              <div className={styles.logLine} onMouseUp={onLogLineMouseUp}>
+                {bodyText}
               </div>
             )}
           </section>
-        )}
 
-        {/* OTel attribute groups */}
-        {attrGroups.map(({ group, label, col, attrs }) => {
-          const visible = Object.entries(attrs).filter(([k, v]) => filterMatch(k, v));
-          if (visible.length === 0 && searchAttr) {
-            return null;
-          }
-          return (
-            <section key={group} className={styles.section}>
-              <button className={styles.sectionHeader} onClick={() => toggleSection(group)}>
-                <Icon
-                  name={expandedSections.has(group) ? 'angle-down' : 'angle-right'}
-                />
-                <span>{label}</span>
-                <span className={styles.attrCount}>{visible.length}</span>
+          {/* Trace / Log links */}
+          {(traceId || onViewTrace) && (
+            <section className={styles.section}>
+              <button className={styles.sectionHeader} onClick={() => toggleSection('links')}>
+                <Icon name={expandedSections.has('links') ? 'angle-down' : 'angle-right'} />
+                <span>Links</span>
               </button>
-              {expandedSections.has(group) && (
-                <div className={styles.attrList}>
-                  {visible.map(([k, v]) => renderAttrRow(k, v, col))}
+              {expandedSections.has('links') && traceId && (
+                <div className={styles.linksBody}>
+                  <span className={styles.attrKey}>traceID</span>
+                  <span className={styles.attrValue}>{traceId}</span>
+                  {onViewTrace && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon="link"
+                      onClick={() => onViewTrace(traceId)}
+                      className={styles.linkBtn}
+                    >
+                      View trace
+                    </Button>
+                  )}
                 </div>
               )}
             </section>
-          );
-        })}
+          )}
 
-        {/* All fields: every column from SELECT *, deduped against fixed aliases and mapped columns */}
-        <section className={styles.section}>
-          <button className={styles.sectionHeader} onClick={() => toggleSection('raw')}>
-            <Icon name={expandedSections.has('raw') ? 'angle-down' : 'angle-right'} />
-            <span>All fields</span>
-          </button>
-          {expandedSections.has('raw') && (
-            <div className={styles.attrList}>
-              {(() => {
-                // Keys shown in dedicated sections (aliases + their source columns) — skip in All fields.
-                const c = config.columns;
-                const hidden = new Set([
-                  // __-prefixed core aliases always added by buildLogsQuery
-                  CORE_ALIAS.timestamp, CORE_ALIAS.body, CORE_ALIAS.severity,
-                  CORE_ALIAS.traceId, CORE_ALIAS.spanId, CORE_ALIAS.serviceName,
-                  // Raw mapped column names projected by SELECT * (the aliases' source columns,
-                  // plus attribute Map columns, which are never aliased — shown in their own
-                  // groups above by reading the raw mapped name directly).
-                  c.timestamp, c.body, c.severity, c.traceId, c.spanId, c.serviceName,
-                  c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes,
-                ]);
-                return Object.entries(row)
-                  .filter(([k]) => !hidden.has(k) && k !== '')
+          {/* OTel attribute groups */}
+          {attrGroups.map(({ group, label, col, attrs }) => {
+            const visible = Object.entries(attrs)
+              .filter(([k, v]) => filterMatch(k, v))
+              .filter(([k]) => !selectedOnly || isColumnSelected(`${col}['${k}']`));
+            if (visible.length === 0 && (searchAttr || selectedOnly)) {
+              return null;
+            }
+            return (
+              <section key={group} className={styles.section}>
+                <button className={styles.sectionHeader} onClick={() => toggleSection(group)}>
+                  <Icon name={expandedSections.has(group) ? 'angle-down' : 'angle-right'} />
+                  <span>{label}</span>
+                  <span className={styles.attrCount}>{visible.length}</span>
+                </button>
+                {expandedSections.has(group) && (
+                  <div className={styles.attrList}>
+                    {visible.map(([k, v]) => renderAttrRow(k, v, col))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+
+          {/* All fields: every column from SELECT *, deduped against fixed aliases and mapped columns */}
+          <section className={styles.section}>
+            <button className={styles.sectionHeader} onClick={() => toggleSection('raw')}>
+              <Icon name={expandedSections.has('raw') ? 'angle-down' : 'angle-right'} />
+              <span>All fields</span>
+            </button>
+            {expandedSections.has('raw') && (
+              <div className={styles.attrList}>
+                {Object.entries(row)
+                  .filter(([k]) => !hiddenKeys.has(k) && k !== '')
                   .filter(([k, v]) => filterMatch(k, String(v ?? '')))
+                  .filter(([k]) => !selectedOnly || isColumnSelected(k))
                   .map(([k, v]) =>
                     renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined)
-                  );
-              })()}
-            </div>
-          )}
-        </section>
-      </div>
+                  )}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* Select-text-in-log-line → "line contains" filter, floating near the selection */}
+      {selectionPopover && (
+        <div
+          className={styles.selectionPopover}
+          style={{ left: selectionPopover.left, top: selectionPopover.top - 40 }}
+        >
+          <Button
+            size="sm"
+            variant="secondary"
+            icon="filter-plus"
+            onClick={() => {
+              onAddFilter(makeFilter(config.columns.body, selectionPopover.text, 'contains'));
+              setSelectionPopover(null);
+              window.getSelection()?.removeAllRanges();
+            }}
+          >
+            Line contains &ldquo;
+            {selectionPopover.text.length > 24 ? selectionPopover.text.slice(0, 24) + '…' : selectionPopover.text}
+            &rdquo;
+          </Button>
+        </div>
+      )}
     </Drawer>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
+  // ── Header summary (Drawer subtitle) ─────────────────────────────────────
+  summary: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    flex-wrap: wrap;
+  `,
+  summaryTime: css`
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.secondary};
+    font-variant-numeric: tabular-nums;
+  `,
+  severityChip: css`
+    font-size: 11px;
+    font-weight: ${theme.typography.fontWeightMedium};
+    border: 1px solid;
+    border-radius: ${theme.shape.radius.default};
+    padding: 1px ${theme.spacing(0.75)};
+  `,
+  serviceChip: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.secondary};
+  `,
+  summarySpacer: css`
+    flex: 1;
+  `,
+  navGroup: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+  `,
+  navLabel: css`
+    font-size: 11px;
+    color: ${theme.colors.text.secondary};
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  `,
+
+  // ── JSON tab ──────────────────────────────────────────────────────────────
+  jsonWrap: css`
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(1)};
+    padding: ${theme.spacing(1)};
+    height: 100%;
+  `,
+  jsonToolbar: css`
+    display: flex;
+    justify-content: flex-end;
+  `,
+  jsonPre: css`
+    flex: 1;
+    overflow: auto;
+    margin: 0;
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.primary};
+    background: ${theme.colors.background.canvas};
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    padding: ${theme.spacing(1)};
+    white-space: pre-wrap;
+    word-break: break-word;
+  `,
+
+  // ── Table tab ─────────────────────────────────────────────────────────────
   content: css`
     padding: ${theme.spacing(1)};
     font-size: ${theme.typography.bodySmall.fontSize};
   `,
-  attrSearch: css`
+  toolbarRow: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1.5)};
     margin-bottom: ${theme.spacing(1)};
   `,
-  attrSearchInput: css`
-    width: 100%;
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
-    color: ${theme.colors.text.primary};
+  attrSearch: css`
+    flex: 1;
+  `,
+  selectedOnlyLabel: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.75)};
     font-size: ${theme.typography.bodySmall.fontSize};
-    outline: none;
-    &:focus {
-      border-color: ${theme.colors.primary.border};
-    }
+    color: ${theme.colors.text.secondary};
+    white-space: nowrap;
+    cursor: pointer;
   `,
   section: css`
     margin-bottom: ${theme.spacing(0.5)};
@@ -232,6 +504,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
       background: ${theme.colors.action.hover};
     }
   `,
+  /** Used inside `sectionHeader` when it's a div (not a button) hosting a trailing action —
+   *  e.g. Log line's copy button — so we never nest a real <button> inside another <button>. */
+  sectionToggle: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    font-weight: inherit;
+    color: inherit;
+    text-align: left;
+  `,
   attrCount: css`
     margin-left: auto;
     color: ${theme.colors.text.secondary};
@@ -242,9 +530,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(1)};
     font-family: ${theme.typography.fontFamilyMonospace};
     white-space: pre-wrap;
-    word-break: break-all;
+    word-break: break-word;
+    overflow-wrap: anywhere;
     color: ${theme.colors.text.primary};
     background: ${theme.colors.background.canvas};
+    user-select: text;
   `,
   linksBody: css`
     padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
@@ -262,8 +552,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   attrRow: css`
     display: flex;
     align-items: flex-start;
-    gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(0.25)} ${theme.spacing(0.5)};
+    gap: ${theme.spacing(1)};
+    padding: ${theme.spacing(0.5)};
     border-radius: ${theme.shape.radius.default};
     &:hover {
       background: ${theme.colors.action.hover};
@@ -272,43 +562,42 @@ const getStyles = (theme: GrafanaTheme2) => ({
       opacity: 1;
     }
   `,
-  attrActions: css`
-    display: flex;
-    gap: 2px;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: opacity 0.1s;
-  `,
-  attrAction: css`
-    width: 18px;
-    height: 18px;
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: 3px;
-    background: ${theme.colors.background.secondary};
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1;
-    color: ${theme.colors.text.primary};
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    &:hover {
-      background: ${theme.colors.primary.main};
-      color: ${theme.colors.primary.contrastText};
-      border-color: ${theme.colors.primary.main};
-    }
-  `,
   attrKey: css`
     font-family: ${theme.typography.fontFamilyMonospace};
     color: ${theme.colors.text.secondary};
-    min-width: 140px;
+    width: 40%;
+    min-width: 100px;
     flex-shrink: 0;
-    word-break: break-all;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   `,
   attrValue: css`
     font-family: ${theme.typography.fontFamilyMonospace};
     color: ${theme.colors.text.primary};
-    word-break: break-all;
+    word-break: break-word;
+    overflow-wrap: anywhere;
     flex: 1;
+  `,
+  attrActions: cx(
+    'attr-actions',
+    css`
+      display: flex;
+      gap: 2px;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 150ms ease;
+      @media (prefers-reduced-motion: reduce) {
+        transition: none;
+      }
+    `
+  ),
+
+  // ── Select-text → filter popover ─────────────────────────────────────────
+  selectionPopover: css`
+    position: fixed;
+    z-index: 1100;
+    transform: translateX(-50%);
+    box-shadow: ${theme.shadows.z2};
+    border-radius: ${theme.shape.radius.default};
   `,
 });

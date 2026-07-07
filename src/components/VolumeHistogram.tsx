@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { useStyles2 } from '@grafana/ui';
@@ -77,7 +77,40 @@ export function estimateBucketCount(mode: IntervalMode, timeRange: TimeRange): n
   return Math.ceil(spanMs / 1000 / sec);
 }
 
+/**
+ * Zero-fill missing buckets across the full time range so gaps (e.g. no logs for a stretch of a
+ * day query) render as flat-zero bars instead of vanishing, matching Kibana's histogram behavior.
+ * Only safe for fixed-width units (second/minute/hour/day) — ClickHouse's toStartOfInterval anchors
+ * these to the Unix epoch, so `floor(t / stepMs) * stepMs` reproduces the same bucket boundaries.
+ * week/month/year use calendar-relative anchors instead, so those are left sparse rather than risk
+ * misaligned filler bars.
+ */
+export function fillEmptyBuckets(
+  points: VolumeDataPoint[],
+  resolved: ResolvedInterval,
+  timeRange: TimeRange
+): VolumeDataPoint[] {
+  if (resolved.unit === 'WEEK' || resolved.unit === 'MONTH' || resolved.unit === 'YEAR') {
+    return points;
+  }
+  const stepMs = resolved.intervalMs;
+  if (!stepMs || stepMs <= 0) {
+    return points;
+  }
+  const byTime = new Map(points.map((p) => [p.time, p]));
+  const start = Math.floor(timeRange.from.valueOf() / stepMs) * stepMs;
+  const end = timeRange.to.valueOf();
+  const filled: VolumeDataPoint[] = [];
+  for (let t = start; t <= end; t += stepMs) {
+    filled.push(byTime.get(t) ?? { time: t, levels: {} });
+  }
+  return filled;
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
+
+/** Minimum rendered height (px) for any non-zero stacked segment — see the render loop below. */
+const MIN_SEGMENT_PX = 2;
 
 export type HistogramColorMode = 'single' | 'severity' | 'breakdown';
 
@@ -120,6 +153,10 @@ export function VolumeHistogram({
   const [isDragging, setIsDragging] = useState(false);
   const selectionRef = useRef<SVGRectElement | null>(null);
   const [hovered, setHovered] = useState<HoveredBucket | null>(null);
+  // Measured after each render so the tooltip can be clamped/flipped away from the right edge —
+  // its content-driven width (level names, counts) isn't known until it's actually painted.
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [tooltipWidth, setTooltipWidth] = useState(0);
 
   const { bars, maxTotal, allLevels, colorMap } = useMemo(() => {
     if (!data.length) {
@@ -195,6 +232,17 @@ export function VolumeHistogram({
     const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
     return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
   }, [bars]);
+
+  const hoveredBar = hovered !== null ? bars[hovered.index] : null;
+
+  // Measures the tooltip's actual rendered width so the position calc below can flip it to the
+  // left of the cursor when it would otherwise overflow the viewport's right edge. Must stay
+  // above the early return below — hooks can't be called conditionally.
+  useLayoutEffect(() => {
+    if (tooltipRef.current) {
+      setTooltipWidth(tooltipRef.current.offsetWidth);
+    }
+  }, [hoveredBar]);
 
   if (!data.length) {
     return null;
@@ -277,8 +325,6 @@ export function VolumeHistogram({
     }
   };
 
-  const hoveredBar = hovered !== null ? bars[hovered.index] : null;
-
   const yMid = Math.round(maxTotal / 2);
 
   return (
@@ -338,7 +384,14 @@ export function VolumeHistogram({
                   if (!count) {
                     return null;
                   }
-                  const barH = maxTotal > 0 ? (count / maxTotal) * (height - 2) : 0;
+                  const rawH = maxTotal > 0 ? (count / maxTotal) * (height - 2) : 0;
+                  // Any non-zero segment gets floored to MIN_SEGMENT_PX so a handful of errors
+                  // stacked against tens of thousands of info logs still render as a visible
+                  // sliver instead of rounding to a sub-pixel — and disappearing — segment.
+                  // Stacking still works normally; this only ever grows the segment, never shrinks
+                  // a larger one, so bars can slightly overshoot the top gridline in extreme
+                  // imbalance cases — an acceptable tradeoff for "the error color is never invisible."
+                  const barH = Math.max(rawH, MIN_SEGMENT_PX);
                   yOffset -= barH;
                   const color = colorMap[level] ?? OTHER_COLOR;
                   return (
@@ -404,10 +457,16 @@ export function VolumeHistogram({
       {/* Hover tooltip */}
       {hoveredBar && hovered && (
         <div
+          ref={tooltipRef}
           className={styles.tooltip}
           style={{
             position: 'fixed',
-            left: hovered.clientX + 14,
+            // Default to the right of the cursor; flip to the left if it would overflow the
+            // viewport's right edge (e.g. hovering buckets near the far-right of the chart).
+            left:
+              tooltipWidth && hovered.clientX + 14 + tooltipWidth > window.innerWidth
+                ? Math.max(8, hovered.clientX - 14 - tooltipWidth)
+                : hovered.clientX + 14,
             // Clamp so the tooltip never gets clipped off the top of the viewport.
             top: Math.max(8, hovered.clientY - 80),
             zIndex: 1000,

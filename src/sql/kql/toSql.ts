@@ -9,31 +9,31 @@
 import { KqlNode, KqlIs, KqlRange } from './ast';
 import { WILDCARD_STAR, WILDCARD_QMARK } from './_lexer';
 import { SourceConfig } from '../../types';
-import { resolveField } from '../fields';
+import { resolveField, FieldIndex } from '../fields';
 import { quoteString, quoteIdentifier } from '../queryBuilder';
 
-export function kqlToSql(node: KqlNode, config: SourceConfig): string {
+export function kqlToSql(node: KqlNode, config: SourceConfig, index?: FieldIndex): string {
   switch (node.type) {
     case 'and':
-      return `(${kqlToSql(node.left, config)}) AND (${kqlToSql(node.right, config)})`;
+      return `(${kqlToSql(node.left, config, index)}) AND (${kqlToSql(node.right, config, index)})`;
     case 'or':
-      return `(${kqlToSql(node.left, config)}) OR (${kqlToSql(node.right, config)})`;
+      return `(${kqlToSql(node.left, config, index)}) OR (${kqlToSql(node.right, config, index)})`;
     case 'not': {
-      const inner = kqlToSql(node.operand, config);
+      const inner = kqlToSql(node.operand, config, index);
       // '1=1' is a no-op sentinel (unresolvable field) — negating it would
       // wrongly turn "ignore this clause" into "exclude everything".
       return inner === '1=1' ? '1=1' : `NOT (${inner})`;
     }
     case 'is':
-      return kqlIsToSql(node, config);
+      return kqlIsToSql(node, config, index);
     case 'range':
-      return kqlRangeToSql(node, config);
+      return kqlRangeToSql(node, config, index);
   }
 }
 
 // ── is ────────────────────────────────────────────────────────────────────────
 
-function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
+function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): string {
   const bodyCol = config.columns.body;
 
   // ── Bare term (no field) → body search ──────────────────────────────────
@@ -46,14 +46,14 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig): string {
 
   // ── Exists: field:* ──────────────────────────────────────────────────────
   if (node.isExists) {
-    const resolved = resolveField(node.field, config);
+    const resolved = resolveField(node.field, config, index);
     const expr = resolved?.sqlExpr ?? fallbackMapExpr(node.field, config);
-    // notEmpty(toString(expr)) works for String, Map, numeric, etc.
+    // notEmpty(toString(expr)) works for String, Map, JSON, numeric, etc.
     return `notEmpty(toString(${maybeQuote(expr)}))`;
   }
 
   // ── Named field ──────────────────────────────────────────────────────────
-  const resolved = resolveField(node.field, config);
+  const resolved = resolveField(node.field, config, index);
   // Unknown field: use the field name as a direct column rather than silently
   // falling back to body search, which produces wrong results for named-field queries.
   // e.g. `level:info` with severity unmapped → `"level" = 'info'`, not body ILIKE.
@@ -91,18 +91,19 @@ const OP_MAP: Record<string, string> = {
   gt: '>', gte: '>=', lt: '<', lte: '<=',
 };
 
-function kqlRangeToSql(node: KqlRange, config: SourceConfig): string {
-  const resolved = resolveField(node.field, config);
+function kqlRangeToSql(node: KqlRange, config: SourceConfig, index?: FieldIndex): string {
+  const resolved = resolveField(node.field, config, index);
   // Unknown field: use the field name as a direct column, same as kqlIsToSql.
   const { sqlExpr, kind } = resolved ?? { sqlExpr: node.field, kind: 'exact' as const };
   const op = OP_MAP[node.op];
   const numVal = Number(node.value);
   const isNumeric = Number.isFinite(numVal) && node.value.trim() !== '';
   const sqlVal = isNumeric ? String(numVal) : quoteString(node.value);
-  // Map attribute values are always String in ClickHouse. For numeric range
-  // comparisons, cast to Float64 so the comparison works correctly.
+  // Map attribute values are always String in ClickHouse, and a JSON path's dynamic value isn't
+  // guaranteed to compare correctly against a numeric literal either. For numeric range
+  // comparisons on either kind, cast to Float64 so the comparison works correctly.
   // (e.g. LogAttributes['response_time_ms'] > 1000 would fail without cast.)
-  const lhs = (kind === 'map' && isNumeric)
+  const lhs = ((kind === 'map' || kind === 'json') && isNumeric)
     ? `toFloat64(${maybeQuote(sqlExpr)})`
     : maybeQuote(sqlExpr);
   return `${lhs} ${op} ${sqlVal}`;

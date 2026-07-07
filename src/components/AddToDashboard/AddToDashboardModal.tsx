@@ -3,7 +3,7 @@
  * Grafana panels onto a new or existing dashboard. Mirrors the Modal/Field/Select/Alert
  * pattern used by CreateDataViewModal and SavedSearchMenu's save modal.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { locationService } from '@grafana/runtime';
@@ -30,6 +30,8 @@ import {
   ExportedPanel,
 } from '../../data/panelExport';
 import { getDashboard, saveDashboard, searchDashboards } from '../../data/dashboards';
+import { useFields } from '../FieldsContext';
+import { buildFieldIndex } from '../../sql/fields';
 
 interface AddToDashboardModalProps {
   isOpen: boolean;
@@ -52,6 +54,8 @@ export function AddToDashboardModal({
   caps,
 }: AddToDashboardModalProps) {
   const styles = useStyles2(getStyles);
+  const { fields } = useFields();
+  const fieldIndex = useMemo(() => buildFieldIndex(fields), [fields]);
 
   const [includeTable, setIncludeTable] = useState(true);
   const [includeHistogram, setIncludeHistogram] = useState(caps.hasTime);
@@ -118,14 +122,16 @@ export function AddToDashboardModal({
     let y = 0;
     if (includeTable) {
       panels.push(
-        buildTablePanel(config, queryState, { id: id++, gridPos: { x: 0, y, w: 24, h: 10 } })
+        buildTablePanel(config, queryState, { id: id++, gridPos: { x: 0, y, w: 24, h: 10 } }, fieldIndex)
       );
       y += 10;
     }
     if (includeHistogram) {
       const volBreakdown = resolveVolumeBreakdown(breakdown, config);
       panels.push(
-        buildHistogramPanel(config, queryState, volBreakdown, { id: id++, gridPos: { x: 0, y, w: 24, h: 8 } })
+        buildHistogramPanel(
+          config, queryState, volBreakdown, { id: id++, gridPos: { x: 0, y, w: 24, h: 8 } }, fieldIndex
+        )
       );
       y += 8;
     }

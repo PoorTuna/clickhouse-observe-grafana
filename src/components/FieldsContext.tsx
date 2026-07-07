@@ -1,13 +1,14 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
 import { FieldModel, inferFieldType } from '../sql/fieldModel';
-import { buildColumnsQuery, buildMapKeysQuery } from '../sql/introspection';
+import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
 
 // Module-level caches survive re-renders; cleared on explicit refresh().
 const columnCache = new Map<string, FieldModel[]>();
 const mapKeyCache = new Map<string, string[]>();
+const jsonPathCache = new Map<string, Array<{ path: string; chType: string }>>();
 
 function columnCacheKey(config: SourceConfig, table: string): string {
   return `${config.datasourceUid}:${config.database}:${table}`;
@@ -15,6 +16,10 @@ function columnCacheKey(config: SourceConfig, table: string): string {
 
 function mapKeyCacheKey(config: SourceConfig, table: string, mapCol: string, bucket: string): string {
   return `${config.datasourceUid}:${config.database}:${table}:${mapCol}:${bucket}`;
+}
+
+function jsonPathCacheKey(config: SourceConfig, table: string, jsonCol: string, bucket: string): string {
+  return `${config.datasourceUid}:${config.database}:${table}:${jsonCol}:${bucket}`;
 }
 
 export function coarseTimeBucket(timeRange: TimeRange): string {
@@ -33,33 +38,50 @@ interface FieldsContextValue {
   refresh: () => void;
 }
 
-const FieldsContext = createContext<FieldsContextValue>({
+const EMPTY_FIELDS_CONTEXT: FieldsContextValue = {
   fields: [],
   loading: false,
   error: null,
   refresh: () => {},
-});
+};
+
+// Exported (not just useFields()) so pages that need the same discovered fields for query
+// building — not just for descendant consumers like FieldSidebar/SearchBar — can call
+// useFieldDiscovery() once and hand the value to <FieldsContext.Provider> directly, rather than
+// nesting <FieldsProvider> (which would run discovery a second time, independently).
+export const FieldsContext = createContext<FieldsContextValue>(EMPTY_FIELDS_CONTEXT);
 
 export function useFields(): FieldsContextValue {
   return useContext(FieldsContext);
 }
 
-interface FieldsProviderProps {
-  config: SourceConfig;
-  timeRange: TimeRange;
+export interface FieldDiscoveryOpts {
   /** Table to introspect. Defaults to config.logsTable (existing Logs behavior). */
   table?: string;
   /** Map(String,String) columns to expand into individual key fields. Defaults to the logs Map columns. */
   mapColumns?: string[];
-  children: React.ReactNode;
 }
 
-export function FieldsProvider({ config, timeRange, table, mapColumns, children }: FieldsProviderProps) {
+/**
+ * Discovers fields for a table in three phases: top-level columns, then (concurrently) Map keys
+ * for any Map-typed columns and JSON paths for any JSON-typed columns found in phase A.
+ *
+ * Extracted from FieldsProvider so pages that both provide field context to descendants AND need
+ * the same field list for building queries (LogsExplorer, TraceExplorer) can call this once and
+ * share the result both ways, instead of the page and <FieldsProvider> each discovering
+ * independently.
+ */
+export function useFieldDiscovery(
+  config: SourceConfig,
+  timeRange: TimeRange,
+  opts: FieldDiscoveryOpts = {}
+): FieldsContextValue {
+  const { table, mapColumns } = opts;
   const resolvedTable = table ?? config.logsTable;
   const resolvedMapColumns = useMemo(
     () =>
       mapColumns ?? [config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes],
-     
+
     [mapColumns, config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes]
   );
   const [fields, setFields] = useState<FieldModel[]>([]);
@@ -125,7 +147,7 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
     // each column writes its own cache key, so there's no cross-column dependency.
     const mapCols = resolvedMapColumns.filter(Boolean);
 
-    const perColKeys = await Promise.all(
+    const mapKeysPromise = Promise.all(
       mapCols.map(async (mapCol) => {
         const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
         const cached = mapKeyCache.get(mKey);
@@ -147,13 +169,48 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
       })
     );
 
+    // Phase C: JSON paths (time-bounded, cached per table + coarse bucket) — one query per
+    // JSON-typed column discovered in phase A, run concurrently alongside phase B's Map-key scans.
+    const jsonCols = columns.filter((f) => f.type === 'json').map((f) => f.name);
+
+    const jsonPathsPromise = Promise.all(
+      jsonCols.map(async (jsonCol) => {
+        const jKey = jsonPathCacheKey(config, resolvedTable, jsonCol, bucket);
+        const cached = jsonPathCache.get(jKey);
+        if (cached) {
+          return { jsonCol, paths: cached };
+        }
+        try {
+          const rows = await runQueryRows({
+            datasourceUid: config.datasourceUid,
+            sql: buildJsonPathsQuery(config, jsonCol, 500, resolvedTable),
+            timeRange,
+          });
+          const paths = rows
+            .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
+            .filter((p) => p.path);
+          jsonPathCache.set(jKey, paths);
+          return { jsonCol, paths };
+        } catch {
+          return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };
+        }
+      })
+    );
+
+    const [perColKeys, perColPaths] = await Promise.all([mapKeysPromise, jsonPathsPromise]);
+
+    // displayName is prefixed with the source column ("ResourceAttributes.k8s.namespace.name",
+    // "Payload.user.id") so these read as what they are — a nested key discovered inside a real
+    // mapped column — rather than looking like a standalone top-level column that was made up.
+    // `name` stays the bare key: it's what KQL/filter-shorthand matching and SQL construction key
+    // off of, and prefixing it would break both.
     const mapFields: FieldModel[] = [];
     for (const { mapCol, keys } of perColKeys) {
       for (const k of keys) {
         mapFields.push({
           id: `map:${mapCol}:${k}`,
           name: k,
-          displayName: k,
+          displayName: `${mapCol}.${k}`,
           sqlExpr: `${mapCol}['${k}']`,
           type: 'string',
           source: 'map',
@@ -162,8 +219,32 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
       }
     }
 
+    const jsonFields: FieldModel[] = [];
+    for (const { jsonCol, paths } of perColPaths) {
+      // A path can be reported more than once with different observed types across rows
+      // (dynamic paths) — first-seen wins, matching the "cached, stable" contract of the rest
+      // of field discovery rather than flip-flopping types query to query.
+      const seen = new Set<string>();
+      for (const { path, chType } of paths) {
+        if (seen.has(path)) {
+          continue;
+        }
+        seen.add(path);
+        jsonFields.push({
+          id: `json:${jsonCol}:${path}`,
+          name: path,
+          displayName: `${jsonCol}.${path}`,
+          sqlExpr: `${jsonCol}.${path}`,
+          type: inferFieldType(chType),
+          source: 'json',
+          jsonColumn: jsonCol,
+          jsonPath: path,
+        });
+      }
+    }
+
     if (runRef.current === runId) {
-      setFields([...columns, ...mapFields]);
+      setFields([...columns, ...mapFields, ...jsonFields]);
       setLoading(false);
       setError(null);
     }
@@ -171,7 +252,7 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
 
   const refresh = () => loadFields(true);
 
-  // loadFields fetches columns/map-keys async and mirrors the result into state — an
+  // loadFields fetches columns/map-keys/json-paths async and mirrors the result into state — an
   // external fetch synced to React, not a render-time update.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -179,9 +260,22 @@ export function FieldsProvider({ config, timeRange, table, mapColumns, children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.datasourceUid, config.database, resolvedTable, bucket]);
 
-  return (
-    <FieldsContext.Provider value={{ fields, loading, error, refresh }}>
-      {children}
-    </FieldsContext.Provider>
-  );
+  return { fields, loading, error, refresh };
+}
+
+interface FieldsProviderProps extends FieldDiscoveryOpts {
+  config: SourceConfig;
+  timeRange: TimeRange;
+  children: React.ReactNode;
+}
+
+/**
+ * Convenience wrapper for consumers that only need field data via useFields() in descendants
+ * (no local query-building use) — e.g. anywhere lighter-weight than LogsExplorer/TraceExplorer.
+ * Those two pages use useFieldDiscovery() directly instead so they can also read the fields for
+ * building their own queries; see that hook's doc comment.
+ */
+export function FieldsProvider({ config, timeRange, table, mapColumns, children }: FieldsProviderProps) {
+  const value = useFieldDiscovery(config, timeRange, { table, mapColumns });
+  return <FieldsContext.Provider value={value}>{children}</FieldsContext.Provider>;
 }

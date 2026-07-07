@@ -6,5 +6,6 @@ export const FIELD_TYPE_ICONS: Record<FieldType, string> = {
   string: 'font',
   boolean: 'toggle-on',
   map: 'brackets-curly',
+  json: 'brackets-curly',
   unknown: 'question-circle',
 };

@@ -16,7 +16,7 @@ services:
 
   # ClickHouse — OTel-compatible schema
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:26.3-alpine
     ports:
       - "8123:8123"   # HTTP interface (used by the datasource plugin)
       - "9000:9000"   # Native protocol

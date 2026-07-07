@@ -7,6 +7,7 @@
  */
 import { LogsQueryState, SourceConfig } from '../types';
 import { buildLogsQuery, buildVolumeQuery, VolumeBreakdown } from '../sql/queryBuilder';
+import { FieldIndex } from '../sql/fields';
 
 export const CH_DATASOURCE_TYPE = 'grafana-clickhouse-datasource';
 
@@ -60,10 +61,11 @@ export interface PanelExportOpts {
 export function buildTablePanel(
   config: SourceConfig,
   state: LogsQueryState,
-  opts: PanelExportOpts
+  opts: PanelExportOpts,
+  index?: FieldIndex
 ): ExportedPanel {
   const datasource = chDatasourceRef(config.datasourceUid);
-  const rawSql = buildLogsQuery(config, state);
+  const rawSql = buildLogsQuery(config, state, undefined, undefined, index);
   return {
     id: opts.id,
     type: 'table',
@@ -85,10 +87,11 @@ export function buildHistogramPanel(
   config: SourceConfig,
   state: LogsQueryState,
   breakdown: VolumeBreakdown,
-  opts: PanelExportOpts
+  opts: PanelExportOpts,
+  index?: FieldIndex
 ): ExportedPanel {
   const datasource = chDatasourceRef(config.datasourceUid);
-  const rawSql = buildVolumeQuery(config, state, { interval: { macro: true }, breakdown });
+  const rawSql = buildVolumeQuery(config, state, { interval: { macro: true }, breakdown }, index);
   return {
     id: opts.id,
     type: 'barchart',

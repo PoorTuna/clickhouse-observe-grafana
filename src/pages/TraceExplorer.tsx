@@ -8,7 +8,7 @@ import { TraceWaterfall } from '../components/trace/TraceWaterfall';
 import { SpanDetailDrawer } from '../components/trace/SpanDetailDrawer';
 import { ServiceMap } from '../components/trace/ServiceMap';
 import { TraceHeaderStats } from '../components/trace/TraceHeaderStats';
-import { VolumeHistogram, resolveInterval, ResolvedInterval } from '../components/VolumeHistogram';
+import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
 import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
 import { PaginationBar } from '../components/PaginationBar';
 import { runQueryRows } from '../data/runQuery';
@@ -24,7 +24,8 @@ import { addFilterPill } from '../sql/filters';
 import { parseMapValue } from '../sql/schema';
 import { viewCapabilities } from '../sql/capabilities';
 import { SourceConfigContext } from '../components/App/App';
-import { FieldsProvider } from '../components/FieldsContext';
+import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
+import { buildFieldIndex } from '../sql/fields';
 import { SearchBar } from '../components/SearchBar';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { FilterPills } from '../components/FilterPills';
@@ -151,6 +152,20 @@ export function TraceExplorer() {
   const [intervalMode, setIntervalMode] = useState<IntervalMode>('auto');
   const [breakdownMode, setBreakdownMode] = useState<'status' | 'service' | 'none'>('status');
 
+  // otel_traces has no ScopeAttributes column (unlike otel_logs) — Scope is just
+  // ScopeName/ScopeVersion strings there, so only Resource/Span attributes are real Map columns
+  // on this table (verified live: mapKeys(ScopeAttributes) throws UNKNOWN_IDENTIFIER on otel_traces).
+  const traceMapColumns = useMemo(
+    () => [config.columns.resourceAttributes, config.columns.spanAttributes].filter(Boolean),
+    [config.columns.resourceAttributes, config.columns.spanAttributes]
+  );
+
+  // Discovered once here (not just via <FieldsProvider> in descendants) so searchTraces/etc.
+  // below can resolve JSON-path/Map-key field references to the right SQL — see
+  // useFieldDiscovery's doc comment (components/FieldsContext.tsx).
+  const fieldsState = useFieldDiscovery(config, timeRange, { table: config.tracesTable, mapColumns: traceMapColumns });
+  const fieldIndex = useMemo(() => buildFieldIndex(fieldsState.fields), [fieldsState.fields]);
+
   const [traceRows, setTraceRows] = useState<TraceRow[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -187,7 +202,7 @@ export function TraceExplorer() {
     setLoading(true);
     setError(null);
     try {
-      const sql = buildTraceListQuery(config, filters, sort, { limit: INITIAL_FETCH, offset: 0 });
+      const sql = buildTraceListQuery(config, filters, sort, { limit: INITIAL_FETCH, offset: 0 }, fieldIndex);
       if (!sql) {
         if (runRef.current === runId) {
           setError('Trace ID column is not mapped for this data view. Go to Configuration to set it up.');
@@ -205,7 +220,7 @@ export function TraceExplorer() {
       const volSql = buildTraceVolumeQuery(config, filters, {
         interval: { unit: resolved.unit, value: resolved.value },
         breakdown,
-      });
+      }, fieldIndex);
       const volPromise = caps.hasTime && volSql
         ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'trace-vol' })
         : Promise.resolve<Array<Record<string, unknown>>>([]);
@@ -232,11 +247,10 @@ export function TraceExplorer() {
         }
         volMap.get(t)![level] = (volMap.get(t)![level] ?? 0) + count;
       }
-      setVolumeData(
-        Array.from(volMap.entries())
-          .sort(([a], [b]) => a - b)
-          .map(([time, levels]) => ({ time, levels }))
-      );
+      const volPoints = Array.from(volMap.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([time, levels]) => ({ time, levels }));
+      setVolumeData(fillEmptyBuckets(volPoints, resolved, timeRange));
     } catch (err) {
       if (runRef.current === runId) {
         setError(String((err as Error)?.message ?? err));
@@ -246,7 +260,7 @@ export function TraceExplorer() {
         setLoading(false);
       }
     }
-  }, [config, filters, sort, timeRange, intervalMode, breakdownMode, caps.hasTime]);
+  }, [config, filters, sort, timeRange, intervalMode, breakdownMode, caps.hasTime, fieldIndex]);
 
   useLayoutEffect(() => {
     latestSearchList.current = searchTraces;
@@ -271,7 +285,7 @@ export function TraceExplorer() {
       setFetchingMore(true);
       try {
         const chunkSize = needed - currentRows.length;
-        const sql = buildTraceListQuery(config, filters, sort, { limit: chunkSize, offset: currentRows.length });
+        const sql = buildTraceListQuery(config, filters, sort, { limit: chunkSize, offset: currentRows.length }, fieldIndex);
         const chunk = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'trace-list-more' });
         const mapped = chunk.map(rowToTrace);
         const merged = [...currentRows, ...mapped];
@@ -282,7 +296,7 @@ export function TraceExplorer() {
         setFetchingMore(false);
       }
     },
-    [config, filters, sort, timeRange]
+    [config, filters, sort, timeRange, fieldIndex]
   );
 
   const onPageChange = useCallback(
@@ -405,28 +419,20 @@ export function TraceExplorer() {
     (sqlExpr: string) =>
       loadFieldValues(config, sqlExpr, {
         table: config.tracesTable,
-        conditions: buildTraceWhereConditions(config, filters),
+        conditions: buildTraceWhereConditions(config, filters, fieldIndex),
         timeRange,
         cacheKey: JSON.stringify(filters),
       }),
-    [config, filters, timeRange]
+    [config, filters, timeRange, fieldIndex]
   );
 
   const onAddTracePill = (pill: FilterPill) => {
     setFilters((f) => ({ ...f, pills: addFilterPill(f.pills, pill) }));
   };
 
-  // otel_traces has no ScopeAttributes column (unlike otel_logs) — Scope is just
-  // ScopeName/ScopeVersion strings there, so only Resource/Span attributes are real Map columns
-  // on this table (verified live: mapKeys(ScopeAttributes) throws UNKNOWN_IDENTIFIER on otel_traces).
-  const traceMapColumns = useMemo(
-    () => [config.columns.resourceAttributes, config.columns.spanAttributes].filter(Boolean),
-    [config.columns.resourceAttributes, config.columns.spanAttributes]
-  );
-
   return (
     <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Traces' }}>
-      <FieldsProvider config={config} timeRange={timeRange} table={config.tracesTable} mapColumns={traceMapColumns}>
+      <FieldsContext.Provider value={fieldsState}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
         <div className={styles.header}>
           <h2 className={styles.title}>
@@ -673,7 +679,7 @@ export function TraceExplorer() {
           </>
         )}
       </div>
-      </FieldsProvider>
+      </FieldsContext.Provider>
     </PluginPage>
   );
 }

@@ -206,9 +206,15 @@ function fieldSuggestions(
     })
     .map<Suggestion>((f) => ({
       type: 'field',
-      text: f.name,
+      // Shown as-is to the user: for a Map/JSON key this is prefixed with its source column
+      // ("ResourceAttributes.k8s.namespace.name") — same reasoning as the field sidebar, so this
+      // never reads like a standalone top-level column that was made up.
+      text: f.displayName,
       description: f.type,
-      // Kibana: insert name + space
+      // Kibana: insert name + space — always the bare key, never the display prefix. What you
+      // type into a KQL field reference is the attribute key itself (resolved against the
+      // FieldIndex); inserting the prefixed display form would produce a field name that doesn't
+      // actually parse/resolve.
       insertText: f.name + ' ',
       replaceStart,
       replaceEnd,

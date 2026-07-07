@@ -77,11 +77,20 @@ export function buildTablePanel(
 }
 
 /**
- * Build a "barchart" panel showing the current volume histogram.
+ * Build a "timeseries" panel (rendered as bars) showing the current volume histogram.
  * `breakdown` should already be resolved via resolveVolumeBreakdown() from the UI-level
  * BreakdownSel, same as the live in-app histogram query.
  * The long time/level/count rows are pivoted into per-level series via transformations,
  * since the query itself always runs in Table format.
+ *
+ * Deliberately NOT a "barchart" panel — barchart treats every row as a discrete category
+ * (Grafana's own docs: "for large amounts of time-series data, we recommend that you use the
+ * time series visualization" instead), so a ~50-60-bucket histogram rendered as a barchart
+ * produced one raw-epoch category tick per bucket, all overlapping/unreadable, with bars grouped
+ * side-by-side instead of stacked. `prepareTimeSeries`'s `format: 'many'` output (one frame per
+ * series, each with a real time-typed field) is the shape a timeseries panel expects — pairing it
+ * with `drawStyle: 'bars'` + `stacking` reproduces the barchart look while keeping a proper,
+ * auto-formatted/decimated time axis.
  */
 export function buildHistogramPanel(
   config: SourceConfig,
@@ -94,20 +103,23 @@ export function buildHistogramPanel(
   const rawSql = buildVolumeQuery(config, state, { interval: { macro: true }, breakdown }, index);
   return {
     id: opts.id,
-    type: 'barchart',
+    type: 'timeseries',
     title: opts.title ?? 'Log volume',
     gridPos: opts.gridPos,
     datasource,
     targets: [{ refId: 'A', datasource, editorType: 'sql', format: FORMAT_TABLE, rawSql }],
-    // Pivot long rows (time, level, count) into one series per level, then into a wide
-    // time-series frame the barchart panel can render — same shape the app already
-    // produces client-side in LogsExplorer's volume-row folding logic.
+    // Pivot long rows (time, level, count) into one series per level, then into per-series
+    // time-series frames — the shape a timeseries panel consumes — same grouping the app already
+    // does client-side in LogsExplorer's volume-row folding logic.
     transformations: [
       { id: 'partitionByValues', options: { fields: ['level'], keepFields: false } },
       { id: 'prepareTimeSeries', options: { format: 'many' } },
     ],
-    options: { xField: 'time' },
-    fieldConfig: { defaults: {}, overrides: [] },
+    options: {},
+    fieldConfig: {
+      defaults: { custom: { drawStyle: 'bars', fillOpacity: 100, stacking: { mode: 'normal', group: 'A' } } },
+      overrides: [],
+    },
   };
 }
 

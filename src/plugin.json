@@ -21,14 +21,14 @@
       "large": "img/logo.svg"
     },
     "screenshots": [],
-    "version": "0.2.12",
+    "version": "0.2.13",
     "updated": "%TODAY%"
   },
   "includes": [
     {
       "type": "page",
       "name": "Logs",
-      "path": "/a/%PLUGIN_ID%/logs",
+      "path": "/a/poortuna-clickhouse-observe-app/logs",
       "addToNav": true,
       "defaultNav": false,
       "icon": "document-info"
@@ -36,7 +36,7 @@
     {
       "type": "page",
       "name": "Traces",
-      "path": "/a/%PLUGIN_ID%/traces",
+      "path": "/a/poortuna-clickhouse-observe-app/traces",
       "addToNav": true,
       "defaultNav": false,
       "icon": "distributed-tracing"
@@ -45,7 +45,7 @@
       "type": "page",
       "icon": "cog",
       "name": "Configuration",
-      "path": "/plugins/%PLUGIN_ID%",
+      "path": "/plugins/poortuna-clickhouse-observe-app",
       "role": "Admin",
       "addToNav": true
     }

@@ -10,6 +10,23 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.13] — 2026-07-07
+
+### Fixed
+
+- **Nav links broken on Grafana < 10.3 (and some airgapped installs).** `plugin.json` used the
+  `%PLUGIN_ID%` template placeholder in `includes[].path`; that substitution requires a Grafana
+  version newer than this plugin's declared `>=10.0.0` minimum, so older instances rendered the
+  literal string (`/a/%PLUGIN_ID%/logs`) instead of a working URL. Paths now hardcode the plugin
+  ID directly.
+
+### Changed
+
+- Retook the three README screenshots (Logs Explorer, Trace Explorer, Configuration) against
+  live seeded data.
+
+---
+
 ## [0.2.12] — 2026-07-07
 
 ### Changed

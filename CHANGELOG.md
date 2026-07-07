@@ -10,6 +10,19 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.15] — 2026-07-08
+
+### Fixed
+
+- **"Add to dashboard" histogram panel was unreadable.** The exported "Log volume" panel used
+  Grafana's `barchart` panel type, which treats every row as a discrete category — with ~50-60
+  time buckets that produced one raw-epoch tick per bucket, all overlapping, plus ungrouped
+  side-by-side (not stacked) bars. Switched to the `timeseries` panel type (rendered as stacked
+  bars via `drawStyle`/`stacking`), which has a real time axis and renders exactly like the live
+  in-app histogram.
+
+---
+
 ## [0.2.14] — 2026-07-08
 
 ### Added

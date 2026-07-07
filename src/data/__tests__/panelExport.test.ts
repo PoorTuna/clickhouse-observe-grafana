@@ -50,11 +50,18 @@ describe('buildHistogramPanel', () => {
       { id: 2, gridPos: { x: 0, y: 10, w: 24, h: 8 } }
     );
 
-    expect(panel.type).toBe('barchart');
+    // "timeseries" (not "barchart") — barchart treats every bucket as a discrete category,
+    // which overlaps unreadable raw-epoch tick labels once there are ~50+ buckets. See the
+    // doc comment on buildHistogramPanel.
+    expect(panel.type).toBe('timeseries');
     expect(panel.targets[0].rawSql).toContain('$__timeInterval(');
     expect(panel.targets[0].rawSql).not.toMatch(/toStartOfInterval/);
     // Long time/level/count rows are pivoted into series client-side.
     expect(panel.transformations?.map((t) => t.id)).toEqual(['partitionByValues', 'prepareTimeSeries']);
+    // Bars + stacked, reproducing the barchart look on a panel type with a real time axis.
+    expect(panel.fieldConfig?.defaults).toMatchObject({
+      custom: { drawStyle: 'bars', stacking: { mode: 'normal', group: 'A' } },
+    });
   });
 
   it('reflects a severity breakdown in the generated SQL', () => {

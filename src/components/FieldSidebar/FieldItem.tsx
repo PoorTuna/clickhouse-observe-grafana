@@ -15,6 +15,14 @@ interface FieldItemProps {
   timeRange: TimeRange;
   onToggleColumn: (field: FieldModel) => void;
   onAddFilter: (f: FilterPill) => void;
+  /** Overrides the visible label (e.g. the bare key inside a collapsed source-column group,
+   *  where the group header already establishes the "ResourceAttributes." prefix). The
+   *  `title` tooltip always shows field.sqlExpr regardless, so the full picture is one hover away. */
+  labelOverride?: string;
+  /** When set, this row doubles as a Map/JSON container column's own field row AND the
+   *  collapsible header for its discovered children — filter/select still act on the raw
+   *  container itself, the chevron only toggles which nested fields are visible below it. */
+  expandable?: { isOpen: boolean; onToggle: () => void; childCount: number };
 }
 
 export function FieldItem({
@@ -24,6 +32,8 @@ export function FieldItem({
   timeRange,
   onToggleColumn,
   onAddFilter,
+  labelOverride,
+  expandable,
 }: FieldItemProps) {
   const styles = useStyles2(getStyles);
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -60,8 +70,18 @@ export function FieldItem({
         title={field.sqlExpr}
         onClick={openPopover}
       >
+        {expandable && (
+          <button
+            className={styles.expandBtn}
+            title={expandable.isOpen ? 'Collapse' : 'Expand'}
+            onClick={(e) => { e.stopPropagation(); expandable.onToggle(); }}
+          >
+            <Icon name={expandable.isOpen ? 'angle-down' : 'angle-right'} size="xs" />
+          </button>
+        )}
         <Icon name={icon as any} size="xs" className={styles.typeIcon} />
-        <span className={styles.name}>{field.displayName}</span>
+        <span className={styles.name}>{labelOverride ?? field.displayName}</span>
+        {expandable && <span className={styles.childCount}>{expandable.childCount}</span>}
         <div className={`${styles.actions} field-item-actions`}>
           <button
             className={styles.actionBtn}
@@ -174,5 +194,30 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   actionBtnActive: css`
     color: ${theme.colors.primary.text};
+  `,
+  expandBtn: css`
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    /* Stretches to the row's full height and widens the clickable area well past the visible
+     * chevron glyph — the old 14px-wide, unpadded button was an easy misclick that opened the
+     * stats popover instead of toggling the group. Kept within the row's own box (no negative
+     * margins) so it can't bleed into the tightly-packed rows above/below. */
+    align-self: stretch;
+    width: 22px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: ${theme.colors.text.secondary};
+    &:hover {
+      color: ${theme.colors.text.primary};
+    }
+  `,
+  childCount: css`
+    font-size: 11px;
+    color: ${theme.colors.text.disabled};
+    flex-shrink: 0;
   `,
 });

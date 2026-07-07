@@ -7,11 +7,11 @@ import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
 import { LogDetailDrawer } from '../components/LogDetailDrawer';
-import { VolumeHistogram, resolveInterval, ResolvedInterval } from '../components/VolumeHistogram';
+import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
 import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
 import { BreakdownPicker } from '../components/HistogramControls/BreakdownPicker';
 import { FieldSidebar } from '../components/FieldSidebar/FieldSidebar';
-import { FieldsProvider } from '../components/FieldsContext';
+import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
@@ -19,6 +19,7 @@ import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboard
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
+import { buildFieldIndex } from '../sql/fields';
 import { loadFieldValues } from '../sql/kql/_values';
 import { addFilterPill } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
@@ -133,6 +134,13 @@ export function LogsExplorer() {
   const [queryState, dispatch] = useReducer(queryReducer, DEFAULT_LOGS_QUERY_STATE);
   const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange);
 
+  // Discovered once here (not just via <FieldsProvider> in descendants) so executeQuery below can
+  // resolve JSON-path/Map-key field references to the right SQL — see useFieldDiscovery's doc
+  // comment. fieldsState is also handed to <FieldsContext.Provider> further down so FieldSidebar/
+  // SearchBar/etc. get the exact same discovery run rather than a second independent one.
+  const fieldsState = useFieldDiscovery(config, timeRange);
+  const fieldIndex = useMemo(() => buildFieldIndex(fieldsState.fields), [fieldsState.fields]);
+
   // Grafana's PageLayoutType.Custom chrome doesn't clamp to the viewport (see useAvailableHeight's
   // doc comment) — height:100% resolves against nothing, so without this the whole page scrolls
   // instead of just the log table. Same fix as TraceExplorer.tsx.
@@ -163,9 +171,23 @@ export function LogsExplorer() {
   // Breakdown initial value is set once at mount — no effect ever forces it back,
   // so user choices (including "No breakdown") always persist.
   const [intervalMode, setIntervalMode] = useState<IntervalMode>('auto');
-  const [breakdown, setBreakdown] = useState<BreakdownSel>(() =>
+  const [breakdown, setBreakdownState] = useState<BreakdownSel>(() =>
     caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' }
   );
+  // On a full page load, `config` starts out empty and hydrates async (see SourceConfigContext) —
+  // so the useState initializer above often runs before caps.hasSeverity is true, defaulting to
+  // 'none' even for a severity-capable view. This ref distinguishes that race from a real user
+  // pick, so the one-time catch-up effect below never clobbers an explicit "No breakdown" choice.
+  const breakdownUserSetRef = useRef(false);
+  const setBreakdown = useCallback((sel: BreakdownSel) => {
+    breakdownUserSetRef.current = true;
+    setBreakdownState(sel);
+  }, []);
+  useEffect(() => {
+    if (!breakdownUserSetRef.current && caps.hasSeverity && breakdown.kind === 'none') {
+      setBreakdownState({ kind: 'severity' });
+    }
+  }, [caps.hasSeverity, breakdown.kind]);
 
   // Reset query state when the active data view changes so stale field refs don't carry over.
   const prevViewId = useRef<string | undefined>(undefined);
@@ -175,7 +197,8 @@ export function LogsExplorer() {
       dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
       // Re-derive capabilities from the latest config (updates with activeView).
       const newCaps = viewCapabilities(config);
-      setBreakdown(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
+      breakdownUserSetRef.current = false;
+      setBreakdownState(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
     }
     prevViewId.current = viewId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -241,13 +264,13 @@ export function LogsExplorer() {
       // full row per page instead (see hydratePage below). Raw-SQL mode is untouched: whatever
       // the user wrote runs as-is, and the drawer reads straight off those rows, same as before.
       const sql = queryState.useRawSql
-        ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 })
-        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' });
+        ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, undefined, fieldIndex)
+        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' }, fieldIndex);
       const resolved = resolveInterval(intervalMode, timeRange);
       const volSql = buildVolumeQuery(config, queryState, {
         interval: { unit: resolved.unit, value: resolved.value },
         breakdown: resolveVolumeBreakdown(breakdown, config),
-      });
+      }, fieldIndex);
 
       const volPromise = caps.hasTime
         ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' })
@@ -279,7 +302,7 @@ export function LogsExplorer() {
       const volPoints: VolumeDataPoint[] = Array.from(volMap.entries())
         .sort(([a], [b]) => a - b)
         .map(([time, levels]) => ({ time, levels }));
-      setVolumeData(volPoints);
+      setVolumeData(caps.hasTime ? fillEmptyBuckets(volPoints, resolved, timeRange) : volPoints);
     } catch (err) {
       if (runRef.current === runId) {
         setError(String((err as Error)?.message ?? err));
@@ -289,7 +312,7 @@ export function LogsExplorer() {
         setLoading(false);
       }
     }
-  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown, caps.hasTime]);
+  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown, caps.hasTime, fieldIndex]);
 
   // Fetches the full ('full' projection) rows for one grid page, so the detail drawer can show
   // Map attribute columns / "All fields" / JSON without the live list query paying SELECT *'s
@@ -317,7 +340,8 @@ export function LogsExplorer() {
           config,
           stateWithCols,
           { limit: pageSize, offset: pageIndex * pageSize },
-          { projection: 'full' }
+          { projection: 'full' },
+          fieldIndex
         );
         const fullRows = await runQueryRows({
           datasourceUid: config.datasourceUid,
@@ -349,7 +373,7 @@ export function LogsExplorer() {
         }
       }
     },
-    [config, queryState, effectiveColumns, timeRange, pageSize]
+    [config, queryState, effectiveColumns, timeRange, pageSize, fieldIndex]
   );
 
   useLayoutEffect(() => {
@@ -383,11 +407,11 @@ export function LogsExplorer() {
     (sqlExpr: string) =>
       loadFieldValues(config, sqlExpr, {
         table: config.logsTable,
-        conditions: buildWhereConditions(config, queryState),
+        conditions: buildWhereConditions(config, queryState, fieldIndex),
         timeRange,
         cacheKey: JSON.stringify([queryState.search, queryState.filters]),
       }),
-    [config, queryState, timeRange]
+    [config, queryState, timeRange, fieldIndex]
   );
 
   const onToggleColumn = (col: SelectedColumn) => {
@@ -451,7 +475,8 @@ export function LogsExplorer() {
           config,
           stateWithCols,
           { limit: chunkSize, offset: currentRows.length },
-          { projection: 'grid' }
+          { projection: 'grid' },
+          fieldIndex
         );
         const chunk = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
         if (runRef.current !== runId) {
@@ -467,7 +492,7 @@ export function LogsExplorer() {
         setFetchingMore(false);
       }
     },
-    [config, queryState, timeRange, effectiveColumns]
+    [config, queryState, timeRange, effectiveColumns, fieldIndex]
   );
 
   const onPageChange = useCallback(
@@ -501,7 +526,8 @@ export function LogsExplorer() {
     config,
     { ...queryState, columns: effectiveColumns },
     undefined,
-    { projection: 'grid' }
+    { projection: 'grid' },
+    fieldIndex
   );
 
   const onToggleRawSql = () => {
@@ -548,7 +574,7 @@ export function LogsExplorer() {
   }, [selectedRow, hydratedRows]);
 
   return (
-    <FieldsProvider config={config} timeRange={timeRange}>
+    <FieldsContext.Provider value={fieldsState}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
         {/* Row 1: view picker (left) + controls (right) */}
@@ -834,7 +860,7 @@ export function LogsExplorer() {
         />
       </div>
       </PluginPage>
-    </FieldsProvider>
+    </FieldsContext.Provider>
   );
 }
 

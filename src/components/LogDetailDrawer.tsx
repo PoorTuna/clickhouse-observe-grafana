@@ -20,6 +20,7 @@ import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp, severityColor } from './LogsTable';
 import { makeColumnKey } from './FieldSidebar/FieldSidebar';
+import { JsonTree } from './JsonTree';
 
 interface LogDetailDrawerProps {
   /** Narrow (grid-projection) row — always present, used for the header summary which must
@@ -261,22 +262,12 @@ export function LogDetailDrawer({
     >
       {activeTab === 'json' ? (
         <div className={styles.jsonWrap}>
-          <div className={styles.jsonToolbar}>
-            {hydrating && (
-              <span className={styles.hydratingNote}>
-                <Spinner size="sm" /> Loading full row…
-              </span>
-            )}
-            <ClipboardButton
-              icon="clipboard-alt"
-              size="sm"
-              variant="secondary"
-              getText={() => JSON.stringify(effectiveRow, null, 2)}
-            >
-              Copy JSON
-            </ClipboardButton>
-          </div>
-          <pre className={styles.jsonPre}>{JSON.stringify(effectiveRow, null, 2)}</pre>
+          {hydrating && (
+            <span className={styles.hydratingNote}>
+              <Spinner size="sm" /> Loading full row…
+            </span>
+          )}
+          <JsonTree data={effectiveRow} defaultExpanded={new Set(['root'])} />
         </div>
       ) : (
         <div className={styles.content} onMouseDown={clearSelectionPopover}>
@@ -469,12 +460,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(1)};
     height: 100%;
   `,
-  jsonToolbar: css`
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: ${theme.spacing(1)};
-  `,
   hydratingNote: css`
     display: flex;
     align-items: center;
@@ -486,21 +471,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   hydratingSpinner: css`
     margin-left: auto;
   `,
-  jsonPre: css`
-    flex: 1;
-    overflow: auto;
-    margin: 0;
-    font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    color: ${theme.colors.text.primary};
-    background: ${theme.colors.background.canvas};
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    padding: ${theme.spacing(1)};
-    white-space: pre-wrap;
-    word-break: break-word;
-  `,
-
   // ── Table tab ─────────────────────────────────────────────────────────────
   content: css`
     padding: ${theme.spacing(1)};

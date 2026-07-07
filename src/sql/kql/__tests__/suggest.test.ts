@@ -38,6 +38,27 @@ describe('getSuggestions', () => {
     expect(s?.replaceEnd).toBe(2);
   });
 
+  // ── Map/JSON field display prefix (matches the field sidebar's grouping labels) ───────────
+  it('a nested field suggestion shows the source-column-prefixed displayName, not the bare key', () => {
+    const nestedFields: FieldModel[] = [
+      ...fields,
+      {
+        id: 'map:ResourceAttributes:k8s.namespace.name',
+        name: 'k8s.namespace.name',
+        displayName: 'ResourceAttributes.k8s.namespace.name',
+        sqlExpr: "ResourceAttributes['k8s.namespace.name']",
+        type: 'string',
+        source: 'map',
+        mapColumn: 'ResourceAttributes',
+      },
+    ];
+    const { suggestions } = getSuggestions('k8s', 3, nestedFields);
+    const s = suggestions.find((sug) => sug.type === 'field');
+    expect(s?.text).toBe('ResourceAttributes.k8s.namespace.name');
+    // Inserted text into the query must stay the bare key — the prefixed form doesn't resolve.
+    expect(s?.insertText).toBe('k8s.namespace.name ');
+  });
+
   // ── After field + space → operators ────────────────────────────────────────
   it('after "SeverityText " → operator suggestions', () => {
     const q = 'SeverityText ';

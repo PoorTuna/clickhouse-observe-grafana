@@ -1,6 +1,8 @@
 import { parseKql } from '../_parser';
 import { kqlToSql } from '../toSql';
 import { SourceConfig, OTEL_COLUMN_MAPPING } from '../../../types';
+import { buildFieldIndex } from '../../fields';
+import { FieldModel } from '../../fieldModel';
 
 const config: SourceConfig = {
   datasourceUid: 'test',
@@ -443,5 +445,42 @@ describe('kqlToSql', () => {
     expect(result).toContain('match(');
     expect(result).toContain('req-59');
     expect(result).not.toContain("ILIKE '%req-59%'");
+  });
+
+  // ── JSON path resolution (discovered fields, threaded via FieldIndex) ─────
+
+  const jsonUserIdField: FieldModel = {
+    id: 'json:Payload:user.id',
+    name: 'user.id',
+    displayName: 'user.id',
+    sqlExpr: 'Payload.user.id',
+    type: 'number',
+    source: 'json',
+    jsonColumn: 'Payload',
+    jsonPath: 'user.id',
+  };
+  const indexWithJson = buildFieldIndex([jsonUserIdField]);
+
+  it('typed dotted field name resolves to the JSON accessor, not a Map lookup, when discovered', () => {
+    const result = kqlToSql(parseKql('user.id:5'), config, indexWithJson);
+    expect(result).toContain('Payload.user.id');
+    expect(result).not.toContain('LogAttributes');
+  });
+
+  it('without a matching discovered field, the same dotted name still falls back to Map lookup', () => {
+    const result = kqlToSql(parseKql('user.id:5'), config);
+    expect(result).toContain("LogAttributes['user.id']");
+  });
+
+  it('an already-resolved JSON sqlExpr passed back in (e.g. from a FilterPill) is not re-wrapped', () => {
+    const result = kqlToSql(parseKql('Payload.user.id:5'), config, indexWithJson);
+    expect(result).toContain('Payload.user.id');
+    expect(result).not.toContain("LogAttributes['Payload.user.id']");
+  });
+
+  it('numeric range on a JSON field casts to Float64, like Map fields do', () => {
+    const result = kqlToSql(parseKql('user.id > 100'), config, indexWithJson);
+    expect(result).toContain('toFloat64(Payload.user.id)');
+    expect(result).toContain('> 100');
   });
 });

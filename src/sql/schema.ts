@@ -42,24 +42,34 @@ export function getAttributeMapColumn(
  * Parse a serialized ClickHouse Map value from the DataFrame.
  * The CH datasource returns Map columns as JSON-like strings or plain objects.
  */
+/** Coerce a parsed map's values to strings — OTel attribute maps can hold nested
+ * objects/arrays for some keys, but callers render every value as plain text. */
+function stringifyValues(obj: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+  }
+  return out;
+}
+
 export function parseMapValue(raw: unknown): Record<string, string> {
   if (raw === null || raw === undefined) {
     return {};
   }
   if (typeof raw === 'object') {
-    return raw as Record<string, string>;
+    return stringifyValues(raw as Record<string, unknown>);
   }
   if (typeof raw === 'string') {
     if (!raw || raw === '{}') {
       return {};
     }
     try {
-      return JSON.parse(raw);
+      return stringifyValues(JSON.parse(raw));
     } catch {
       // ClickHouse sometimes serializes Maps as {'key':'val','key2':'val2'}
       // with single quotes; attempt a liberal parse
       try {
-        return JSON.parse(raw.replace(/'/g, '"'));
+        return stringifyValues(JSON.parse(raw.replace(/'/g, '"')));
       } catch {
         return {};
       }

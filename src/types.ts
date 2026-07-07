@@ -103,7 +103,7 @@ export interface FilterPill {
   label?: string;       // optional custom display label
 }
 
-export type ColumnType = 'time' | 'level' | 'text' | 'number' | 'string' | 'exact' | 'map' | 'unknown';
+export type ColumnType = 'time' | 'level' | 'text' | 'number' | 'string' | 'exact' | 'map' | 'json' | 'unknown';
 
 export interface SelectedColumn {
   id: string;           // stable identifier

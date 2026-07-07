@@ -39,3 +39,34 @@ export function buildMapKeysQuery(
     `LIMIT ${limit}`,
   ].filter(Boolean).join('\n');
 }
+
+/**
+ * Discover distinct paths (+ their ClickHouse type) for a native JSON column, bounded to the
+ * current time range when a timestamp column is mapped — mirrors buildMapKeysQuery's degradation
+ * to an unbounded scan when no timestamp is available.
+ *
+ * JSONAllPathsWithTypes covers both type-hinted paths (declared in the column's JSON(...) type)
+ * and dynamic paths (inferred per-row) — CH reports both through the same function, so no separate
+ * query is needed to distinguish them. Returns one row per (path, type) pair; a path can appear
+ * more than once if different rows observed different dynamic types for it — callers should
+ * dedupe by path (first-seen wins).
+ */
+export function buildJsonPathsQuery(
+  config: SourceConfig,
+  jsonColumn: string,
+  limit = 500,
+  table: string = config.logsTable
+): string {
+  const tbl = `"${config.database}"."${table}"`;
+  const ts = config.columns.timestamp;
+  // JSONAllPathsWithTypes(...) returns Map(String, String) (path -> type). Zip its keys/values
+  // into Tuple(String, String) pairs first so ARRAY JOIN yields one (path, type) row per element —
+  // ARRAY JOIN-ing a Map directly is ambiguous about key/value pairing across CH versions.
+  return [
+    `SELECT DISTINCT pt.1 AS path, pt.2 AS type`,
+    `FROM ${tbl}`,
+    `ARRAY JOIN arrayZip(mapKeys(JSONAllPathsWithTypes(${jsonColumn})), mapValues(JSONAllPathsWithTypes(${jsonColumn}))) AS pt`,
+    ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
+    `LIMIT ${limit}`,
+  ].filter(Boolean).join('\n');
+}

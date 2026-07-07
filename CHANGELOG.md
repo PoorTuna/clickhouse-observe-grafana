@@ -10,6 +10,46 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.2.14] — 2026-07-08
+
+### Added
+
+- **Native ClickHouse `JSON`-column fields.** Paths inside `JSON`-typed columns (type-hinted and
+  dynamic) are now discovered alongside `Map` keys and surfaced as first-class fields — sidebar,
+  KQL autocomplete, filters, and column selection all work the same way they already did for Map
+  attributes.
+- **Collapsible JSON tree in the log detail drawer.** The JSON tab now renders a Kibana-style
+  per-node collapsible tree instead of a flat `JSON.stringify` dump.
+
+### Fixed
+
+- **OTel log detail drawer could crash on real data.** `parseMapValue` passed non-string Map/JSON
+  attribute values (nested objects/arrays) straight through; rendering one as a React child threw.
+  Values are now stringified consistently at parse time.
+- **Severity breakdown silently reset to "No breakdown" after a full page reload.** `config`
+  hydrates asynchronously, so the histogram breakdown's initial state was often set before
+  `caps.hasSeverity` was known. It now self-corrects once capabilities are known, without ever
+  overriding an explicit user choice.
+- **Histogram hid small counts next to large ones** (e.g. 10 errors against 40k info logs) —
+  every non-zero stacked segment now has a minimum render height, so a rare error/warn series is
+  never invisible against a dominant one.
+- **Histogram tooltip could get clipped off the right edge of the screen** when hovering buckets
+  near the end of the chart — it now flips to the left of the cursor instead of overflowing.
+- **Histogram didn't render empty buckets** — filtering to a range with sparse data (e.g. a full
+  day with a quiet stretch) now shows flat-zero bars for the gap instead of omitting it.
+- Discovered Map/JSON fields (e.g. `k8s.namespace.name`) showed as bare, unprefixed names in the
+  sidebar and search-bar autocomplete, making them indistinguishable from real top-level columns.
+  They're now labeled with their source column (`ResourceAttributes.k8s.namespace.name`) and
+  grouped under a collapsible header per source column in the sidebar; filtering/selecting the
+  raw container column itself still works from the same header row.
+
+### Changed
+
+- Nested Map/JSON fields in the sidebar are collapsed by default (a table can have hundreds of
+  discovered keys/paths) — expand a source column's group to see its fields, or just search.
+
+---
+
 ## [0.2.13] — 2026-07-07
 
 ### Fixed

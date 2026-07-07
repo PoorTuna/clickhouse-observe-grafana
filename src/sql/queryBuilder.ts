@@ -7,7 +7,7 @@
  */
 
 import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig, TraceListFilters } from '../types';
-import { resolveField } from './fields';
+import { resolveField, FieldIndex } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
 /**
@@ -78,9 +78,9 @@ function filterOpToSql(op: FilterOp): string {
   }
 }
 
-function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
+function buildFilterClause(filter: FilterPill, config: SourceConfig, index?: FieldIndex): string {
   const value = filter.value.trim();
-  const resolved = resolveField(filter.field, config);
+  const resolved = resolveField(filter.field, config, index);
   const sqlExprRaw = resolved ? resolved.sqlExpr : filter.field;
 
   // exists / not_exists — value is irrelevant
@@ -135,7 +135,7 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig): string {
   return `${col} ${op} ${quoteString(value)}`;
 }
 
-export function buildSearchClause(search: string, config: SourceConfig): string {
+export function buildSearchClause(search: string, config: SourceConfig, index?: FieldIndex): string {
   const term = search.trim();
   if (!term) {
     return '';
@@ -144,7 +144,7 @@ export function buildSearchClause(search: string, config: SourceConfig): string 
   // Try to parse as KQL first.
   try {
     const ast = parseKql(term);
-    return kqlToSql(ast, config);
+    return kqlToSql(ast, config, index);
   } catch {
     // Fall back to legacy free-text body search on any parse error so existing
     // queries and partial input never break a live result set.
@@ -166,7 +166,7 @@ export function buildSearchClause(search: string, config: SourceConfig): string 
 }
 
 /** Build the WHERE conditions shared across logs, volume, and field-stats queries. */
-export function buildWhereConditions(config: SourceConfig, state: LogsQueryState): string[] {
+export function buildWhereConditions(config: SourceConfig, state: LogsQueryState, index?: FieldIndex): string[] {
   const conditions: string[] = [];
   // Only add the time filter when a timestamp column is mapped (no-time views skip this).
   if (config.columns.timestamp) {
@@ -175,10 +175,10 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
     );
   }
   if (state.search.trim()) {
-    conditions.push(buildSearchClause(state.search, config));
+    conditions.push(buildSearchClause(state.search, config, index));
   }
   for (const f of state.filters) {
-    conditions.push(buildFilterClause(f, config));
+    conditions.push(buildFilterClause(f, config, index));
   }
   return conditions;
 }
@@ -197,7 +197,8 @@ export function buildLogsQuery(
   config: SourceConfig,
   state: LogsQueryState,
   pagination?: { limit: number; offset: number },
-  opts?: BuildLogsQueryOpts
+  opts?: BuildLogsQueryOpts,
+  index?: FieldIndex
 ): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
@@ -230,7 +231,7 @@ export function buildLogsQuery(
   const gridSelect = [...coreSelect, ...extraSelect];
   const selectParts =
     opts?.projection === 'grid' && gridSelect.length > 0 ? gridSelect : ['*', ...coreSelect, ...extraSelect];
-  const conditions = buildWhereConditions(config, state);
+  const conditions = buildWhereConditions(config, state, index);
 
   const sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);
   const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
@@ -269,7 +270,8 @@ export interface VolumeQueryOpts {
 export function buildVolumeQuery(
   config: SourceConfig,
   state: LogsQueryState,
-  opts: VolumeQueryOpts
+  opts: VolumeQueryOpts,
+  index?: FieldIndex
 ): string {
   const c = config.columns;
   // Bucketing by time is the entire point of a volume query — meaningless without a mapped
@@ -283,7 +285,7 @@ export function buildVolumeQuery(
   const timeExpr = 'macro' in interval
     ? `$__timeInterval(${c.timestamp})`
     : `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
-  const conditions = buildWhereConditions(config, state);
+  const conditions = buildWhereConditions(config, state, index);
   const condSql = conditions.join(' AND ');
 
   const whereSql = condSql ? `WHERE ${condSql}` : '';
@@ -425,7 +427,7 @@ const OTEL_STATUS_ERROR = 'STATUS_CODE_ERROR';
  * Mirrors buildWhereConditions (logs) but traces has no body column, so free-text search falls
  * back to a spanName ILIKE instead of a hasToken/body search when KQL parsing doesn't apply.
  */
-export function buildTraceWhereConditions(config: SourceConfig, filters: TraceListFilters): string[] {
+export function buildTraceWhereConditions(config: SourceConfig, filters: TraceListFilters, index?: FieldIndex): string[] {
   const c = config.columns;
   const conditions: string[] = [];
 
@@ -434,7 +436,7 @@ export function buildTraceWhereConditions(config: SourceConfig, filters: TraceLi
   }
   const search = filters.search.trim();
   if (search) {
-    const clause = buildSearchClause(search, config);
+    const clause = buildSearchClause(search, config, index);
     // '' → no body column and KQL parse failed outright; '1=1' → kqlToSql's own no-op sentinel
     // for a bare term it can't resolve without a body column (see kql/toSql.ts). Both mean
     // "the term went nowhere" — fall back to matching the operation name instead of silently
@@ -470,7 +472,7 @@ export function buildTraceWhereConditions(config: SourceConfig, filters: TraceLi
     }
   }
   for (const f of filters.pills) {
-    conditions.push(buildFilterClause(f, config));
+    conditions.push(buildFilterClause(f, config, index));
   }
   return conditions;
 }
@@ -495,7 +497,8 @@ export function buildTraceListQuery(
   config: SourceConfig,
   filters: TraceListFilters,
   sort: TraceListSort = { col: 'startTime', dir: 'desc' },
-  pagination: TraceListPagination = { limit: 100, offset: 0 }
+  pagination: TraceListPagination = { limit: 100, offset: 0 },
+  index?: FieldIndex
 ): string {
   const c = config.columns;
   // No traceId mapped → no trace concept at all; same gating style as buildLogsByTraceIdQuery.
@@ -503,7 +506,7 @@ export function buildTraceListQuery(
     return '';
   }
   const tbl = tableRef(config, config.tracesTable);
-  const conditions = buildTraceWhereConditions(config, filters);
+  const conditions = buildTraceWhereConditions(config, filters, index);
 
   const errorCountExpr = c.statusCode ? `countIf(${c.statusCode} = ${quoteString(OTEL_STATUS_ERROR)})` : '0';
   const serviceCountExpr = c.serviceName ? `uniqExact(${c.serviceName})` : '0';
@@ -663,7 +666,8 @@ export function buildLogsByTraceIdQuery(config: SourceConfig, traceId: string): 
 export function buildTraceVolumeQuery(
   config: SourceConfig,
   filters: TraceListFilters,
-  opts: VolumeQueryOpts
+  opts: VolumeQueryOpts,
+  index?: FieldIndex
 ): string {
   const c = config.columns;
   if (!c.timestamp) {
@@ -674,7 +678,7 @@ export function buildTraceVolumeQuery(
   const timeExpr = 'macro' in interval
     ? `$__timeInterval(${c.timestamp})`
     : `toStartOfInterval(${c.timestamp}, INTERVAL ${interval.value} ${interval.unit})`;
-  const conditions = buildTraceWhereConditions(config, filters);
+  const conditions = buildTraceWhereConditions(config, filters, index);
   const condSql = conditions.join(' AND ');
   const whereSql = condSql ? `WHERE ${condSql}` : '';
 

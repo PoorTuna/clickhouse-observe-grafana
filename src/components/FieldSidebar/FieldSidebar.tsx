@@ -31,17 +31,6 @@ interface FieldSidebarProps {
   onCollapse: () => void;
 }
 
-/** Group key + display label for a nested (map/json) field's source column. */
-function groupKeyFor(f: FieldModel): string | null {
-  if (f.source === 'map') {
-    return f.mapColumn ?? null;
-  }
-  if (f.source === 'json') {
-    return f.jsonColumn ?? null;
-  }
-  return null;
-}
-
 export function FieldSidebar({
   queryState,
   timeRange,
@@ -52,28 +41,15 @@ export function FieldSidebar({
   const styles = useStyles2(getStyles);
   const { fields, loading, refresh } = useFields();
   const [nameFilter, setNameFilter] = useState('');
-  // Nested (Map/JSON) fields are grouped by source column and collapsed by default — a table
-  // can easily have hundreds of discovered attribute keys/paths, and most of the time a user
-  // wants "the columns" not "every nested attribute ever seen." Expand on demand instead.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-
-  const toggleGroup = (key: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  };
 
   const selectedIds = useMemo(
     () => new Set(queryState.columns.map((c) => c.id)),
     [queryState.columns]
   );
 
+  // Fields render as a single flat, searchable list (no Map/JSON source-column grouping) —
+  // nested attributes like ResourceAttributes.k8s.namespace.name show as their own row via
+  // FieldModel.displayName, which already carries the full dotted path.
   const { selected, available } = useMemo(() => {
     const lc = nameFilter.toLowerCase();
     const filtered = nameFilter
@@ -84,43 +60,6 @@ export function FieldSidebar({
       available: filtered.filter((f) => !selectedIds.has(f.id)),
     };
   }, [fields, nameFilter, selectedIds]);
-
-  // Split "available" into real top-level columns (shown flat, as before) and nested map/json
-  // fields (grouped by source column). The raw Map/JSON container column itself (e.g. the whole
-  // "ResourceAttributes" column) still gets its own row with full filter/select actions — it's
-  // just also the collapsible header for its discovered children, rather than a second, separate
-  // entry. Without a header row of its own (a plain <button>, no field behind it), there was no
-  // way to filter out or select the container as a whole once it had children — this fixes that.
-  const { plainColumns, groups } = useMemo(() => {
-    const childrenByCol = new Map<string, FieldModel[]>();
-    for (const f of available) {
-      const key = groupKeyFor(f);
-      if (key) {
-        if (!childrenByCol.has(key)) {
-          childrenByCol.set(key, []);
-        }
-        childrenByCol.get(key)!.push(f);
-      }
-    }
-    const plainColumns: FieldModel[] = [];
-    const groups: Array<{ container: FieldModel; children: FieldModel[] }> = [];
-    for (const f of available) {
-      if (f.source !== 'column') {
-        continue;
-      }
-      const children = (f.type === 'map' || f.type === 'json') ? childrenByCol.get(f.name) : undefined;
-      if (children && children.length > 0) {
-        groups.push({ container: f, children });
-      } else {
-        plainColumns.push(f);
-      }
-    }
-    return { plainColumns, groups };
-  }, [available]);
-
-  // Search should find nested fields regardless of collapse state — bypassing grouping when
-  // searching is simpler and more useful than auto-expanding whichever groups matched.
-  const searching = nameFilter.trim().length > 0;
 
   return (
     <div className={styles.sidebar}>
@@ -162,7 +101,7 @@ export function FieldSidebar({
 
       <section className={styles.section}>
         <div className={styles.sectionLabel}>Available ({available.length})</div>
-        {(searching ? available : plainColumns).map((f) => (
+        {available.map((f) => (
           <FieldItem
             key={f.id}
             field={f}
@@ -173,36 +112,6 @@ export function FieldSidebar({
             onAddFilter={onAddFilter}
           />
         ))}
-        {!searching &&
-          groups.map(({ container, children }) => {
-            const isOpen = expandedGroups.has(container.name);
-            return (
-              <div key={container.id}>
-                <FieldItem
-                  field={container}
-                  isSelected={false}
-                  queryState={queryState}
-                  timeRange={timeRange}
-                  onToggleColumn={(field) => onToggleColumn(fieldToColumn(field))}
-                  onAddFilter={onAddFilter}
-                  expandable={{ isOpen, onToggle: () => toggleGroup(container.name), childCount: children.length }}
-                />
-                {isOpen &&
-                  children.map((f) => (
-                    <FieldItem
-                      key={f.id}
-                      field={f}
-                      isSelected={false}
-                      queryState={queryState}
-                      timeRange={timeRange}
-                      onToggleColumn={(field) => onToggleColumn(fieldToColumn(field))}
-                      onAddFilter={onAddFilter}
-                      labelOverride={f.name}
-                    />
-                  ))}
-              </div>
-            );
-          })}
         {!loading && fields.length === 0 && (
           <div className={styles.empty}>No fields discovered yet</div>
         )}

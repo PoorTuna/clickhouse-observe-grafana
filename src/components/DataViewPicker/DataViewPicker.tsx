@@ -1,7 +1,8 @@
-import React, { useContext, useRef, useState } from 'react';
+import React, { useContext, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Button, Icon, useStyles2 } from '@grafana/ui';
+import { Button, Icon, Input, useStyles2 } from '@grafana/ui';
+import { DataView } from '../../types';
 import { DataViewContext } from '../App/App';
 import { CreateDataViewModal } from './CreateDataViewModal';
 
@@ -14,6 +15,8 @@ export function DataViewPicker() {
   const { views, activeView, setActiveViewId, deletePersonalView } = useContext(DataViewContext);
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingView, setEditingView] = useState<DataView | undefined>(undefined);
+  const [search, setSearch] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -28,8 +31,16 @@ export function DataViewPicker() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
-  const sharedViews = views.filter((v) => v.origin === 'shared');
-  const personalViews = views.filter((v) => v.origin === 'personal');
+  const filteredViews = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q
+      ? views.filter(
+          (v) => v.name.toLowerCase().includes(q) || `${v.database}.${v.logsTable}`.toLowerCase().includes(q)
+        )
+      : views;
+  }, [views, search]);
+  const sharedViews = filteredViews.filter((v) => v.origin === 'shared');
+  const personalViews = filteredViews.filter((v) => v.origin === 'personal');
 
   function selectView(id: string) {
     setActiveViewId(id);
@@ -47,6 +58,15 @@ export function DataViewPicker() {
 
         {open && (
           <div className={styles.dropdown}>
+            <div className={styles.searchRow}>
+              <Input
+                autoFocus
+                prefix={<Icon name="search" />}
+                placeholder="Search data views"
+                value={search}
+                onChange={(e) => setSearch(e.currentTarget.value)}
+              />
+            </div>
             {sharedViews.length > 0 && (
               <>
                 <div className={styles.groupHeader}>Shared</div>
@@ -80,6 +100,16 @@ export function DataViewPicker() {
                     </button>
                     <button
                       className={styles.deleteBtn}
+                      title="Edit data view"
+                      onClick={() => {
+                        setOpen(false);
+                        setEditingView(v);
+                      }}
+                    >
+                      <Icon name="pen" size="xs" />
+                    </button>
+                    <button
+                      className={styles.deleteBtn}
                       title="Delete personal view"
                       onClick={() => deletePersonalView(v.id)}
                     >
@@ -90,8 +120,10 @@ export function DataViewPicker() {
               </>
             )}
 
-            {views.length === 0 && (
-              <div className={styles.empty}>No data views configured</div>
+            {filteredViews.length === 0 && (
+              <div className={styles.empty}>
+                {views.length === 0 ? 'No data views configured' : 'No data views match your search'}
+              </div>
             )}
 
             <div className={styles.footer}>
@@ -113,6 +145,11 @@ export function DataViewPicker() {
       </div>
 
       <CreateDataViewModal isOpen={createOpen} onDismiss={() => setCreateOpen(false)} />
+      <CreateDataViewModal
+        isOpen={editingView !== undefined}
+        onDismiss={() => setEditingView(undefined)}
+        editingView={editingView}
+      />
     </>
   );
 }
@@ -155,6 +192,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: ${theme.shadows.z2};
     z-index: 200;
     overflow: hidden;
+  `,
+  searchRow: css`
+    padding: ${theme.spacing(1)} ${theme.spacing(1)} ${theme.spacing(0.5)};
+    border-bottom: 1px solid ${theme.colors.border.weak};
   `,
   groupHeader: css`
     padding: ${theme.spacing(0.5)} ${theme.spacing(1.5)};

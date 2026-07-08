@@ -12,6 +12,31 @@ interface FilterPillsProps {
   onChange: (filters: FilterPill[]) => void;
 }
 
+/** Splits a pill's text into a leading "NOT" badge (Kibana's convention for negated exists/one_of
+ *  filters — "NOT field is one of [...]" rather than filterLabel's "field is not one of [...]"),
+ *  a bold field-name part, and the remaining plain text. filterLabel() itself stays unchanged
+ *  (tests, tooltips, and AddFilterPopover's chip all depend on its exact wording) — this is a
+ *  presentation-only transform local to how pills render. */
+function pillText(f: FilterPill): { notPrefix: boolean; fieldPart: string | null; rest: string } {
+  if (f.label) {
+    return { notPrefix: false, fieldPart: null, rest: f.label };
+  }
+  if (f.op === 'not_exists') {
+    return { notPrefix: true, fieldPart: f.field, rest: ' exists' };
+  }
+  if (f.op === 'not_one_of') {
+    const vals = (f.values ?? [f.value]).filter(Boolean).join(', ');
+    return { notPrefix: true, fieldPart: f.field, rest: ` is one of [${vals}]` };
+  }
+  const label = filterLabel(f);
+  const spaceIdx = label.indexOf(' ');
+  return {
+    notPrefix: false,
+    fieldPart: spaceIdx > 0 ? label.slice(0, spaceIdx) : null,
+    rest: spaceIdx > 0 ? label.slice(spaceIdx) : label,
+  };
+}
+
 export function FilterPills({ filters, onChange }: FilterPillsProps) {
   const styles = useStyles2(getStyles);
 
@@ -26,29 +51,23 @@ export function FilterPills({ filters, onChange }: FilterPillsProps) {
   return (
     <div className={styles.container}>
       {filters.map((f) => {
-        // filterLabel always starts with the bare field name followed by a space (e.g.
-        // "Body = value", "Body exists") except when a custom label overrides it entirely —
-        // splitting on the first space lets the field name render distinctly (Kibana colors it)
-        // without needing filterLabel itself to return structured parts.
-        const label = filterLabel(f);
-        const spaceIdx = !f.label ? label.indexOf(' ') : -1;
-        const fieldPart = spaceIdx > 0 ? label.slice(0, spaceIdx) : null;
-        const restPart = spaceIdx > 0 ? label.slice(spaceIdx) : label;
+        const { notPrefix, fieldPart, rest } = pillText(f);
         const negated = NEGATED_OPS.has(f.op);
         return (
           <span
             key={f.id}
             className={cx(styles.pill, negated ? styles.pillNegative : styles.pillPositive)}
-            title={`${f.field} ${f.op} ${f.value}`}
+            title={filterLabel(f)}
           >
             <span className={styles.label}>
+              {notPrefix && <span className={styles.notPart}>NOT</span>}
               {fieldPart && <span className={styles.fieldPart}>{fieldPart}</span>}
-              {restPart}
+              {rest}
             </span>
             <button
               className={styles.removeBtn}
               onClick={() => onRemove(f.id)}
-              aria-label={`Remove filter ${label}`}
+              aria-label={`Remove filter ${filterLabel(f)}`}
             >
               <Icon name="times" size="xs" />
             </button>
@@ -75,31 +94,38 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: inline-flex;
     align-items: center;
     gap: ${theme.spacing(0.75)};
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.pill};
-    padding: ${theme.spacing(0.375)} ${theme.spacing(0.5)} ${theme.spacing(0.375)} ${theme.spacing(0.75)};
+    border-radius: ${theme.shape.radius.default};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)} ${theme.spacing(0.5)} ${theme.spacing(1)};
     font-size: ${theme.typography.bodySmall.fontSize};
-    color: ${theme.colors.text.primary};
+    color: ${theme.colors.text.secondary};
     max-width: 300px;
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
   `,
-  /** Polarity accent — matches Kibana's green (positive) / red (excluding) filter pills. */
+  /** Polarity accent — matches Kibana's vivid green (positive) / red (excluding) filter pills:
+   *  a 2px saturated border plus a matching low-opacity tint, rather than a flat gray chip with
+   *  only a subtle border-color hint. */
   pillPositive: css`
-    border-color: ${theme.colors.success.border};
+    border: 2px solid ${theme.colors.success.main};
+    background: ${theme.colors.success.transparent};
+    &:hover { background: ${theme.colors.success.transparent}; filter: brightness(1.3); }
   `,
   pillNegative: css`
-    border-color: ${theme.colors.error.border};
+    border: 2px solid ${theme.colors.error.main};
+    background: ${theme.colors.error.transparent};
+    &:hover { background: ${theme.colors.error.transparent}; filter: brightness(1.3); }
   `,
   label: css`
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   `,
+  notPart: css`
+    font-weight: ${theme.typography.fontWeightBold};
+    color: ${theme.colors.error.text};
+    margin-right: ${theme.spacing(0.5)};
+  `,
   fieldPart: css`
     font-weight: ${theme.typography.fontWeightBold};
+    color: ${theme.colors.text.primary};
   `,
   removeBtn: css`
     background: transparent;

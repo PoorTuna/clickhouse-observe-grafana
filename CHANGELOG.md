@@ -10,6 +10,46 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.0] — 2026-07-09
+
+### Added
+
+- **Kibana Discover-style Logs Explorer overhaul.** Resizable sidebar/table/detail panes, inline
+  log detail panel (replaces the old overlay drawer), flat searchable field sidebar, zebra-striped
+  rows with uniform 2-line message clamping, drag-to-reorder table columns, drag a field from the
+  sidebar onto the table to add it as a column at the exact position dropped, click-to-filter
+  histogram breakdown segments with a filter-for/filter-out popup, right-side histogram legend
+  with isolate/toggle series clicks, auto-refresh via `RefreshPicker`, multi-row compare view,
+  editable/searchable data views, and a wider add-filter popup.
+
+### Fixed
+
+- **Histogram's last time bucket always rendered empty.** `fillEmptyBuckets` looped `t <= end`,
+  which added a spurious trailing bucket exactly at the range's end instant whenever the range
+  span divided evenly by the bucket step (e.g. a round "last 1 hour") — that bucket's window only
+  ever contained a single instant of query data, so it was structurally near-empty regardless of
+  real events. Changed to `t < end`.
+- **Infinite fetch loop when no breakdown choice was made yet.** The derived `breakdown` value
+  fell back to a freshly-built object literal on every render, churning `executeQuery`'s identity
+  and retriggering the effect that calls it.
+- **Severity breakdown silently reset to "none" on every page load.** `FieldsContext`'s `loading`
+  flag started `false` before field discovery had even begun, so the severity-fallback guard read
+  "checked, no severity column" on the very first render and locked in "none" as a permanent
+  explicit choice.
+- **Log detail panel collapsed to a handful of raw columns after any auto-refresh, filter, or
+  time-range change.** The list query's returned rows are new objects each time; the open detail
+  panel's `selectedRow` kept pointing at the old, now-detached object. Re-points it at the
+  matching row in the new results by content key (or closes the panel if that row no longer
+  matches).
+- Adding/removing a table column while defaults were still showing wiped out the whole default
+  column set instead of appending/removing one.
+- Histogram y-axis rendered a stray tick above the chart (dividing by a zero max produced `NaN%`
+  positioning) when a bucket had no data.
+- `mapKeys()` scans against Map-typed OTel attribute columns no longer run against columns that
+  are actually `String`/`JSON` in the target schema (was throwing ClickHouse error 43).
+
+---
+
 ## [0.2.15] — 2026-07-08
 
 ### Fixed

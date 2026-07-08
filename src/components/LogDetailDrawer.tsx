@@ -1,9 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import {
   useStyles2,
-  Drawer,
   Button,
   Icon,
   IconButton,
@@ -13,8 +12,10 @@ import {
   TabsBar,
   Tab,
   Spinner,
+  Pagination,
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
+import { FieldModel } from '../sql/fieldModel';
 import { groupAttributes } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
@@ -37,6 +38,10 @@ interface LogDetailDrawerProps {
   /** True while a hydrate fetch for detailRow's page is in flight. */
   detailLoading?: boolean;
   config: SourceConfig;
+  /** Discovered fields (from useFieldDiscovery) — used to tell JSON-typed attribute columns apart
+   *  from Map-typed ones so attribute rows get the right SQL accessor. Optional: omitted callers
+   *  fall back to treating every attribute column as Map, matching prior behavior. */
+  fields?: FieldModel[];
   /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
   columns: SelectedColumn[];
   onClose: () => void;
@@ -58,11 +63,17 @@ interface SelectionPopover {
   text: string;
 }
 
+/** Kibana shows 50 keys per page in the "All fields" list — mirrored here. */
+const FIELDS_PAGE_SIZE = 50;
+/** Attribute values longer than this render truncated, with a "Show more" toggle. */
+const VALUE_TRUNCATE_LEN = 300;
+
 export function LogDetailDrawer({
   row,
   detailRow,
   detailLoading,
   config,
+  fields,
   columns,
   onClose,
   onAddFilter,
@@ -74,12 +85,26 @@ export function LogDetailDrawer({
 }: LogDetailDrawerProps) {
   const styles = useStyles2(getStyles);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(['logLine', 'resource', 'log'])
+    new Set(['logLine', 'links', 'raw'])
   );
   const [searchAttr, setSearchAttr] = useState('');
   const [activeTab, setActiveTab] = useState<DrawerTab>('table');
   const [selectedOnly, setSelectedOnly] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopover | null>(null);
+  const [expandedValues, setExpandedValues] = useState<Set<string>>(new Set());
+  const [fieldsPage, setFieldsPage] = useState(0);
+
+  const toggleValueExpanded = (key: string) => {
+    setExpandedValues((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => {
@@ -102,10 +127,27 @@ export function LogDetailDrawer({
   const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
   const effectiveRow = detailRow ?? row;
   const hydrating = Boolean(detailLoading) && !detailRow;
-  const attrGroups = useMemo(
-    () => groupAttributes(effectiveRow, config.columns),
-    [effectiveRow, config.columns]
+  const jsonColumns = useMemo(
+    () =>
+      new Set(
+        (fields ?? []).filter((f) => f.source === 'column' && f.type === 'json').map((f) => f.name)
+      ),
+    [fields]
   );
+  const attrGroups = useMemo(
+    () => groupAttributes(effectiveRow, config.columns, jsonColumns),
+    [effectiveRow, config.columns, jsonColumns]
+  );
+
+  // Auto-expand every section (Kibana default) whenever a new log is opened. Keyed on `row`
+  // identity, not `effectiveRow` — the lazy-hydrated detailRow arriving shouldn't re-collapse
+  // sections the user already toggled while viewing the same log.
+  useEffect(() => {
+    setExpandedSections(new Set(['logLine', 'links', 'raw', ...attrGroups.map((g) => g.group)]));
+    setExpandedValues(new Set());
+    setFieldsPage(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row]);
 
   const isColumnSelected = (clickhouseField: string): boolean =>
     columns.some((c) => c.sqlExpr === clickhouseField);
@@ -137,16 +179,27 @@ export function LogDetailDrawer({
     return key.toLowerCase().includes(q) || String(value).toLowerCase().includes(q);
   };
 
-  const renderAttrRow = (field: string, value: string, mapCol?: string) => {
-    const clickhouseField = mapCol ? `${mapCol}['${field}']` : field;
+  const renderAttrRow = (field: string, value: string, sqlExpr: string = field) => {
+    const clickhouseField = sqlExpr;
     const isSelected = isColumnSelected(clickhouseField);
     if (selectedOnly && !isSelected) {
       return null;
     }
+    const valueKey = `${field}:${clickhouseField}`;
+    const isLong = value.length > VALUE_TRUNCATE_LEN;
+    const isValueExpanded = expandedValues.has(valueKey);
+    const displayValue = isLong && !isValueExpanded ? value.slice(0, VALUE_TRUNCATE_LEN) + '…' : value;
     return (
       <div key={field} className={styles.attrRow}>
         <span className={styles.attrKey} title={field}>{field}</span>
-        <span className={styles.attrValue}>{value}</span>
+        <span className={styles.attrValue}>
+          {displayValue}
+          {isLong && (
+            <button className={styles.showMoreBtn} onClick={() => toggleValueExpanded(valueKey)}>
+              {isValueExpanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </span>
         <div className={styles.attrActions}>
           <IconButton
             name="filter-plus"
@@ -211,12 +264,13 @@ export function LogDetailDrawer({
   );
 
   return (
-    <Drawer
-      title="Log detail"
-      onClose={onClose}
-      size="md"
-      scrollableContent={activeTab === 'table'}
-      subtitle={
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <div className={styles.panelTitleRow}>
+          <span className={styles.panelTitle}>Log detail</span>
+          <div className={styles.summarySpacer} />
+          <IconButton name="times" size="lg" tooltip="Close" aria-label="Close log detail" onClick={onClose} />
+        </div>
         <div className={styles.summary}>
           <span className={styles.summaryTime}>{timestamp}</span>
           {severity && (
@@ -242,8 +296,6 @@ export function LogDetailDrawer({
             </div>
           )}
         </div>
-      }
-      tabs={
         <TabsBar>
           <Tab
             label="Table"
@@ -258,8 +310,8 @@ export function LogDetailDrawer({
             onChangeTab={() => setActiveTab('json')}
           />
         </TabsBar>
-      }
-    >
+      </div>
+      <div className={styles.panelBody}>
       {activeTab === 'json' ? (
         <div className={styles.jsonWrap}>
           {hydrating && (
@@ -338,10 +390,10 @@ export function LogDetailDrawer({
           )}
 
           {/* OTel attribute groups */}
-          {attrGroups.map(({ group, label, col, attrs }) => {
-            const visible = Object.entries(attrs)
-              .filter(([k, v]) => filterMatch(k, v))
-              .filter(([k]) => !selectedOnly || isColumnSelected(`${col}['${k}']`));
+          {attrGroups.map(({ group, label, rows }) => {
+            const visible = rows
+              .filter((r) => filterMatch(r.key, r.value))
+              .filter((r) => !selectedOnly || isColumnSelected(r.sqlExpr));
             if (visible.length === 0 && (searchAttr || selectedOnly)) {
               return null;
             }
@@ -354,7 +406,7 @@ export function LogDetailDrawer({
                 </button>
                 {expandedSections.has(group) && (
                   <div className={styles.attrList}>
-                    {visible.map(([k, v]) => renderAttrRow(k, v, col))}
+                    {visible.map((r) => renderAttrRow(r.key, r.value, r.sqlExpr))}
                   </div>
                 )}
               </section>
@@ -368,17 +420,35 @@ export function LogDetailDrawer({
               <span>All fields</span>
               {hydrating && <Spinner size="sm" className={styles.hydratingSpinner} />}
             </button>
-            {expandedSections.has('raw') && (
-              <div className={styles.attrList}>
-                {Object.entries(effectiveRow)
+            {expandedSections.has('raw') &&
+              (() => {
+                const allFields = Object.entries(effectiveRow)
                   .filter(([k]) => !hiddenKeys.has(k) && k !== '')
                   .filter(([k, v]) => filterMatch(k, String(v ?? '')))
-                  .filter(([k]) => !selectedOnly || isColumnSelected(k))
-                  .map(([k, v]) =>
-                    renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined)
-                  )}
-              </div>
-            )}
+                  .filter(([k]) => !selectedOnly || isColumnSelected(k));
+                const numberOfPages = Math.max(1, Math.ceil(allFields.length / FIELDS_PAGE_SIZE));
+                const page = Math.min(fieldsPage, numberOfPages - 1);
+                const pageFields = allFields.slice(page * FIELDS_PAGE_SIZE, (page + 1) * FIELDS_PAGE_SIZE);
+                return (
+                  <>
+                    <div className={styles.attrList}>
+                      {pageFields.map(([k, v]) =>
+                        renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined)
+                      )}
+                    </div>
+                    {numberOfPages > 1 && (
+                      <div className={styles.fieldsPagination}>
+                        <Pagination
+                          currentPage={page + 1}
+                          numberOfPages={numberOfPages}
+                          onNavigate={(p) => setFieldsPage(p - 1)}
+                          hideWhenSinglePage
+                        />
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
           </section>
         </div>
       )}
@@ -405,12 +475,59 @@ export function LogDetailDrawer({
           </Button>
         </div>
       )}
-    </Drawer>
+      </div>
+    </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  // ── Header summary (Drawer subtitle) ─────────────────────────────────────
+  // ── Inline panel chrome (replaces the old overlay Drawer) ─────────────────
+  panel: css`
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.weak};
+    border-radius: ${theme.shape.radius.default};
+    overflow: hidden;
+  `,
+  panelHeader: css`
+    flex-shrink: 0;
+    padding: ${theme.spacing(1)} ${theme.spacing(1.5)} 0;
+    border-bottom: 1px solid ${theme.colors.border.weak};
+  `,
+  panelTitleRow: css`
+    display: flex;
+    align-items: center;
+    margin-bottom: ${theme.spacing(0.5)};
+  `,
+  panelTitle: css`
+    font-size: ${theme.typography.h6.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
+  `,
+  panelBody: css`
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  `,
+  showMoreBtn: css`
+    display: block;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    margin-top: ${theme.spacing(0.25)};
+    color: ${theme.colors.primary.text};
+    font-size: 11px;
+    &:hover { text-decoration: underline; }
+  `,
+  fieldsPagination: css`
+    display: flex;
+    justify-content: center;
+    padding: ${theme.spacing(1)} 0;
+  `,
+  // ── Header summary ────────────────────────────────────────────────────────
   summary: css`
     display: flex;
     align-items: center;

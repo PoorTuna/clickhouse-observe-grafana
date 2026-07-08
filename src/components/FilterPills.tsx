@@ -23,18 +23,31 @@ export function FilterPills({ filters, onChange }: FilterPillsProps) {
 
   return (
     <div className={styles.container}>
-      {filters.map((f) => (
-        <span key={f.id} className={styles.pill} title={`${f.field} ${f.op} ${f.value}`}>
-          <span className={styles.label}>{filterLabel(f)}</span>
-          <button
-            className={styles.removeBtn}
-            onClick={() => onRemove(f.id)}
-            aria-label={`Remove filter ${filterLabel(f)}`}
-          >
-            <Icon name="times" size="xs" />
-          </button>
-        </span>
-      ))}
+      {filters.map((f) => {
+        // filterLabel always starts with the bare field name followed by a space (e.g.
+        // "Body = value", "Body exists") except when a custom label overrides it entirely —
+        // splitting on the first space lets the field name render distinctly (Kibana colors it)
+        // without needing filterLabel itself to return structured parts.
+        const label = filterLabel(f);
+        const spaceIdx = !f.label ? label.indexOf(' ') : -1;
+        const fieldPart = spaceIdx > 0 ? label.slice(0, spaceIdx) : null;
+        const restPart = spaceIdx > 0 ? label.slice(spaceIdx) : label;
+        return (
+          <span key={f.id} className={styles.pill} title={`${f.field} ${f.op} ${f.value}`}>
+            <span className={styles.label}>
+              {fieldPart && <span className={styles.fieldPart}>{fieldPart}</span>}
+              {restPart}
+            </span>
+            <button
+              className={styles.removeBtn}
+              onClick={() => onRemove(f.id)}
+              aria-label={`Remove filter ${label}`}
+            >
+              <Icon name="times" size="xs" />
+            </button>
+          </span>
+        );
+      })}
       {filters.length > 1 && (
         <button className={styles.clearAll} onClick={() => onChange([])}>
           Clear all
@@ -54,31 +67,40 @@ const getStyles = (theme: GrafanaTheme2) => ({
   pill: css`
     display: inline-flex;
     align-items: center;
-    gap: ${theme.spacing(0.5)};
-    background: ${theme.colors.primary.transparent};
-    border: 1px solid ${theme.colors.primary.border};
-    border-radius: ${theme.shape.radius.pill};
-    padding: ${theme.spacing(0.25)} ${theme.spacing(0.75)};
+    gap: ${theme.spacing(0.75)};
+    background: ${theme.colors.background.secondary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    padding: ${theme.spacing(0.375)} ${theme.spacing(0.5)} ${theme.spacing(0.375)} ${theme.spacing(0.75)};
     font-size: ${theme.typography.bodySmall.fontSize};
-    color: ${theme.colors.primary.text};
+    color: ${theme.colors.text.primary};
     max-width: 300px;
+    &:hover {
+      background: ${theme.colors.action.hover};
+    }
   `,
   label: css`
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   `,
+  fieldPart: css`
+    color: ${theme.visualization.getColorByName('green')};
+    font-weight: ${theme.typography.fontWeightMedium};
+  `,
   removeBtn: css`
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 0;
+    padding: 2px;
+    border-radius: ${theme.shape.radius.default};
     display: flex;
     align-items: center;
-    color: ${theme.colors.primary.text};
+    color: ${theme.colors.text.secondary};
     flex-shrink: 0;
     &:hover {
-      color: ${theme.colors.error.text};
+      color: ${theme.colors.text.primary};
+      background: ${theme.colors.action.focus};
     }
   `,
   clearAll: css`

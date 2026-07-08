@@ -1,8 +1,8 @@
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { css } from '@emotion/css';
+import { css, cx } from '@emotion/css';
 import { dateTime, GrafanaTheme2, PageLayoutType, TimeRange } from '@grafana/data';
 import { PluginPage } from '@grafana/runtime';
-import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker } from '@grafana/ui';
+import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker, useSplitter } from '@grafana/ui';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
@@ -45,6 +45,13 @@ import { useAvailableHeight } from '../utils/useAvailableHeight';
 const INITIAL_FETCH = 200;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
 const DEFAULT_PAGE_SIZE = 50;
+const SIDEBAR_SPLIT_KEY = 'clickhouse-observe.logsExplorer.sidebarSplit';
+const DEFAULT_SIDEBAR_SPLIT = 0.18;
+
+function readSidebarSplit(): number {
+  const raw = Number(window.localStorage.getItem(SIDEBAR_SPLIT_KEY));
+  return raw > 0.05 && raw < 0.6 ? raw : DEFAULT_SIDEBAR_SPLIT;
+}
 
 function defaultTimeRange(): TimeRange {
   return {
@@ -204,8 +211,15 @@ export function LogsExplorer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView?.id]);
 
-  // Sidebar collapse
+  // Sidebar collapse + resizable width, persisted across sessions
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { containerProps: bodySplitterProps, primaryProps: sidebarPaneProps, secondaryProps: resultsPaneProps, splitterProps } =
+    useSplitter({
+      direction: 'row',
+      initialSize: readSidebarSplit(),
+      dragPosition: 'middle',
+      onSizeChanged: (flexSize) => window.localStorage.setItem(SIDEBAR_SPLIT_KEY, String(flexSize)),
+    });
   const [showSqlInspect, setShowSqlInspect] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
   // Uncommitted raw-SQL textarea contents — kept local so typing never re-runs the query.
@@ -735,6 +749,7 @@ export function LogsExplorer() {
               <VolumeHistogram
                 data={volumeData}
                 timeRange={timeRange}
+                height={44}
                 onSelectRange={onHistogramSelectRange}
                 colorMode={
                   breakdown.kind === 'field'
@@ -754,7 +769,10 @@ export function LogsExplorer() {
         )}
 
         {/* Two-pane: sidebar + results */}
-        <div className={styles.body}>
+        <div
+          {...(sidebarCollapsed ? {} : bodySplitterProps)}
+          className={cx(styles.body, !sidebarCollapsed && bodySplitterProps.className)}
+        >
           {sidebarCollapsed ? (
             <div className={styles.sidebarRail}>
               <button
@@ -766,16 +784,21 @@ export function LogsExplorer() {
               </button>
             </div>
           ) : (
-            <FieldSidebar
-              queryState={{ ...queryState, columns: effectiveColumns }}
-              timeRange={timeRange}
-              onToggleColumn={onToggleColumn}
-              onAddFilter={onAddFilter}
-              onCollapse={() => setSidebarCollapsed(true)}
-            />
+            <>
+              <div {...sidebarPaneProps} className={cx(sidebarPaneProps.className, styles.sidebarPane)}>
+                <FieldSidebar
+                  queryState={{ ...queryState, columns: effectiveColumns }}
+                  timeRange={timeRange}
+                  onToggleColumn={onToggleColumn}
+                  onAddFilter={onAddFilter}
+                  onCollapse={() => setSidebarCollapsed(true)}
+                />
+              </div>
+              <div {...splitterProps} className={cx(splitterProps.className, styles.splitterHandle)} />
+            </>
           )}
 
-          <div className={styles.results}>
+          <div {...(sidebarCollapsed ? {} : resultsPaneProps)} className={cx(sidebarCollapsed ? undefined : resultsPaneProps.className, styles.results)}>
             {/* Only overlay when we already have rows to show underneath (a refetch) —
                 the initial-load case is handled by LogsTable's own loading state, so the
                 two never show at once. */}
@@ -826,6 +849,7 @@ export function LogsExplorer() {
             detailRow={detailRow}
             detailLoading={detailLoading}
             config={config}
+            fields={fieldsState.fields}
             columns={effectiveColumns}
             onClose={() => setSelectedRow(null)}
             onAddFilter={(f) => {
@@ -976,7 +1000,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: ${theme.colors.background.primary};
   `,
   histogramEmpty: css`
-    height: 64px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1003,8 +1027,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: 1;
     min-height: 0;
     display: flex;
-    gap: ${theme.spacing(1.5)};
     overflow: hidden;
+  `,
+  sidebarPane: css`
+    min-width: 160px;
+    overflow: hidden;
+  `,
+  splitterHandle: css`
+    flex-shrink: 0;
   `,
   results: css`
     flex: 1;
@@ -1035,6 +1065,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     align-items: center;
     padding-top: ${theme.spacing(0.5)};
+    margin-right: ${theme.spacing(1.5)};
     border-right: 1px solid ${theme.colors.border.weak};
   `,
   railBtn: css`

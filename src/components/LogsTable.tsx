@@ -315,7 +315,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     cursor: pointer;
     border-bottom: 1px solid ${theme.colors.border.weak};
     border-left: 2px solid transparent;
+    background: ${theme.colors.background.primary};
     transition: background-color 150ms ease;
+    &:nth-of-type(even) { background: ${theme.colors.background.secondary}; }
     &:hover { background: ${theme.colors.action.hover}; }
     @media (prefers-reduced-motion: reduce) {
       transition: none;
@@ -328,9 +330,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
+    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
+    line-height: 1.6;
   `,
   bodyCell: css`
     max-width: 0;

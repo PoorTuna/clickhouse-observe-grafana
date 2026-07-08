@@ -21,7 +21,7 @@ import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
 import { buildFieldIndex } from '../sql/fields';
 import { loadFieldValues } from '../sql/kql/_values';
-import { addFilterPill } from '../sql/filters';
+import { addFilterPill, makeFilter } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
 import { viewCapabilities } from '../sql/capabilities';
@@ -483,6 +483,15 @@ export function LogsExplorer() {
     });
   };
 
+  // Clicking a breakdown segment in the histogram filters for that value, Kibana-style, instead
+  // of the usual click-to-zoom (only reachable when breakdown.kind === 'field', since that's the
+  // only mode VolumeHistogram is given an onBreakdownFilter callback for).
+  const onHistogramBreakdownFilter = (value: string) => {
+    if (breakdown.kind === 'field') {
+      onAddFilter(makeFilter(breakdown.field.sqlExpr, value, '='));
+    }
+  };
+
   // Lazy-fetch rows beyond the initial buffer when the user pages past it.
   const ensureRows = useCallback(
     async (page: number, currentPageSize: number, currentRows: LogRow[], currentHasMore: boolean) => {
@@ -760,7 +769,7 @@ export function LogsExplorer() {
               <div className={styles.histogramHeaderSpacer} />
               {volumeData.length > 0 && (
                 <span className={styles.histogramMeta}>
-                  {totalEvents.toLocaleString()} events &middot; interval: {resolvedInterval.label}
+                  {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
                 </span>
               )}
             </div>
@@ -770,6 +779,7 @@ export function LogsExplorer() {
                 timeRange={timeRange}
                 height={44}
                 onSelectRange={onHistogramSelectRange}
+                onBreakdownFilter={onHistogramBreakdownFilter}
                 colorMode={
                   breakdown.kind === 'field'
                     ? 'breakdown'

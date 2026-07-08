@@ -60,12 +60,18 @@ export function CompareLogsModal({ rows, onDismiss }: CompareLogsModalProps) {
           <tbody>
             {fieldKeys.map((key) => {
               const values = rows.map((row) => cellText(row[key]));
-              const allSame = values.every((v) => v === values[0]);
+              const reference = values[0];
               return (
                 <tr key={key}>
                   <td className={styles.fieldCell}>{key}</td>
                   {values.map((v, i) => (
-                    <td key={i} className={cx(styles.valueCell, !allSame && styles.valueDiffers)}>
+                    <td
+                      key={i}
+                      className={cx(
+                        styles.valueCell,
+                        i > 0 && (v === reference ? styles.valueMatches : styles.valueDiffers)
+                      )}
+                    >
                       {v}
                     </td>
                   ))}
@@ -130,7 +136,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     word-break: break-word;
     overflow-wrap: anywhere;
   `,
+  valueMatches: css`
+    color: ${theme.colors.success.text};
+  `,
   valueDiffers: css`
-    background: ${theme.colors.warning.transparent};
+    color: ${theme.colors.error.text};
   `,
 });

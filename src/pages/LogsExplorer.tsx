@@ -714,8 +714,9 @@ export function LogsExplorer() {
             onIntervalChanged={setRefreshInterval}
             value={refreshInterval}
             isLoading={loading}
-            tooltip="Refresh — click the arrow to set an auto-refresh interval"
-            width="80px"
+            tooltip="Refresh"
+            width="100px"
+            isOnCanvas
           />
         </div>
 

@@ -298,8 +298,14 @@ export function VolumeHistogram({
 
   // Round-number y-axis (Kibana-style: 0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
   // niceMax (the last tick) is what bar heights actually scale against, so bars and gridlines
-  // always agree.
-  const yTicks = useMemo(() => niceYTicks(visibleMaxTotal), [visibleMaxTotal]);
+  // always agree. Tick *count* is capped by how much vertical room there actually is — each
+  // label needs ~14px to avoid overlapping its neighbor, so a short chart (e.g. 32px) gets only
+  // 2-3 ticks instead of blindly cramming in 5 and having them collide.
+  const maxTicksForHeight = Math.max(2, Math.floor(height / 14) + 1);
+  const yTicks = useMemo(
+    () => niceYTicks(visibleMaxTotal, Math.min(5, maxTicksForHeight)),
+    [visibleMaxTotal, maxTicksForHeight]
+  );
   const niceMax = yTicks[yTicks.length - 1] || 0;
 
   const onLegendClick = (level: string, e: React.MouseEvent) => {

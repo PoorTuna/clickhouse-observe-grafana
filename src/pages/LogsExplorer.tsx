@@ -913,15 +913,26 @@ export function LogsExplorer() {
                 )}
                 <div className={styles.tableToolbar}>
                   {compareSelection.size >= 2 && (
-                    <Button variant="secondary" size="sm" icon="columns" onClick={() => setCompareOpen(true)}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon="columns"
+                      onClick={() => {
+                        // Compare needs every field, not just the currently displayed columns —
+                        // pageRows are the narrow grid projection. Hydrate the full rows for this
+                        // page the same way opening the detail panel does.
+                        hydratePage(currentPage);
+                        setCompareOpen(true);
+                      }}
+                    >
                       Compare ({compareSelection.size})
                     </Button>
                   )}
-                  <div className={styles.headerSpacer} />
                   <label className={styles.wrapToggleLabel}>
                     <Switch value={wrapLines} onChange={(e) => setWrapLines(e.currentTarget.checked)} />
                     Wrap lines
                   </label>
+                  <div className={styles.headerSpacer} />
                 </div>
                 <LogsTable
                   rows={pageRows}
@@ -988,7 +999,10 @@ export function LogsExplorer() {
 
         {compareOpen && compareSelection.size >= 2 && (
           <CompareLogsModal
-            rows={[...compareSelection].sort((a, b) => a - b).map((i) => pageRows[i])}
+            rows={[...compareSelection]
+              .sort((a, b) => a - b)
+              .map((i) => pageRows[i])
+              .map((row) => hydratedRows.get(logRowKey(row)) ?? row)}
             onDismiss={() => setCompareOpen(false)}
           />
         )}

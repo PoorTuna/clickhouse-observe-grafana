@@ -216,6 +216,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   key: css`
     color: ${theme.colors.text.primary};
     font-weight: ${theme.typography.fontWeightMedium};
+    flex-shrink: 0;
+    white-space: nowrap;
   `,
   colon: css`
     color: ${theme.colors.text.secondary};

@@ -125,8 +125,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   row: css`
     display: flex;
     align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: 3px ${theme.spacing(0.5)};
+    gap: ${theme.spacing(0.75)};
+    padding: ${theme.spacing(0.75)} ${theme.spacing(0.75)};
     border-radius: ${theme.shape.radius.default};
     cursor: pointer;
     &:hover {

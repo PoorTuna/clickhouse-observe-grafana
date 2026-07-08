@@ -597,16 +597,17 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: block;
   `,
   body: css`
-    /* Default (Wrap lines off): clamp to exactly 2 lines instead of a single truncated line —
-       a single line inside our taller rows left a lot of dead space under short-looking text
-       even when the message was long. 3+ lines (unclamped wrap) reads as unreadable at a glance
-       per Kibana's own default, so 2 is the deliberate middle ground, not "as many as fit". */
+    /* Default (Wrap lines off): always exactly 2 lines tall, even for short values — uniform row
+       height across the table beats reclaiming space on short rows. line-height is fixed here
+       (not inherited) so min-height's 2x multiple lines up exactly with the clamp. */
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
     color: ${theme.colors.text.primary};
+    line-height: 1.5;
+    min-height: 3em;
   `,
   /** "Wrap lines" toggle: full unlimited wrap, overriding body's default 2-line clamp. */
   wrapped: css`

@@ -384,7 +384,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     font-family: ${theme.typography.fontFamily};
     color: ${theme.colors.text.secondary};
     border-bottom: 1px solid ${theme.colors.border.medium};
-    border-right: 1px solid ${theme.colors.border.weak};
     background: ${theme.colors.background.secondary};
     background-clip: padding-box;
     white-space: nowrap;
@@ -393,9 +392,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     z-index: 1;
     &:hover {
       background: ${theme.colors.action.hover};
-    }
-    &:last-of-type {
-      border-right: none;
     }
   `,
   thDraggable: css`
@@ -495,17 +491,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(1.75)} ${theme.spacing(1.25)};
+    padding: ${theme.spacing(2.5)} ${theme.spacing(1.5)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
-    line-height: 1.6;
+    line-height: 1.8;
   `,
   dataTd: css`
     position: relative;
-    border-right: 1px solid ${theme.colors.border.weak};
-    &:last-of-type {
-      border-right: none;
-    }
     &:hover {
       box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
     }

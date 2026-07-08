@@ -150,7 +150,9 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
   return (
     <div ref={anchorRef} className={styles.wrapper}>
       <button className={styles.triggerBtn} onClick={openPopover} title="Add a structured filter">
-        <Icon name="plus" size="sm" />
+        <span className={styles.triggerIconBadge}>
+          <Icon name="plus" size="xs" />
+        </span>
         Add filter
       </button>
 
@@ -279,21 +281,32 @@ const getStyles = (theme: GrafanaTheme2) => ({
   triggerBtn: css`
     display: inline-flex;
     align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
+    gap: ${theme.spacing(0.75)};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1)} ${theme.spacing(0.5)} ${theme.spacing(0.5)};
     border: 1px solid ${theme.colors.border.medium};
     border-radius: ${theme.shape.radius.default};
-    background: transparent;
-    color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    background: ${theme.colors.background.secondary};
+    color: ${theme.colors.text.primary};
+    font-size: ${theme.typography.body.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
     cursor: pointer;
     white-space: nowrap;
     height: 32px;
     &:hover {
       background: ${theme.colors.action.hover};
-      color: ${theme.colors.text.primary};
       border-color: ${theme.colors.border.strong};
     }
+  `,
+  triggerIconBadge: css`
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: ${theme.colors.primary.main};
+    color: ${theme.colors.primary.contrastText};
+    flex-shrink: 0;
   `,
   backdrop: css`
     position: fixed;

@@ -51,6 +51,8 @@ export function DataViewPicker() {
     <>
       <div className={styles.wrapper} ref={menuRef}>
         <button className={styles.trigger} onClick={() => setOpen((v) => !v)} title="Switch data view">
+          <span className={styles.triggerPrefix}>Data view</span>
+          <span className={styles.triggerDivider} />
           <Icon name="layers-alt" size="sm" />
           <span className={styles.triggerLabel}>{activeView?.name ?? 'No data view'}</span>
           <Icon name={open ? 'angle-up' : 'angle-down'} size="sm" />
@@ -162,7 +164,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   trigger: css`
     display: flex;
     align-items: center;
-    gap: ${theme.spacing(0.5)};
+    gap: ${theme.spacing(0.75)};
     padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
     background: ${theme.colors.background.secondary};
     border: 1px solid ${theme.colors.border.medium};
@@ -170,16 +172,27 @@ const getStyles = (theme: GrafanaTheme2) => ({
     cursor: pointer;
     color: ${theme.colors.text.primary};
     font-size: ${theme.typography.body.fontSize};
-    max-width: 220px;
+    max-width: 280px;
     &:hover {
       background: ${theme.colors.action.hover};
     }
+  `,
+  triggerPrefix: css`
+    color: ${theme.colors.text.secondary};
+    white-space: nowrap;
+  `,
+  triggerDivider: css`
+    width: 1px;
+    align-self: stretch;
+    background: ${theme.colors.border.medium};
+    flex-shrink: 0;
   `,
   triggerLabel: css`
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 160px;
+    font-weight: ${theme.typography.fontWeightMedium};
   `,
   dropdown: css`
     position: absolute;

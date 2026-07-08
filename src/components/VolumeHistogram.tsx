@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { css } from '@emotion/css';
-import { dateTime, GrafanaTheme2, TimeRange } from '@grafana/data';
+import { css, cx } from '@emotion/css';
+import { dateTime, formattedValueToString, getValueFormat, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { useStyles2 } from '@grafana/ui';
 import { VolumeDataPoint, IntervalMode } from '../types';
 import { CHIntervalUnit } from '../sql/queryBuilder';
@@ -128,12 +128,21 @@ interface VolumeHistogramProps {
   /** Bucket width in ms — drives single-click zoom width. */
   bucketMs: number;
   onSelectRange?: (from: number, to: number) => void;
+  /** Fired instead of the usual single-click zoom when a breakdown segment is clicked directly —
+   *  lets the caller offer "filter for this value" the way Kibana does, rather than just zooming
+   *  time. Only ever called when colorMode === 'breakdown'. */
+  onBreakdownFilter?: (value: string) => void;
 }
 
 interface HoveredBucket {
   index: number;
   clientX: number;
   clientY: number;
+}
+
+/** Compact large numbers (1,234,567 → "1.23 M") for the y-axis and tooltip, per Kibana's style. */
+function formatCompact(n: number): string {
+  return formattedValueToString(getValueFormat('short')(n));
 }
 
 export function VolumeHistogram({
@@ -143,9 +152,14 @@ export function VolumeHistogram({
   colorMode,
   bucketMs,
   onSelectRange,
+  onBreakdownFilter,
 }: VolumeHistogramProps) {
   const styles = useStyles2(getStyles);
   const svgRef = useRef<SVGSVGElement>(null);
+  // Legend interaction (Kibana-style): click a series to isolate it (hide the rest); ctrl/cmd-
+  // click to toggle just that one series without touching the others. Purely a client-side view
+  // filter — doesn't affect the underlying query or the "N events" total shown elsewhere.
+  const [hiddenLevels, setHiddenLevels] = useState<Set<string>>(new Set());
   // dragStart holds the live drag-anchor value used by the imperative mouse-move math below.
   // isDragging mirrors "is a drag in progress" into state so the render below (hover band
   // visibility) doesn't read a ref during render.
@@ -220,6 +234,48 @@ export function VolumeHistogram({
 
     return { bars, maxTotal, allLevels, totalCount, colorMap };
   }, [data, colorMode]);
+
+  const visibleLevels = useMemo(() => allLevels.filter((l) => !hiddenLevels.has(l)), [allLevels, hiddenLevels]);
+
+  // Re-derive the stacked max against only the currently-visible series, so isolating/hiding a
+  // series rescales the chart to the remaining data instead of leaving dead headroom.
+  const visibleMaxTotal = useMemo(() => {
+    if (hiddenLevels.size === 0) {
+      return maxTotal;
+    }
+    let m = 0;
+    for (const bar of bars) {
+      let sum = 0;
+      for (const level of visibleLevels) {
+        const rawLevel = Object.keys(bar.levels).find((k) => k.toLowerCase() === level);
+        if (rawLevel !== undefined) {
+          sum += bar.levels[rawLevel];
+        }
+      }
+      m = Math.max(m, sum);
+    }
+    return m;
+  }, [bars, visibleLevels, hiddenLevels, maxTotal]);
+
+  const onLegendClick = (level: string, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      setHiddenLevels((prev) => {
+        const next = new Set(prev);
+        if (next.has(level)) {
+          next.delete(level);
+        } else {
+          next.add(level);
+        }
+        return next;
+      });
+      return;
+    }
+    setHiddenLevels((prev) => {
+      // Already isolated to exactly this level → clicking again shows all.
+      const isolatedToThis = prev.size === allLevels.length - 1 && !prev.has(level);
+      return isolatedToThis ? new Set() : new Set(allLevels.filter((l) => l !== level));
+    });
+  };
 
   // A handful of evenly-spaced x-axis tick labels (first/last/quartiles) so the chart reads as a
   // real timeline instead of two bare endpoint labels. Computed before the early return below so
@@ -301,6 +357,31 @@ export function VolumeHistogram({
     }
   };
 
+  /** Which stacked segment (level) a click landed on, reconstructing the same offsets the render
+   *  loop below uses so the two never drift apart. */
+  function pickLevelAtY(bar: VolumeDataPoint, clientY: number): string | null {
+    const svg = svgRef.current;
+    if (!svg) {
+      return null;
+    }
+    const relY = clientY - svg.getBoundingClientRect().top;
+    let yOffset = height;
+    for (const level of visibleLevels) {
+      const rawLevel = Object.keys(bar.levels).find((k) => k.toLowerCase() === level);
+      const count = rawLevel !== undefined ? bar.levels[rawLevel] : 0;
+      if (!count) {
+        continue;
+      }
+      const rawH = visibleMaxTotal > 0 ? (count / visibleMaxTotal) * (height - 2) : 0;
+      const barH = Math.max(rawH, MIN_SEGMENT_PX);
+      yOffset -= barH;
+      if (relY >= yOffset && relY <= yOffset + barH) {
+        return level;
+      }
+    }
+    return null;
+  }
+
   const handleMouseUp = (e: React.MouseEvent<SVGSVGElement>) => {
     if (dragStart.current === null || !onSelectRange) {
       dragStart.current = null;
@@ -316,8 +397,16 @@ export function VolumeHistogram({
       selectionRef.current.setAttribute('display', 'none');
     }
     if (x2 - x1 < 0.5) {
-      // Single click — zoom into one bucket using the resolved interval width.
       const t = xPctToTime(end);
+      if (colorMode === 'breakdown' && onBreakdownFilter) {
+        const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((end / 100) * bars.length)));
+        const level = bars[idx] ? pickLevelAtY(bars[idx], e.clientY) : null;
+        if (level) {
+          onBreakdownFilter(level);
+          return;
+        }
+      }
+      // Single click off any segment (or non-breakdown mode) — zoom into one bucket instead.
       const halfBucketMs = bucketMs / 2;
       onSelectRange(t - halfBucketMs, t + halfBucketMs);
     } else {
@@ -325,15 +414,19 @@ export function VolumeHistogram({
     }
   };
 
-  const yMid = Math.round(maxTotal / 2);
+  const yMid = Math.round(visibleMaxTotal / 2);
+
+  const hasLegend = (colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0;
 
   return (
     <div className={styles.wrapper}>
+      <div className={styles.mainRow}>
+      <div className={styles.chartCol}>
       {/* SVG bar chart, with a y-axis gutter to its left for scale reference */}
       <div className={styles.chartRow}>
         <div className={styles.yAxis} style={{ height }}>
-          <span>{maxTotal.toLocaleString()}</span>
-          <span>{yMid.toLocaleString()}</span>
+          <span>{formatCompact(visibleMaxTotal)}</span>
+          <span>{formatCompact(yMid)}</span>
           <span>0</span>
         </div>
         <div className={styles.container} style={{ height }}>
@@ -378,13 +471,13 @@ export function VolumeHistogram({
 
             return (
               <g key={d.time}>
-                {allLevels.map((level) => {
+                {visibleLevels.map((level) => {
                   const rawLevel = Object.keys(d.levels).find((k) => k.toLowerCase() === level);
                   const count = rawLevel !== undefined ? d.levels[rawLevel] : 0;
                   if (!count) {
                     return null;
                   }
-                  const rawH = maxTotal > 0 ? (count / maxTotal) * (height - 2) : 0;
+                  const rawH = visibleMaxTotal > 0 ? (count / visibleMaxTotal) * (height - 2) : 0;
                   // Any non-zero segment gets floored to MIN_SEGMENT_PX so a handful of errors
                   // stacked against tens of thousands of info logs still render as a visible
                   // sliver instead of rounding to a sub-pixel — and disappearing — segment.
@@ -426,23 +519,6 @@ export function VolumeHistogram({
         </div>
       </div>
 
-      {/* Legend — severity mode and field-breakdown mode both benefit from it; 'single' has
-          only one color so a legend would add nothing (color-not-only is still satisfied via
-          the numeric tooltip, which never depends on color alone). */}
-      {(colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0 && (
-        <div className={styles.legend}>
-          {allLevels.map((level) => (
-            <div key={level} className={styles.legendItem}>
-              <span
-                className={styles.legendSwatch}
-                style={{ background: colorMap[level] ?? OTHER_COLOR }}
-              />
-              <span className={styles.legendLabel}>{level || '(empty)'}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* x-axis ticks — evenly spaced reference points across the selected time range, offset by
           the same gutter width as the y-axis so they stay aligned under the bars. */}
       <div className={styles.axisRow}>
@@ -452,6 +528,34 @@ export function VolumeHistogram({
             <span key={tick.time}>{tick.label}</span>
           ))}
         </div>
+      </div>
+      </div>
+
+      {/* Legend — severity mode and field-breakdown mode both benefit from it; 'single' has
+          only one color so a legend would add nothing (color-not-only is still satisfied via
+          the numeric tooltip, which never depends on color alone). Click a series to isolate it,
+          ctrl/cmd-click to toggle just that one, Kibana-style. */}
+      {hasLegend && (
+        <div className={styles.legend}>
+          {allLevels.map((level) => {
+            const isHidden = hiddenLevels.has(level);
+            return (
+              <button
+                key={level}
+                className={cx(styles.legendItem, isHidden && styles.legendItemHidden)}
+                onClick={(e) => onLegendClick(level, e)}
+                title={isHidden ? 'Hidden — click to isolate, ctrl/cmd-click to show' : 'Click to isolate, ctrl/cmd-click to toggle'}
+              >
+                <span
+                  className={styles.legendSwatch}
+                  style={{ background: colorMap[level] ?? OTHER_COLOR }}
+                />
+                <span className={styles.legendLabel}>{level || '(empty)'}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       </div>
 
       {/* Hover tooltip */}
@@ -477,13 +581,10 @@ export function VolumeHistogram({
             {dateTime(hoveredBar.time).format('MMM D, YYYY HH:mm:ss')}
           </div>
           <div className={styles.tooltipTotal}>
-            Total:{' '}
-            {Object.values(hoveredBar.levels)
-              .reduce((a, b) => a + b, 0)
-              .toLocaleString()}
+            Total: {formatCompact(Object.values(hoveredBar.levels).reduce((a, b) => a + b, 0))}
           </div>
           {colorMode !== 'single' &&
-            allLevels
+            visibleLevels
               .filter((level) => {
                 const rawLevel = Object.keys(hoveredBar.levels).find((k) => k.toLowerCase() === level);
                 return rawLevel !== undefined && hoveredBar.levels[rawLevel] > 0;
@@ -498,7 +599,7 @@ export function VolumeHistogram({
                     />
                     <span className={styles.tooltipLevel}>{level || '(empty)'}</span>
                     <span className={styles.tooltipCount}>
-                      {hoveredBar.levels[rawLevel].toLocaleString()}
+                      {formatCompact(hoveredBar.levels[rawLevel])}
                     </span>
                   </div>
                 );
@@ -514,6 +615,18 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     flex-direction: column;
     gap: 2px;
+  `,
+  mainRow: css`
+    display: flex;
+    align-items: stretch;
+    gap: ${theme.spacing(1)};
+  `,
+  chartCol: css`
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
   `,
   chartRow: css`
     display: flex;
@@ -558,9 +671,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   legend: css`
     display: flex;
-    flex-wrap: wrap;
-    gap: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
-    padding: 0 2px ${theme.spacing(0.5)};
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: 2px;
+    max-width: 160px;
+    max-height: 100px;
+    overflow-y: auto;
+    padding: 2px;
+    border-left: 1px solid ${theme.colors.border.weak};
   `,
   axisRow: css`
     display: flex;
@@ -581,6 +699,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 1px ${theme.spacing(0.5)};
+    border-radius: ${theme.shape.radius.default};
+    text-align: left;
+    &:hover { background: ${theme.colors.action.hover}; }
+  `,
+  legendItemHidden: css`
+    opacity: 0.4;
   `,
   legendSwatch: css`
     width: 8px;

@@ -718,7 +718,6 @@ export function LogsExplorer() {
             value={refreshInterval}
             isLoading={loading}
             tooltip="Refresh"
-            width="100px"
             isOnCanvas
           />
         </div>

@@ -107,7 +107,7 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
   const openPopover = useCallback(() => {
     if (anchorRef.current) {
       const rect = anchorRef.current.getBoundingClientRect();
-      const PANEL_W = 640;
+      const PANEL_W = 760;
       const left = Math.min(rect.left, window.innerWidth - PANEL_W - 8);
       setPopoverPos({ top: rect.bottom + 6, left: Math.max(8, left) });
     }
@@ -150,9 +150,7 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
   return (
     <div ref={anchorRef} className={styles.wrapper}>
       <button className={styles.triggerBtn} onClick={openPopover} title="Add a structured filter">
-        <span className={styles.triggerIconBadge}>
-          <Icon name="plus" size="xs" />
-        </span>
+        <Icon name="plus-circle" size="sm" />
         Add filter
       </button>
 
@@ -208,7 +206,7 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
 
               {/* Value input — only shown when op accepts a value */}
               {currentOp.hasValue && (
-                <div className={cx(styles.row, styles.rowInline)}>
+                <div className={cx(styles.row, styles.rowInline, styles.rowValue)}>
                   <label className={styles.label}>Value</label>
                   {currentOp.isMulti ? (
                     <Select
@@ -316,7 +314,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   panel: css`
     position: fixed;
     z-index: 10000;
-    width: 640px;
+    width: 760px;
     max-width: calc(100vw - 16px);
     padding: ${theme.spacing(2)};
     background: ${theme.colors.background.primary};
@@ -348,6 +346,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: 1;
     min-width: 0;
     margin-bottom: 0;
+  `,
+  /** Value needs more room than Field/Operator — it renders the longest placeholder text and,
+   *  for "is one of", a row of selected-value pills. */
+  rowValue: css`
+    flex: 1.6;
   `,
   label: css`
     font-size: ${theme.typography.bodySmall.fontSize};

@@ -496,7 +496,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(2)} ${theme.spacing(1.5)};
+    padding: ${theme.spacing(1.25)} ${theme.spacing(1.5)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
     line-height: 1.5;

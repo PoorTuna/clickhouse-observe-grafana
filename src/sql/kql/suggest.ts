@@ -199,9 +199,12 @@ function fieldSuggestions(
   return fields
     .filter((f) => f.name.toLowerCase().includes(lp) || f.displayName.toLowerCase().includes(lp))
     .sort((a, b) => {
-      // Prefix-first (Kibana's sortPrefixFirst)
-      const aStarts = a.name.toLowerCase().startsWith(lp) ? 0 : 1;
-      const bStarts = b.name.toLowerCase().startsWith(lp) ? 0 : 1;
+      // Prefix-first (Kibana's sortPrefixFirst). Checked against both the bare key and the
+      // displayed (source-column-prefixed) name — a nested Map/JSON field's `name` is just the
+      // leaf key ("k8s.namespace.name"), so typing the source column's prefix ("Resource…")
+      // would otherwise never rank it as a prefix match even though that's what's on screen.
+      const aStarts = a.name.toLowerCase().startsWith(lp) || a.displayName.toLowerCase().startsWith(lp) ? 0 : 1;
+      const bStarts = b.name.toLowerCase().startsWith(lp) || b.displayName.toLowerCase().startsWith(lp) ? 0 : 1;
       return aStarts - bStarts || a.name.localeCompare(b.name);
     })
     .map<Suggestion>((f) => ({
@@ -268,8 +271,11 @@ function valueToSuggestion(v: FieldValue, replaceStart: number, replaceEnd: numb
 }
 
 function fieldSqlExpr(fieldName: string, fields: FieldModel[]): string {
-  const found = fields.find(
-    (f) => f.name === fieldName || f.displayName === fieldName
-  );
+  // displayName is unique per discovered field (source-column-prefixed for nested Map/JSON
+  // keys); bare `name` is not — two different Map/JSON columns can both surface a leaf key
+  // like "id". Check displayName first so an exact match there can't be shadowed by an
+  // unrelated field that merely shares the same bare name.
+  const found =
+    fields.find((f) => f.displayName === fieldName) ?? fields.find((f) => f.name === fieldName);
   return found?.sqlExpr ?? fieldName;
 }

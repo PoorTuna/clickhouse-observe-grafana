@@ -383,7 +383,11 @@ export function buildFieldTopValuesQuery(
     `)`,
     `SELECT value, count() AS count, sum(count()) OVER () AS total`,
     `FROM sample`,
-    `WHERE notEmpty(value)`,
+    // notEmpty() alone lets through non-null-but-meaningless stand-ins for "absent" — a JSON
+    // path missing from a given row's dynamic structure can stringify to '{}', '[]', or the
+    // literal text 'null' rather than SQL NULL/''. Exclude those too, or a field made mostly of
+    // rows without that path renders as if every sampled value were "empty."
+    `WHERE notEmpty(value) AND value NOT IN ('{}', '[]', 'null')`,
     `GROUP BY value`,
     `ORDER BY count DESC`,
     `LIMIT ${limit}`,

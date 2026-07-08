@@ -170,13 +170,17 @@ function niceYTicks(max: number, targetTicks = 5): number[] {
   if (max <= 0) {
     return [0];
   }
-  const step = niceNumber(niceNumber(max, false) / (targetTicks - 1), true);
+  // Counts are always integers, so a sub-1 step can only ever produce duplicate rounded ticks
+  // (e.g. max=2 → step 0.5 → 0, 0.5, 1, 1.5, 2 all round to 0/1/1/2/2) — which then collide as
+  // React keys below and corrupt the whole axis's rendering. Floor the step at 1.
+  const step = Math.max(1, niceNumber(niceNumber(max, false) / (targetTicks - 1), true));
   const niceMax = Math.ceil(max / step) * step;
   const ticks: number[] = [];
   for (let v = 0; v <= niceMax + step * 0.5; v += step) {
     ticks.push(Math.round(v));
   }
-  return ticks;
+  // Belt-and-suspenders: dedupe in case of any other float-rounding collision.
+  return [...new Set(ticks)];
 }
 
 export function VolumeHistogram({

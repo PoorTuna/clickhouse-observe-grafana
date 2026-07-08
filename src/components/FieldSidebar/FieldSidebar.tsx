@@ -138,7 +138,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
   `,
   title: css`
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.secondary};
     text-transform: uppercase;
@@ -162,7 +162,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
   `,
   search: css`
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   section: css`
     display: flex;
@@ -170,7 +170,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: 1px;
   `,
   sectionLabel: css`
-    font-size: 11px;
+    font-size: 13px;
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.secondary};
     padding: ${theme.spacing(0.5)} ${theme.spacing(0.5)} 2px;
@@ -178,7 +178,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     letter-spacing: 0.04em;
   `,
   empty: css`
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.disabled};
     padding: ${theme.spacing(1)} ${theme.spacing(0.5)};
   `,

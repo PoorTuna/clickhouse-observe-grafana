@@ -204,7 +204,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: 1px solid ${theme.colors.border.medium};
     border-radius: ${theme.shape.radius.default};
     box-shadow: ${theme.shadows.z2};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   header: css`
     display: flex;
@@ -241,7 +241,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: transparent;
     color: ${theme.colors.text.secondary};
     cursor: pointer;
-    font-size: 11px;
+    font-size: 13px;
     white-space: nowrap;
     flex-shrink: 0;
     &:hover {
@@ -255,14 +255,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   typeLabel: css`
     color: ${theme.colors.text.disabled};
-    font-size: 11px;
+    font-size: 13px;
     margin-bottom: ${theme.spacing(1)};
     text-transform: capitalize;
   `,
   sectionLabel: css`
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.secondary};
-    font-size: 11px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     margin-bottom: ${theme.spacing(0.5)};
@@ -312,7 +312,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     color: ${theme.colors.text.primary};
     font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: 11px;
+    font-size: 13px;
   `,
   pct: css`
     position: relative;
@@ -347,7 +347,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   caption: css`
     margin-top: ${theme.spacing(1)};
     color: ${theme.colors.text.disabled};
-    font-size: 11px;
+    font-size: 13px;
     font-style: italic;
   `,
 });

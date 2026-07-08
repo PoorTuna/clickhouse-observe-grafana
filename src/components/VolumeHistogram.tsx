@@ -1,7 +1,7 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { dateTime, formattedValueToString, getValueFormat, GrafanaTheme2, TimeRange } from '@grafana/data';
-import { useStyles2 } from '@grafana/ui';
+import { Button, Portal, useStyles2 } from '@grafana/ui';
 import { VolumeDataPoint, IntervalMode } from '../types';
 import { CHIntervalUnit } from '../sql/queryBuilder';
 import {
@@ -128,10 +128,10 @@ interface VolumeHistogramProps {
   /** Bucket width in ms — drives single-click zoom width. */
   bucketMs: number;
   onSelectRange?: (from: number, to: number) => void;
-  /** Fired instead of the usual single-click zoom when a breakdown segment is clicked directly —
-   *  lets the caller offer "filter for this value" the way Kibana does, rather than just zooming
-   *  time. Only ever called when colorMode === 'breakdown'. */
-  onBreakdownFilter?: (value: string) => void;
+  /** Fired when the user picks "Filter for value" / "Filter out value" from the popup shown
+   *  after clicking a breakdown segment directly — see BreakdownClickPopover below. Only ever
+   *  reachable when colorMode === 'breakdown'. */
+  onBreakdownFilter?: (value: string, op: '=' | '!=') => void;
 }
 
 interface HoveredBucket {
@@ -140,9 +140,43 @@ interface HoveredBucket {
   clientY: number;
 }
 
+interface BreakdownClickPopover {
+  level: string;
+  clientX: number;
+  clientY: number;
+}
+
 /** Compact large numbers (1,234,567 → "1.23 M") for the y-axis and tooltip, per Kibana's style. */
 function formatCompact(n: number): string {
   return formattedValueToString(getValueFormat('short')(n));
+}
+
+/** Classic "nice number" rounding (Heckbert) — rounds to 1/2/5 × 10^n so axis ticks read like
+ *  Kibana's (0/1/2, 0/5/10/15/20, …) instead of raw fractions of an arbitrary max. */
+function niceNumber(value: number, round: boolean): number {
+  const exponent = Math.floor(Math.log10(value));
+  const fraction = value / 10 ** exponent;
+  let niceFraction: number;
+  if (round) {
+    niceFraction = fraction < 1.5 ? 1 : fraction < 3 ? 2 : fraction < 7 ? 5 : 10;
+  } else {
+    niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  }
+  return niceFraction * 10 ** exponent;
+}
+
+/** Evenly-spaced, round-number y-axis ticks from 0 up to a rounded max ≥ `max`. */
+function niceYTicks(max: number, targetTicks = 5): number[] {
+  if (max <= 0) {
+    return [0];
+  }
+  const step = niceNumber(niceNumber(max, false) / (targetTicks - 1), true);
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= niceMax + step * 0.5; v += step) {
+    ticks.push(Math.round(v));
+  }
+  return ticks;
 }
 
 export function VolumeHistogram({
@@ -160,6 +194,7 @@ export function VolumeHistogram({
   // click to toggle just that one series without touching the others. Purely a client-side view
   // filter — doesn't affect the underlying query or the "N events" total shown elsewhere.
   const [hiddenLevels, setHiddenLevels] = useState<Set<string>>(new Set());
+  const [breakdownPopover, setBreakdownPopover] = useState<BreakdownClickPopover | null>(null);
   // dragStart holds the live drag-anchor value used by the imperative mouse-move math below.
   // isDragging mirrors "is a drag in progress" into state so the render below (hover band
   // visibility) doesn't read a ref during render.
@@ -256,6 +291,12 @@ export function VolumeHistogram({
     }
     return m;
   }, [bars, visibleLevels, hiddenLevels, maxTotal]);
+
+  // Round-number y-axis (Kibana-style: 0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
+  // niceMax (the last tick) is what bar heights actually scale against, so bars and gridlines
+  // always agree.
+  const yTicks = useMemo(() => niceYTicks(visibleMaxTotal), [visibleMaxTotal]);
+  const niceMax = yTicks[yTicks.length - 1] || 0;
 
   const onLegendClick = (level: string, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -372,7 +413,7 @@ export function VolumeHistogram({
       if (!count) {
         continue;
       }
-      const rawH = visibleMaxTotal > 0 ? (count / visibleMaxTotal) * (height - 2) : 0;
+      const rawH = niceMax > 0 ? (count / niceMax) * (height - 2) : 0;
       const barH = Math.max(rawH, MIN_SEGMENT_PX);
       yOffset -= barH;
       if (relY >= yOffset && relY <= yOffset + barH) {
@@ -402,7 +443,8 @@ export function VolumeHistogram({
         const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((end / 100) * bars.length)));
         const level = bars[idx] ? pickLevelAtY(bars[idx], e.clientY) : null;
         if (level) {
-          onBreakdownFilter(level);
+          setHovered(null);
+          setBreakdownPopover({ level, clientX: e.clientX, clientY: e.clientY });
           return;
         }
       }
@@ -414,8 +456,6 @@ export function VolumeHistogram({
     }
   };
 
-  const yMid = Math.round(visibleMaxTotal / 2);
-
   const hasLegend = (colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0;
 
   return (
@@ -425,9 +465,11 @@ export function VolumeHistogram({
       {/* SVG bar chart, with a y-axis gutter to its left for scale reference */}
       <div className={styles.chartRow}>
         <div className={styles.yAxis} style={{ height }}>
-          <span>{formatCompact(visibleMaxTotal)}</span>
-          <span>{formatCompact(yMid)}</span>
-          <span>0</span>
+          {[...yTicks].reverse().map((tick) => (
+            <span key={tick} style={{ top: `${(1 - tick / niceMax) * 100}%` }}>
+              {formatCompact(tick)}
+            </span>
+          ))}
         </div>
         <div className={styles.container} style={{ height }}>
         <svg
@@ -447,10 +489,18 @@ export function VolumeHistogram({
             setHovered(null);
           }}
         >
-          {/* Horizontal gridlines at 0 / 50% / 100% — reference points for reading bar magnitude */}
-          <line x1="0%" x2="100%" y1={0} y2={0} className={styles.gridline} />
-          <line x1="0%" x2="100%" y1={height / 2} y2={height / 2} className={styles.gridline} />
-          <line x1="0%" x2="100%" y1={height - 1} y2={height - 1} className={styles.gridline} />
+          {/* One gridline per round-number y-axis tick, so bars visually line up with the scale
+              they're actually plotted against (niceMax), not an arbitrary 3-line split. */}
+          {yTicks.map((tick) => (
+            <line
+              key={tick}
+              x1="0%"
+              x2="100%"
+              y1={niceMax > 0 ? height - (tick / niceMax) * height : height}
+              y2={niceMax > 0 ? height - (tick / niceMax) * height : height}
+              className={styles.gridline}
+            />
+          ))}
 
           {/* Hover highlight band — sits behind bars, hidden during drag */}
           {hovered !== null && !isDragging && (
@@ -477,7 +527,7 @@ export function VolumeHistogram({
                   if (!count) {
                     return null;
                   }
-                  const rawH = visibleMaxTotal > 0 ? (count / visibleMaxTotal) * (height - 2) : 0;
+                  const rawH = niceMax > 0 ? (count / niceMax) * (height - 2) : 0;
                   // Any non-zero segment gets floored to MIN_SEGMENT_PX so a handful of errors
                   // stacked against tens of thousands of info logs still render as a visible
                   // sliver instead of rounding to a sub-pixel — and disappearing — segment.
@@ -606,11 +656,81 @@ export function VolumeHistogram({
               })}
         </div>
       )}
+
+      {/* Breakdown-segment click popover — Kibana shows this instead of instantly applying a
+          filter, so the user picks "for"/"out" rather than guessing what a bare click will do. */}
+      {breakdownPopover && onBreakdownFilter && (
+        <Portal>
+          <div className={styles.popoverBackdrop} onClick={() => setBreakdownPopover(null)} />
+          <div
+            className={styles.popover}
+            style={{ left: breakdownPopover.clientX, top: breakdownPopover.clientY }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles.popoverTitle} title={breakdownPopover.level}>
+              {breakdownPopover.level || '(empty)'}
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="filter"
+              fill="text"
+              onClick={() => {
+                onBreakdownFilter(breakdownPopover.level, '=');
+                setBreakdownPopover(null);
+              }}
+            >
+              Filter for value
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon="ban"
+              fill="text"
+              onClick={() => {
+                onBreakdownFilter(breakdownPopover.level, '!=');
+                setBreakdownPopover(null);
+              }}
+            >
+              Filter out value
+            </Button>
+          </div>
+        </Portal>
+      )}
     </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
+  popoverBackdrop: css`
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+  `,
+  popover: css`
+    position: fixed;
+    z-index: 10000;
+    transform: translate(-50%, 8px);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: ${theme.spacing(0.5)};
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z3};
+    min-width: 180px;
+  `,
+  popoverTitle: css`
+    padding: ${theme.spacing(0.5)} ${theme.spacing(0.5)} ${theme.spacing(0.25)};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 260px;
+  `,
   wrapper: css`
     display: flex;
     flex-direction: column;
@@ -634,16 +754,25 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
   `,
   yAxis: css`
-    width: 34px;
+    position: relative;
+    width: 36px;
     flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
     text-align: right;
-    font-size: 10px;
+    font-size: 12px;
     color: ${theme.colors.text.disabled};
     font-variant-numeric: tabular-nums;
-    padding: 1px 0;
+    & > span {
+      position: absolute;
+      right: 0;
+      transform: translateY(-50%);
+      white-space: nowrap;
+    }
+    & > span:first-of-type {
+      transform: translateY(0);
+    }
+    & > span:last-of-type {
+      transform: translateY(-100%);
+    }
   `,
   yAxisSpacer: css`
     width: 34px;
@@ -691,7 +820,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: 1;
     min-width: 0;
     padding: 0 2px;
-    font-size: 10px;
+    font-size: 12px;
     color: ${theme.colors.text.disabled};
     font-variant-numeric: tabular-nums;
   `,
@@ -713,11 +842,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
   legendSwatch: css`
     width: 8px;
     height: 8px;
-    border-radius: 2px;
+    border-radius: 50%;
     flex-shrink: 0;
   `,
   legendLabel: css`
-    font-size: 11px;
+    font-size: 13px;
     color: ${theme.colors.text.secondary};
     max-width: 120px;
     overflow: hidden;

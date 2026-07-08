@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
 import { Icon, IconButton, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
-import { LogRow, SelectedColumn } from '../types';
+import { FilterPill, LogRow, SelectedColumn } from '../types';
 import { SEVERITY_COLORS } from '../constants';
+import { makeFilter } from '../sql/filters';
 
 interface LogsTableProps {
   rows: LogRow[];
@@ -21,6 +22,9 @@ interface LogsTableProps {
    *  checkbox column entirely. */
   compareSelection?: Set<number>;
   onToggleCompare?: (index: number) => void;
+  /** Enables the per-cell hover toolbar (filter for/out, copy) — Kibana shows this floating just
+   *  above whichever cell is under the cursor. Omit to hide it (e.g. read-only contexts). */
+  onAddFilter?: (f: FilterPill) => void;
 }
 
 /** Shared with LogDetailDrawer's header summary so the row and detail view agree on color. */
@@ -85,28 +89,13 @@ export function LogsTable({
   wrapLines = false,
   compareSelection,
   onToggleCompare,
+  onAddFilter,
 }: LogsTableProps) {
   const showCompare = compareSelection !== undefined && onToggleCompare !== undefined;
   const styles = useStyles2(getStyles);
   // Roving keyboard focus, independent of `selectedRow` (which opens the detail panel).
   // Arrow keys move this; Enter opens the row under it.
   const [focusIndex, setFocusIndex] = useState(-1);
-  // Inline expansion (Kibana-style): the chevron reveals a raw-JSON preview of the row without
-  // opening the full detail panel. Independent of `selectedRow`/`onRowClick`, which is now only
-  // triggered from the hover mini-menu's "Open detail" action, not by clicking the row.
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
-
-  const toggleExpanded = (i: number) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) {
-        next.delete(i);
-      } else {
-        next.add(i);
-      }
-      return next;
-    });
-  };
 
   if (loading) {
     return (
@@ -215,7 +204,6 @@ export function LogsTable({
           {rows.map((row, i) => {
             const isSelected = selectedRow === row;
             const isFocused = focusIndex === i;
-            const isExpanded = expandedRows.has(i);
             const levelCol = columns.find((c) => c.type === 'level');
             const stripeColor = levelCol ? severityColor(row[levelCol.key]) : 'transparent';
             return (
@@ -239,33 +227,83 @@ export function LogsTable({
                   <td className={cx(styles.td, styles.expandTd)}>
                     <button
                       className={styles.expandBtn}
-                      title={isExpanded ? 'Collapse' : 'Expand'}
-                      onClick={() => toggleExpanded(i)}
+                      title="Open detail"
+                      onClick={() => {
+                        setFocusIndex(i);
+                        onRowClick(row);
+                      }}
                     >
-                      <Icon name={isExpanded ? 'angle-down' : 'angle-right'} size="xs" className={styles.expandIcon} />
+                      <Icon name="expand-arrows" size="xs" className={styles.expandIcon} />
                     </button>
                   </td>
-                  {columns.map((col) => (
-                    <td
-                      key={col.id}
-                      className={cx(styles.td, col.type === 'text' && styles.bodyCell)}
-                    >
-                      <span
-                        className={cx(
-                          col.type === 'time'
-                            ? styles.timestamp
-                            : col.type === 'level'
-                            ? styles.severity
-                            : col.type === 'text'
-                            ? styles.body
-                            : styles.cell,
-                          col.type === 'text' && wrapLines && styles.wrapped
-                        )}
+                  {columns.map((col) => {
+                    const rawValue = row[col.key];
+                    const filterable = onAddFilter && rawValue !== null && rawValue !== undefined && typeof rawValue !== 'object';
+                    return (
+                      <td
+                        key={col.id}
+                        className={cx(styles.td, styles.dataTd, col.type === 'text' && styles.bodyCell)}
                       >
-                        {renderCell(col, row)}
-                      </span>
-                    </td>
-                  ))}
+                        <span
+                          className={cx(
+                            col.type === 'time'
+                              ? styles.timestamp
+                              : col.type === 'level'
+                              ? styles.severity
+                              : col.type === 'text'
+                              ? styles.body
+                              : styles.cell,
+                            col.type === 'text' && wrapLines && styles.wrapped
+                          )}
+                        >
+                          {renderCell(col, row)}
+                        </span>
+                        <div className={cx(styles.cellToolbar, 'cell-toolbar')}>
+                            {filterable && (
+                              <>
+                                <IconButton
+                                  name="search-plus"
+                                  size="sm"
+                                  tooltip="Filter for value"
+                                  aria-label={`Filter for ${col.displayName}`}
+                                  onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '='))}
+                                />
+                                <IconButton
+                                  name="search-minus"
+                                  size="sm"
+                                  tooltip="Filter out value"
+                                  aria-label={`Filter out ${col.displayName}`}
+                                  onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '!='))}
+                                />
+                              </>
+                            )}
+                            <IconButton
+                              name="copy"
+                              size="sm"
+                              tooltip="Copy value"
+                              aria-label={`Copy ${col.displayName}`}
+                              onClick={() =>
+                                navigator.clipboard.writeText(
+                                  rawValue !== null && typeof rawValue === 'object'
+                                    ? JSON.stringify(rawValue)
+                                    : String(rawValue ?? '')
+                                )
+                              }
+                            />
+                            <IconButton
+                              name="table"
+                              size="sm"
+                              tooltip="Open detail"
+                              aria-label="Open log detail"
+                              onClick={() => {
+                                setFocusIndex(i);
+                                onRowClick(row);
+                              }}
+                            />
+                        </div>
+                      </td>
+                    );
+                  })}
                   <td className={cx(styles.td, styles.actionsTd)}>
                     <div className={styles.rowActions}>
                       <IconButton
@@ -288,15 +326,6 @@ export function LogsTable({
                     </div>
                   </td>
                 </tr>
-                {isExpanded && (
-                  <tr className={styles.expandedRow}>
-                    {showCompare && <td className={styles.td} />}
-                    <td className={styles.td} />
-                    <td className={styles.td} colSpan={columns.length + 1}>
-                      <pre className={styles.expandedJson}>{JSON.stringify(row, null, 2)}</pre>
-                    </td>
-                  </tr>
-                )}
               </React.Fragment>
             );
           })}
@@ -322,16 +351,17 @@ const getStyles = (theme: GrafanaTheme2) => ({
   table: css`
     width: 100%;
     border-collapse: collapse;
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   th: css`
     padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
     text-align: left;
     font-weight: ${theme.typography.fontWeightMedium};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     font-family: ${theme.typography.fontFamily};
     color: ${theme.colors.text.secondary};
     border-bottom: 1px solid ${theme.colors.border.medium};
+    border-right: 1px solid ${theme.colors.border.weak};
     background: ${theme.colors.background.secondary};
     background-clip: padding-box;
     white-space: nowrap;
@@ -340,6 +370,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     z-index: 1;
     &:hover {
       background: ${theme.colors.action.hover};
+    }
+    &:last-of-type {
+      border-right: none;
     }
   `,
   expandTh: css`
@@ -390,21 +423,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     opacity: 0;
     tr:hover & { opacity: 1; }
   `,
-  expandedRow: css`
-    background: ${theme.colors.background.canvas};
-    border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  expandedJson: css`
-    margin: 0;
-    padding: ${theme.spacing(1)};
-    font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: 11px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: ${theme.colors.text.primary};
-    max-height: 300px;
-    overflow-y: auto;
-  `,
   thInner: css`
     display: flex;
     align-items: center;
@@ -453,10 +471,44 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
+    padding: ${theme.spacing(1)} ${theme.spacing(1.25)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
     line-height: 1.6;
+  `,
+  dataTd: css`
+    position: relative;
+    border-right: 1px solid ${theme.colors.border.weak};
+    &:last-of-type {
+      border-right: none;
+    }
+    &:hover {
+      box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
+    }
+    &:hover .cell-toolbar {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  `,
+  cellToolbar: css`
+    position: absolute;
+    top: -14px;
+    right: ${theme.spacing(0.5)};
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 1px ${theme.spacing(0.25)};
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z1};
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms ease;
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
   `,
   bodyCell: css`
     max-width: 0;
@@ -465,13 +517,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
   timestamp: css`
     color: ${theme.colors.text.secondary};
     white-space: nowrap;
-    font-size: 11px;
+    font-size: 13px;
     display: block;
     font-variant-numeric: tabular-nums;
   `,
   severity: css`
     font-weight: ${theme.typography.fontWeightMedium};
-    font-size: 11px;
+    font-size: 13px;
     white-space: nowrap;
     display: block;
   `,
@@ -488,7 +540,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   cell: css`
     color: ${theme.colors.text.secondary};
-    font-size: 11px;
+    font-size: 13px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

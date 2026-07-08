@@ -169,7 +169,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-radius: ${theme.shape.radius.default};
     cursor: pointer;
     color: ${theme.colors.text.primary};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     max-width: 220px;
     &:hover {
       background: ${theme.colors.action.hover};
@@ -199,7 +199,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   groupHeader: css`
     padding: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.secondary};
     background: ${theme.colors.background.secondary};
@@ -226,7 +226,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: none;
     cursor: pointer;
     color: ${theme.colors.text.primary};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     text-align: left;
     overflow: hidden;
   `,
@@ -250,7 +250,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(1.5)};
     text-align: center;
     color: ${theme.colors.text.disabled};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   footer: css`
     padding: ${theme.spacing(1)};

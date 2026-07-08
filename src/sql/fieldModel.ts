@@ -39,3 +39,16 @@ export function inferFieldType(chType: string): FieldType {
   }
   return 'unknown';
 }
+
+/**
+ * Narrows a list of configured attribute-column names down to the ones that are actually
+ * Map-typed per the discovered columns. Map-key discovery (`mapKeys(...)`) throws
+ * `ILLEGAL_TYPE_OF_ARGUMENT` (ClickHouse error 43) if run against a non-Map column — e.g. when a
+ * schema stores ResourceAttributes/LogAttributes/ScopeAttributes as JSON or String instead of the
+ * OTel-default Map(String,String). Mirrors the type gate JSON-path discovery already applies via
+ * `columns.filter((f) => f.type === 'json')`.
+ */
+export function selectMapColumns(configuredNames: Array<string | undefined>, columns: FieldModel[]): string[] {
+  const mapTypedNames = new Set(columns.filter((f) => f.type === 'map').map((f) => f.name));
+  return configuredNames.filter((name): name is string => !!name && mapTypedNames.has(name));
+}

@@ -13,6 +13,7 @@ import {
   resolveVolumeBreakdown,
 } from '../queryBuilder';
 import { buildMapKeysQuery } from '../introspection';
+import { FieldModel, selectMapColumns } from '../fieldModel';
 import { EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
 
 const arbitraryConfig: SourceConfig = {
@@ -49,6 +50,43 @@ describe('buildMapKeysQuery', () => {
   it('includes the time filter when timestamp is mapped', () => {
     const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
     expect(sql).toContain('WHERE ts >= $__fromTime');
+  });
+});
+
+describe('selectMapColumns', () => {
+  // Regression coverage for Code 43 ILLEGAL_TYPE_OF_ARGUMENT: mapKeys() must not be run against
+  // configured attribute columns whose discovered ClickHouse type isn't actually Map(...).
+  const col = (name: string, type: FieldModel['type']): FieldModel => ({
+    id: `col:${name}`,
+    name,
+    displayName: name,
+    sqlExpr: name,
+    type,
+    source: 'column',
+  });
+
+  it('skips a configured column that is typed String instead of Map', () => {
+    const columns = [col('ResourceAttributes', 'string'), col('LogAttributes', 'map')];
+    expect(selectMapColumns(['ResourceAttributes', 'LogAttributes'], columns)).toEqual(['LogAttributes']);
+  });
+
+  it('skips a configured column that is typed JSON instead of Map', () => {
+    const columns = [col('ResourceAttributes', 'json'), col('LogAttributes', 'map')];
+    expect(selectMapColumns(['ResourceAttributes', 'LogAttributes'], columns)).toEqual(['LogAttributes']);
+  });
+
+  it('keeps columns typed Map', () => {
+    const columns = [col('ResourceAttributes', 'map'), col('LogAttributes', 'map'), col('ScopeAttributes', 'map')];
+    expect(selectMapColumns(['ResourceAttributes', 'LogAttributes', 'ScopeAttributes'], columns)).toEqual([
+      'ResourceAttributes',
+      'LogAttributes',
+      'ScopeAttributes',
+    ]);
+  });
+
+  it('drops undefined/empty configured names', () => {
+    const columns = [col('LogAttributes', 'map')];
+    expect(selectMapColumns([undefined, '', 'LogAttributes'], columns)).toEqual(['LogAttributes']);
   });
 });
 

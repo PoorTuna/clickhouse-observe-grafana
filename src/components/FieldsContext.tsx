@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
-import { FieldModel, inferFieldType } from '../sql/fieldModel';
+import { FieldModel, inferFieldType, selectMapColumns } from '../sql/fieldModel';
 import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
@@ -144,8 +144,10 @@ export function useFieldDiscovery(
     }
 
     // Phase B: Map keys (time-bounded, cached per table + coarse bucket). Fired concurrently —
-    // each column writes its own cache key, so there's no cross-column dependency.
-    const mapCols = resolvedMapColumns.filter(Boolean);
+    // each column writes its own cache key, so there's no cross-column dependency. Narrowed to
+    // columns actually typed Map in phase A — mapKeys() throws ILLEGAL_TYPE_OF_ARGUMENT (CH error
+    // 43) against JSON/String columns, which some schemas use in place of the OTel-default Map.
+    const mapCols = selectMapColumns(resolvedMapColumns, columns);
 
     const mapKeysPromise = Promise.all(
       mapCols.map(async (mapCol) => {

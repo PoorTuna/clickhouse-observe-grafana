@@ -15,6 +15,10 @@ interface LogsTableProps {
   onSort?: (col: string) => void;
   onRemoveColumn?: (col: SelectedColumn) => void;
   onMoveColumn?: (id: string, direction: 'left' | 'right') => void;
+  /** Drag-and-drop reorder: fired on drop with the dragged column's id and the id of the column
+   *  it was dropped on. Omit to disable dragging (columns fall back to the move-left/right
+   *  buttons only). */
+  onMoveColumnTo?: (id: string, targetId: string) => void;
   selectedRow?: LogRow | null;
   /** Wrap the message/body cell instead of truncating with an ellipsis. */
   wrapLines?: boolean;
@@ -85,6 +89,7 @@ export function LogsTable({
   onSort,
   onRemoveColumn,
   onMoveColumn,
+  onMoveColumnTo,
   selectedRow,
   wrapLines = false,
   compareSelection,
@@ -96,6 +101,11 @@ export function LogsTable({
   // Roving keyboard focus, independent of `selectedRow` (which opens the detail panel).
   // Arrow keys move this; Enter opens the row under it.
   const [focusIndex, setFocusIndex] = useState(-1);
+  // Column drag-and-drop reorder (native HTML5 DnD — no extra dependency). draggedId tracks
+  // which column is being lifted (dimmed at its origin); dragOverId tracks the current drop
+  // target (highlighted) so the user always sees where a drop would land.
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -143,13 +153,48 @@ export function LogsTable({
             <th className={cx(styles.th, styles.expandTh)} aria-hidden="true" />
             {columns.map((col, idx) => {
               const isSorted = sort?.col === col.key;
+              const draggable = Boolean(onMoveColumnTo);
               return (
                 <th
                   key={col.id}
-                  className={styles.th}
+                  className={cx(
+                    styles.th,
+                    draggable && styles.thDraggable,
+                    draggedId === col.id && styles.thDragging,
+                    dragOverId === col.id && dragOverId !== draggedId && styles.thDragOver
+                  )}
                   style={col.type === 'time' ? { width: 190 } : col.type === 'level' ? { width: 80 } : undefined}
+                  draggable={draggable}
+                  onDragStart={(e) => {
+                    setDraggedId(col.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragEnd={() => {
+                    setDraggedId(null);
+                    setDragOverId(null);
+                  }}
+                  onDragOver={(e) => {
+                    if (!draggable) {
+                      return;
+                    }
+                    e.preventDefault();
+                    if (dragOverId !== col.id) {
+                      setDragOverId(col.id);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedId && draggedId !== col.id) {
+                      onMoveColumnTo!(draggedId, col.id);
+                    }
+                    setDraggedId(null);
+                    setDragOverId(null);
+                  }}
                 >
                   <div className={styles.thInner}>
+                    {draggable && (
+                      <Icon name="draggabledots" size="sm" className={styles.dragHandle} title="Drag to reorder" />
+                    )}
                     <span
                       className={onSort ? styles.sortable : ''}
                       onClick={() => onSort?.(col.key)}
@@ -197,7 +242,6 @@ export function LogsTable({
                 </th>
               );
             })}
-            <th className={cx(styles.th, styles.actionsTh)} aria-hidden="true" />
           </tr>
         </thead>
         <tbody>
@@ -304,27 +348,6 @@ export function LogsTable({
                       </td>
                     );
                   })}
-                  <td className={cx(styles.td, styles.actionsTd)}>
-                    <div className={styles.rowActions}>
-                      <IconButton
-                        name="table"
-                        size="sm"
-                        tooltip="Open detail"
-                        aria-label="Open log detail"
-                        onClick={() => {
-                          setFocusIndex(i);
-                          onRowClick(row);
-                        }}
-                      />
-                      <IconButton
-                        name="copy"
-                        size="sm"
-                        tooltip="Copy row as JSON"
-                        aria-label="Copy row as JSON"
-                        onClick={() => navigator.clipboard.writeText(JSON.stringify(row, null, 2))}
-                      />
-                    </div>
-                  </td>
                 </tr>
               </React.Fragment>
             );
@@ -375,6 +398,21 @@ const getStyles = (theme: GrafanaTheme2) => ({
       border-right: none;
     }
   `,
+  thDraggable: css`
+    cursor: grab;
+  `,
+  thDragging: css`
+    opacity: 0.4;
+  `,
+  thDragOver: css`
+    box-shadow: inset 2px 0 0 0 ${theme.colors.primary.main};
+    background: ${theme.colors.action.hover};
+  `,
+  dragHandle: css`
+    flex-shrink: 0;
+    color: ${theme.colors.text.disabled};
+    cursor: grab;
+  `,
   expandTh: css`
     width: 24px;
     padding-left: ${theme.spacing(1)};
@@ -408,20 +446,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-radius: 2px;
     &:hover { background: ${theme.colors.action.hover}; }
     &:hover .expand-icon { color: ${theme.colors.text.primary}; }
-  `,
-  actionsTh: css`
-    width: 56px;
-  `,
-  actionsTd: css`
-    width: 56px;
-    text-align: right;
-  `,
-  rowActions: css`
-    display: flex;
-    gap: 2px;
-    justify-content: flex-end;
-    opacity: 0;
-    tr:hover & { opacity: 1; }
   `,
   thInner: css`
     display: flex;
@@ -471,7 +495,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(1)} ${theme.spacing(1.25)};
+    padding: ${theme.spacing(1.75)} ${theme.spacing(1.25)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
     line-height: 1.6;
@@ -493,7 +517,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   cellToolbar: css`
     position: absolute;
     top: -14px;
-    right: ${theme.spacing(0.5)};
+    left: ${theme.spacing(0.5)};
     z-index: 5;
     display: flex;
     align-items: center;
@@ -515,7 +539,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     width: 100%;
   `,
   timestamp: css`
-    color: ${theme.colors.text.secondary};
+    color: ${theme.colors.text.primary};
     white-space: nowrap;
     font-size: 13px;
     display: block;
@@ -539,7 +563,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     word-break: break-word;
   `,
   cell: css`
-    color: ${theme.colors.text.secondary};
+    color: ${theme.colors.text.primary};
     font-size: 13px;
     white-space: nowrap;
     overflow: hidden;

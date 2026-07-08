@@ -102,7 +102,7 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad, activeDataViewI
   return (
     <div className={styles.wrapper} ref={menuRef}>
       <Button
-        variant="secondary"
+        variant="primary"
         size="sm"
         icon="save"
         onClick={() => setOpen((v) => !v)}

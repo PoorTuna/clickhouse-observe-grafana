@@ -30,8 +30,11 @@ interface LogsTableProps {
    *  above whichever cell is under the cursor. Omit to hide it (e.g. read-only contexts). */
   onAddFilter?: (f: FilterPill) => void;
   /** Fired with a field id when a FieldSidebar row is dropped onto the table — adds it as a
-   *  column. Omit to disable accepting field drops. */
-  onDropField?: (fieldId: string) => void;
+   *  column. `targetId` is the column the drop landed on/near (header or body cell), so the new
+   *  column can be inserted at that position instead of always appending at the end — omitted
+   *  when the drop lands outside any column (e.g. the empty-state area), which appends. Omit the
+   *  prop entirely to disable accepting field drops. */
+  onDropField?: (fieldId: string, targetId?: string) => void;
 }
 
 /** Shared with LogDetailDrawer's header summary so the row and detail view agree on color. */
@@ -113,6 +116,9 @@ export function LogsTable({
   // Dropping a field from FieldSidebar anywhere onto the table adds it as a column — works even
   // with zero rows loaded, since it's a column-selection action, not a per-row one.
   const [isFieldDragOver, setIsFieldDragOver] = useState(false);
+  // Which column (header or body cell) a field drag is currently hovering — the new column is
+  // inserted at that position on drop, rather than always appended at the end.
+  const [fieldDropTargetId, setFieldDropTargetId] = useState<string | null>(null);
   const acceptsFieldDrag = Boolean(onDropField);
   const onTableDragOver = (e: React.DragEvent) => {
     if (!acceptsFieldDrag || !e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
@@ -130,6 +136,31 @@ export function LogsTable({
     if (fieldId) {
       e.preventDefault();
       onDropField!(fieldId);
+    }
+  };
+  // Column-position-aware handlers, wired onto each th/td below. Stop propagation so the drop
+  // isn't also handled by onTableDrop above (which would append a second time at the end).
+  const onColumnFieldDragOver = (e: React.DragEvent, colId: string) => {
+    if (!acceptsFieldDrag || !e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (fieldDropTargetId !== colId) {
+      setFieldDropTargetId(colId);
+    }
+  };
+  const onColumnFieldDrop = (e: React.DragEvent, colId: string) => {
+    if (!acceptsFieldDrag || !e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const fieldId = e.dataTransfer.getData(FIELD_DRAG_MIME);
+    setIsFieldDragOver(false);
+    setFieldDropTargetId(null);
+    if (fieldId) {
+      onDropField!(fieldId, colId);
     }
   };
 
@@ -182,7 +213,10 @@ export function LogsTable({
       tabIndex={0}
       onKeyDown={onTableKeyDown}
       onDragOver={onTableDragOver}
-      onDragLeave={() => setIsFieldDragOver(false)}
+      onDragLeave={() => {
+        setIsFieldDragOver(false);
+        setFieldDropTargetId(null);
+      }}
       onDrop={onTableDrop}
     >
       <table className={styles.table}>
@@ -201,7 +235,8 @@ export function LogsTable({
                     styles.dataTh,
                     draggable && styles.thDraggable,
                     draggedId === col.id && styles.thDragging,
-                    dragOverId === col.id && dragOverId !== draggedId && styles.thDragOver
+                    dragOverId === col.id && dragOverId !== draggedId && styles.thDragOver,
+                    fieldDropTargetId === col.id && styles.fieldDropTarget
                   )}
                   style={col.type === 'time' ? { width: 190 } : col.type === 'level' ? { width: 80 } : undefined}
                   draggable={draggable}
@@ -214,6 +249,10 @@ export function LogsTable({
                     setDragOverId(null);
                   }}
                   onDragOver={(e) => {
+                    if (acceptsFieldDrag && e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
+                      onColumnFieldDragOver(e, col.id);
+                      return;
+                    }
                     if (!draggable) {
                       return;
                     }
@@ -223,6 +262,10 @@ export function LogsTable({
                     }
                   }}
                   onDrop={(e) => {
+                    if (acceptsFieldDrag && e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
+                      onColumnFieldDrop(e, col.id);
+                      return;
+                    }
                     e.preventDefault();
                     if (draggedId && draggedId !== col.id) {
                       onMoveColumnTo!(draggedId, col.id);
@@ -326,7 +369,14 @@ export function LogsTable({
                     return (
                       <td
                         key={col.id}
-                        className={cx(styles.td, styles.dataTd, col.type === 'text' && styles.bodyCell)}
+                        className={cx(
+                          styles.td,
+                          styles.dataTd,
+                          col.type === 'text' && styles.bodyCell,
+                          fieldDropTargetId === col.id && styles.fieldDropTarget
+                        )}
+                        onDragOver={(e) => onColumnFieldDragOver(e, col.id)}
+                        onDrop={(e) => onColumnFieldDrop(e, col.id)}
                       >
                         <span
                           className={cx(
@@ -418,6 +468,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   emptyDragOver: css`
     box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
+    background: ${theme.colors.primary.transparent};
+  `,
+  /** Which column a field drag is hovering — shows the new column would land right before this
+   *  one, distinct from tableWrapperDragOver's whole-table cue. */
+  fieldDropTarget: css`
+    box-shadow: inset 2px 0 0 0 ${theme.colors.primary.main};
     background: ${theme.colors.primary.transparent};
   `,
   table: css`

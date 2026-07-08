@@ -95,7 +95,9 @@ type Action =
   // acting against state.columns directly would silently no-op (reorder) or blow away the
   // still-visible default set (add — appending to [] replaces defaultColumns() as soon as
   // effectiveColumns switches from the fallback to state.columns).
-  | { type: 'ADD_COLUMN'; col: SelectedColumn; columns: SelectedColumn[] }
+  // `targetId`: when set, the new column is inserted immediately before it instead of appended
+  // at the end — lets a sidebar field drag land wherever the user actually dropped it.
+  | { type: 'ADD_COLUMN'; col: SelectedColumn; columns: SelectedColumn[]; targetId?: string }
   | { type: 'REMOVE_COLUMN'; id: string; columns: SelectedColumn[] }
   | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right'; columns: SelectedColumn[] }
   | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string; columns: SelectedColumn[] }
@@ -116,7 +118,13 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
       if (action.columns.some((c) => c.id === action.col.id)) {
         return state;
       }
-      return { ...state, columns: [...action.columns, action.col] };
+      const targetIdx = action.targetId ? action.columns.findIndex((c) => c.id === action.targetId) : -1;
+      if (targetIdx === -1) {
+        return { ...state, columns: [...action.columns, action.col] };
+      }
+      const next = [...action.columns];
+      next.splice(targetIdx, 0, action.col);
+      return { ...state, columns: next };
     }
     case 'REMOVE_COLUMN':
       return { ...state, columns: action.columns.filter((c) => c.id !== action.id) };
@@ -519,10 +527,10 @@ export function LogsExplorer() {
   // Dragging a field out of FieldSidebar and dropping it on the table adds it as a column —
   // always an add (never a toggle-off), since the same field could be dropped again without
   // surprising the user by removing it.
-  const onDropField = (fieldId: string) => {
+  const onDropField = (fieldId: string, targetId?: string) => {
     const field = fieldsState.fields.find((f) => f.id === fieldId);
     if (field && !effectiveColumns.some((c) => c.id === field.id)) {
-      dispatch({ type: 'ADD_COLUMN', col: fieldToColumn(field), columns: effectiveColumns });
+      dispatch({ type: 'ADD_COLUMN', col: fieldToColumn(field), columns: effectiveColumns, targetId });
     }
   };
 

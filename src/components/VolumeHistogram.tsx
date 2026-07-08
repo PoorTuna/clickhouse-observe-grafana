@@ -101,7 +101,13 @@ export function fillEmptyBuckets(
   const start = Math.floor(timeRange.from.valueOf() / stepMs) * stepMs;
   const end = timeRange.to.valueOf();
   const filled: VolumeDataPoint[] = [];
-  for (let t = start; t <= end; t += stepMs) {
+  // Strictly less than `end`, not <=: when the range span divides evenly by stepMs (the common
+  // case — e.g. a round "last 1 hour"), `t <= end` adds a spurious trailing bucket exactly at the
+  // range's end instant. Its window is [end, end+stepMs), but the SQL query only includes events
+  // up to the single instant `end` — so that bucket is structurally near-empty regardless of real
+  // data, not a genuine gap. The bucket that actually contains `end` (start < end) is still
+  // included, so the true last bucket never gets dropped.
+  for (let t = start; t < end; t += stepMs) {
     filled.push(byTime.get(t) ?? { time: t, levels: {} });
   }
   return filled;

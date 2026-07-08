@@ -145,7 +145,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   name: css`
     flex: 1;
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.primary};
     overflow: hidden;
     text-overflow: ellipsis;

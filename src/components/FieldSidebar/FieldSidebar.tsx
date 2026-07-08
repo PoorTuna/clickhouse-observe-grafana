@@ -162,6 +162,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   search: css`
     font-size: ${theme.typography.body.fontSize};
+    & input {
+      padding-top: ${theme.spacing(1.25)};
+      padding-bottom: ${theme.spacing(1.25)};
+    }
   `,
   section: css`
     display: flex;

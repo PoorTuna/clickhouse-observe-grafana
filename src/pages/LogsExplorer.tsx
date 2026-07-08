@@ -11,7 +11,7 @@ import { CompareLogsModal } from '../components/CompareLogsModal';
 import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
 import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
 import { BreakdownPicker } from '../components/HistogramControls/BreakdownPicker';
-import { FieldSidebar } from '../components/FieldSidebar/FieldSidebar';
+import { FieldSidebar, fieldToColumn } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
 import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
@@ -495,6 +495,16 @@ export function LogsExplorer() {
     }
   };
 
+  // Dragging a field out of FieldSidebar and dropping it on the table adds it as a column —
+  // always an add (never a toggle-off), since the same field could be dropped again without
+  // surprising the user by removing it.
+  const onDropField = (fieldId: string) => {
+    const field = fieldsState.fields.find((f) => f.id === fieldId);
+    if (field && !effectiveColumns.some((c) => c.id === field.id)) {
+      dispatch({ type: 'ADD_COLUMN', col: fieldToColumn(field) });
+    }
+  };
+
   const onLoadSaved = (search: SavedSearch, newTimeRange?: TimeRange) => {
     dispatch({
       type: 'LOAD_SAVED',
@@ -935,6 +945,7 @@ export function LogsExplorer() {
                   compareSelection={compareSelection}
                   onToggleCompare={onToggleCompare}
                   onAddFilter={onAddFilter}
+                  onDropField={onDropField}
                 />
                 <PaginationBar
                   page={currentPage}
@@ -1174,6 +1185,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   tableDetailSplit: css`
     flex: 1;
+    width: 100%;
     min-height: 0;
     display: flex;
   `,

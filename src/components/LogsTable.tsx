@@ -3,7 +3,7 @@ import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
 import { Icon, IconButton, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
 import { FilterPill, LogRow, SelectedColumn } from '../types';
-import { SEVERITY_COLORS } from '../constants';
+import { FIELD_DRAG_MIME, SEVERITY_COLORS } from '../constants';
 import { makeFilter } from '../sql/filters';
 
 interface LogsTableProps {
@@ -29,6 +29,9 @@ interface LogsTableProps {
   /** Enables the per-cell hover toolbar (filter for/out, copy) — Kibana shows this floating just
    *  above whichever cell is under the cursor. Omit to hide it (e.g. read-only contexts). */
   onAddFilter?: (f: FilterPill) => void;
+  /** Fired with a field id when a FieldSidebar row is dropped onto the table — adds it as a
+   *  column. Omit to disable accepting field drops. */
+  onDropField?: (fieldId: string) => void;
 }
 
 /** Shared with LogDetailDrawer's header summary so the row and detail view agree on color. */
@@ -95,6 +98,7 @@ export function LogsTable({
   compareSelection,
   onToggleCompare,
   onAddFilter,
+  onDropField,
 }: LogsTableProps) {
   const showCompare = compareSelection !== undefined && onToggleCompare !== undefined;
   const styles = useStyles2(getStyles);
@@ -106,17 +110,49 @@ export function LogsTable({
   // target (highlighted) so the user always sees where a drop would land.
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Dropping a field from FieldSidebar anywhere onto the table adds it as a column — works even
+  // with zero rows loaded, since it's a column-selection action, not a per-row one.
+  const [isFieldDragOver, setIsFieldDragOver] = useState(false);
+  const acceptsFieldDrag = Boolean(onDropField);
+  const onTableDragOver = (e: React.DragEvent) => {
+    if (!acceptsFieldDrag || !e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
+      return;
+    }
+    e.preventDefault();
+    setIsFieldDragOver(true);
+  };
+  const onTableDrop = (e: React.DragEvent) => {
+    if (!acceptsFieldDrag) {
+      return;
+    }
+    const fieldId = e.dataTransfer.getData(FIELD_DRAG_MIME);
+    setIsFieldDragOver(false);
+    if (fieldId) {
+      e.preventDefault();
+      onDropField!(fieldId);
+    }
+  };
 
   if (loading) {
     return (
-      <div className={styles.empty}>
+      <div
+        className={cx(styles.empty, isFieldDragOver && styles.emptyDragOver)}
+        onDragOver={onTableDragOver}
+        onDragLeave={() => setIsFieldDragOver(false)}
+        onDrop={onTableDrop}
+      >
         <LoadingPlaceholder text="Running query…" />
       </div>
     );
   }
   if (!loading && rows.length === 0) {
     return (
-      <div className={styles.empty}>
+      <div
+        className={cx(styles.empty, isFieldDragOver && styles.emptyDragOver)}
+        onDragOver={onTableDragOver}
+        onDragLeave={() => setIsFieldDragOver(false)}
+        onDrop={onTableDrop}
+      >
         <EmptyState
           variant="not-found"
           hideImage
@@ -141,10 +177,13 @@ export function LogsTable({
 
   return (
     <div
-      className={styles.tableWrapper}
+      className={cx(styles.tableWrapper, isFieldDragOver && styles.tableWrapperDragOver)}
       role="grid"
       tabIndex={0}
       onKeyDown={onTableKeyDown}
+      onDragOver={onTableDragOver}
+      onDragLeave={() => setIsFieldDragOver(false)}
+      onDrop={onTableDrop}
     >
       <table className={styles.table}>
         <thead>
@@ -371,6 +410,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:focus-visible {
       box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
     }
+  `,
+  /** Dashed accent while a field from the sidebar is dragged over the table — Kibana shows the
+   *  same cue so it's obvious dropping here will add the field as a column. */
+  tableWrapperDragOver: css`
+    box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
+  `,
+  emptyDragOver: css`
+    box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
+    background: ${theme.colors.primary.transparent};
   `,
   table: css`
     width: 100%;

@@ -134,9 +134,15 @@ export function LogDetailDrawer({
       if (!k || containerCols.has(k)) {
         continue;
       }
+      // The mapped timestamp column (and its OTel alias) renders as a raw epoch/DateTime value
+      // otherwise — every other timestamp-shaped value in this UI (header, table) goes through
+      // formatTimestamp, so this flat list shouldn't be the one place that doesn't.
+      const isTimestampField = k === c.timestamp || k === CORE_ALIAS.timestamp;
       flat.push({
         key: k,
-        value: v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
+        value: isTimestampField
+          ? formatTimestamp(v)
+          : v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
         sqlExpr: k,
       });
     }

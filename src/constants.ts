@@ -50,6 +50,10 @@ export const BREAKDOWN_PALETTE = [
 /** Color used for the "Other" series in breakdown mode. */
 export const OTHER_COLOR = '#98A2B3';
 
+/** Drag-and-drop MIME type for dragging a field out of FieldSidebar into LogsTable to add it as
+ *  a column — shared so the drag source and drop target can't drift out of sync on the string. */
+export const FIELD_DRAG_MIME = 'application/x-clickhouse-observe-field';
+
 /**
  * Deterministic service → color mapping, shared by the trace list, waterfall, and service map so
  * the same service always renders the same color everywhere. Uses the same BREAKDOWN_PALETTE as

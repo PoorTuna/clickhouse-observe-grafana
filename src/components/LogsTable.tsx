@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
-import { Icon, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
+import { Icon, IconButton, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
 import { LogRow, SelectedColumn } from '../types';
 import { SEVERITY_COLORS } from '../constants';
 
@@ -81,9 +81,25 @@ export function LogsTable({
   wrapLines = false,
 }: LogsTableProps) {
   const styles = useStyles2(getStyles);
-  // Roving keyboard focus, independent of `selectedRow` (which opens the detail drawer).
+  // Roving keyboard focus, independent of `selectedRow` (which opens the detail panel).
   // Arrow keys move this; Enter opens the row under it.
   const [focusIndex, setFocusIndex] = useState(-1);
+  // Inline expansion (Kibana-style): the chevron reveals a raw-JSON preview of the row without
+  // opening the full detail panel. Independent of `selectedRow`/`onRowClick`, which is now only
+  // triggered from the hover mini-menu's "Open detail" action, not by clicking the row.
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+  const toggleExpanded = (i: number) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) {
+        next.delete(i);
+      } else {
+        next.add(i);
+      }
+      return next;
+    });
+  };
 
   if (loading) {
     return (
@@ -184,50 +200,85 @@ export function LogsTable({
                 </th>
               );
             })}
+            <th className={cx(styles.th, styles.actionsTh)} aria-hidden="true" />
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => {
             const isSelected = selectedRow === row;
             const isFocused = focusIndex === i;
+            const isExpanded = expandedRows.has(i);
             const levelCol = columns.find((c) => c.type === 'level');
             const stripeColor = levelCol ? severityColor(row[levelCol.key]) : 'transparent';
             return (
-              <tr
-                key={i}
-                className={cx(styles.tr, isSelected && styles.trSelected, isFocused && styles.trFocused)}
-                style={{ borderLeftColor: stripeColor }}
-                onClick={() => {
-                  setFocusIndex(i);
-                  onRowClick(row);
-                }}
-                aria-selected={isSelected}
-              >
-                <td className={cx(styles.td, styles.expandTd)}>
-                  <Icon name="angle-right" size="xs" className={styles.expandIcon} />
-                </td>
-                {columns.map((col) => (
-                  <td
-                    key={col.id}
-                    className={cx(styles.td, col.type === 'text' && styles.bodyCell)}
-                  >
-                    <span
-                      className={cx(
-                        col.type === 'time'
-                          ? styles.timestamp
-                          : col.type === 'level'
-                          ? styles.severity
-                          : col.type === 'text'
-                          ? styles.body
-                          : styles.cell,
-                        col.type === 'text' && wrapLines && styles.wrapped
-                      )}
+              <React.Fragment key={i}>
+                <tr
+                  className={cx(styles.tr, isSelected && styles.trSelected, isFocused && styles.trFocused)}
+                  style={{ borderLeftColor: stripeColor }}
+                  onMouseDown={() => setFocusIndex(i)}
+                  aria-selected={isSelected}
+                >
+                  <td className={cx(styles.td, styles.expandTd)}>
+                    <button
+                      className={styles.expandBtn}
+                      title={isExpanded ? 'Collapse' : 'Expand'}
+                      onClick={() => toggleExpanded(i)}
                     >
-                      {renderCell(col, row)}
-                    </span>
+                      <Icon name={isExpanded ? 'angle-down' : 'angle-right'} size="xs" className={styles.expandIcon} />
+                    </button>
                   </td>
-                ))}
-              </tr>
+                  {columns.map((col) => (
+                    <td
+                      key={col.id}
+                      className={cx(styles.td, col.type === 'text' && styles.bodyCell)}
+                    >
+                      <span
+                        className={cx(
+                          col.type === 'time'
+                            ? styles.timestamp
+                            : col.type === 'level'
+                            ? styles.severity
+                            : col.type === 'text'
+                            ? styles.body
+                            : styles.cell,
+                          col.type === 'text' && wrapLines && styles.wrapped
+                        )}
+                      >
+                        {renderCell(col, row)}
+                      </span>
+                    </td>
+                  ))}
+                  <td className={cx(styles.td, styles.actionsTd)}>
+                    <div className={styles.rowActions}>
+                      <IconButton
+                        name="table"
+                        size="sm"
+                        tooltip="Open detail"
+                        aria-label="Open log detail"
+                        onClick={() => {
+                          setFocusIndex(i);
+                          onRowClick(row);
+                        }}
+                      />
+                      <IconButton
+                        name="copy"
+                        size="sm"
+                        tooltip="Copy row as JSON"
+                        aria-label="Copy row as JSON"
+                        onClick={() => navigator.clipboard.writeText(JSON.stringify(row, null, 2))}
+                      />
+                    </div>
+                  </td>
+                </tr>
+                {isExpanded && (
+                  <tr className={styles.expandedRow}>
+                    <td className={styles.td} />
+                    <td className={styles.td} colSpan={columns.length + 1}>
+                      <pre className={styles.expandedJson}>{JSON.stringify(row, null, 2)}</pre>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -263,10 +314,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.secondary};
     border-bottom: 1px solid ${theme.colors.border.medium};
     background: ${theme.colors.background.secondary};
+    background-clip: padding-box;
     white-space: nowrap;
     position: sticky;
     top: 0;
     z-index: 1;
+    &:hover {
+      background: ${theme.colors.action.hover};
+    }
   `,
   expandTh: css`
     width: 24px;
@@ -280,6 +335,46 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   expandIcon: css`
     color: ${theme.colors.text.disabled};
+  `,
+  expandBtn: css`
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    border-radius: 2px;
+    &:hover { background: ${theme.colors.action.hover}; }
+    &:hover .expand-icon { color: ${theme.colors.text.primary}; }
+  `,
+  actionsTh: css`
+    width: 56px;
+  `,
+  actionsTd: css`
+    width: 56px;
+    text-align: right;
+  `,
+  rowActions: css`
+    display: flex;
+    gap: 2px;
+    justify-content: flex-end;
+    opacity: 0;
+    tr:hover & { opacity: 1; }
+  `,
+  expandedRow: css`
+    background: ${theme.colors.background.canvas};
+    border-bottom: 1px solid ${theme.colors.border.weak};
+  `,
+  expandedJson: css`
+    margin: 0;
+    padding: ${theme.spacing(1)};
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: ${theme.colors.text.primary};
+    max-height: 300px;
+    overflow-y: auto;
   `,
   thInner: css`
     display: flex;
@@ -312,7 +407,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
   `,
   tr: css`
-    cursor: pointer;
     border-bottom: 1px solid ${theme.colors.border.weak};
     border-left: 2px solid transparent;
     background: ${theme.colors.background.primary};

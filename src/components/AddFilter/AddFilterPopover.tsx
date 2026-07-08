@@ -10,7 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { css } from '@emotion/css';
+import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, SelectableValue } from '@grafana/data';
 import { Button, Icon, Input, Portal, Select, useStyles2 } from '@grafana/ui';
 import { FilterPill, FilterOp } from '../../types';
@@ -107,7 +107,7 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
   const openPopover = useCallback(() => {
     if (anchorRef.current) {
       const rect = anchorRef.current.getBoundingClientRect();
-      const PANEL_W = 420;
+      const PANEL_W = 640;
       const left = Math.min(rect.left, window.innerWidth - PANEL_W - 8);
       setPopoverPos({ top: rect.bottom + 6, left: Math.max(8, left) });
     }
@@ -169,74 +169,76 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
               <span className={styles.panelTitle}>Add filter</span>
             </div>
 
-            {/* Field selector */}
-            <div className={styles.row}>
-              <label className={styles.label}>Field</label>
-              <Select
-                options={fieldOptions}
-                value={selectedFieldExpr}
-                onChange={(opt) => {
-                  setSelectedFieldExpr(opt.value ?? null);
-                  setSingleValue('');
-                  setMultiValues([]);
-                }}
-                placeholder="Select field"
-                isClearable={false}
-                isSearchable
-                menuShouldPortal
-              />
-            </div>
-
-            {/* Operator selector */}
-            <div className={styles.row}>
-              <label className={styles.label}>Operator</label>
-              <Select
-                options={OP_OPTIONS}
-                value={selectedOp}
-                onChange={(opt) => {
-                  setSelectedOp((opt.value as FilterOp) ?? '=');
-                  setSingleValue('');
-                  setMultiValues([]);
-                }}
-                isClearable={false}
-                menuShouldPortal
-              />
-            </div>
-
-            {/* Value input — only shown when op accepts a value */}
-            {currentOp.hasValue && (
-              <div className={styles.row}>
-                <label className={styles.label}>Value</label>
-                {currentOp.isMulti ? (
-                  <Select
-                    isMulti
-                    allowCustomValue
-                    options={valueOptions}
-                    isLoading={loadingValues}
-                    value={multiValues.map((v) => ({ label: v, value: v }))}
-                    onChange={(opts) => {
-                      setMultiValues(
-                        (opts as Array<SelectableValue<string>>).map((o) => o.value ?? '')
-                      );
-                    }}
-                    placeholder={selectedFieldExpr ? 'Select or type values…' : 'Select a field first'}
-                    disabled={!selectedFieldExpr}
-                    menuShouldPortal
-                  />
-                ) : (
-                  <Select
-                    allowCustomValue
-                    options={valueOptions}
-                    isLoading={loadingValues}
-                    value={singleValue ? { label: singleValue, value: singleValue } : null}
-                    onChange={(opt) => setSingleValue((opt as SelectableValue<string>).value ?? '')}
-                    placeholder={selectedFieldExpr ? 'Select or type a value…' : 'Select a field first'}
-                    disabled={!selectedFieldExpr}
-                    menuShouldPortal
-                  />
-                )}
+            {/* Field / Operator / Value — one row, Kibana-width, so none of the three obscures
+                the others (they used to stack full-width in a much narrower panel). */}
+            <div className={styles.fieldOpValueRow}>
+              <div className={cx(styles.row, styles.rowInline)}>
+                <label className={styles.label}>Field</label>
+                <Select
+                  options={fieldOptions}
+                  value={selectedFieldExpr}
+                  onChange={(opt) => {
+                    setSelectedFieldExpr(opt.value ?? null);
+                    setSingleValue('');
+                    setMultiValues([]);
+                  }}
+                  placeholder="Select field"
+                  isClearable={false}
+                  isSearchable
+                  menuShouldPortal
+                />
               </div>
-            )}
+
+              <div className={cx(styles.row, styles.rowInline)}>
+                <label className={styles.label}>Operator</label>
+                <Select
+                  options={OP_OPTIONS}
+                  value={selectedOp}
+                  onChange={(opt) => {
+                    setSelectedOp((opt.value as FilterOp) ?? '=');
+                    setSingleValue('');
+                    setMultiValues([]);
+                  }}
+                  isClearable={false}
+                  menuShouldPortal
+                />
+              </div>
+
+              {/* Value input — only shown when op accepts a value */}
+              {currentOp.hasValue && (
+                <div className={cx(styles.row, styles.rowInline)}>
+                  <label className={styles.label}>Value</label>
+                  {currentOp.isMulti ? (
+                    <Select
+                      isMulti
+                      allowCustomValue
+                      options={valueOptions}
+                      isLoading={loadingValues}
+                      value={multiValues.map((v) => ({ label: v, value: v }))}
+                      onChange={(opts) => {
+                        setMultiValues(
+                          (opts as Array<SelectableValue<string>>).map((o) => o.value ?? '')
+                        );
+                      }}
+                      placeholder={selectedFieldExpr ? 'Select or type values…' : 'Select a field first'}
+                      disabled={!selectedFieldExpr}
+                      menuShouldPortal
+                    />
+                  ) : (
+                    <Select
+                      allowCustomValue
+                      options={valueOptions}
+                      isLoading={loadingValues}
+                      value={singleValue ? { label: singleValue, value: singleValue } : null}
+                      onChange={(opt) => setSingleValue((opt as SelectableValue<string>).value ?? '')}
+                      placeholder={selectedFieldExpr ? 'Select or type a value…' : 'Select a field first'}
+                      disabled={!selectedFieldExpr}
+                      menuShouldPortal
+                    />
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Custom label */}
             <div className={styles.row}>
@@ -301,12 +303,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
   panel: css`
     position: fixed;
     z-index: 10000;
-    width: 420px;
+    width: 640px;
+    max-width: calc(100vw - 16px);
     padding: ${theme.spacing(2)};
     background: ${theme.colors.background.primary};
     border: 1px solid ${theme.colors.border.medium};
     border-radius: ${theme.shape.radius.default};
     box-shadow: ${theme.shadows.z3};
+  `,
+  fieldOpValueRow: css`
+    display: flex;
+    gap: ${theme.spacing(1.5)};
+    align-items: flex-start;
+    margin-bottom: ${theme.spacing(1.5)};
   `,
   panelHeader: css`
     margin-bottom: ${theme.spacing(1.5)};
@@ -321,6 +330,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     gap: ${theme.spacing(0.5)};
     margin-bottom: ${theme.spacing(1.5)};
+  `,
+  rowInline: css`
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
   `,
   label: css`
     font-size: ${theme.typography.bodySmall.fontSize};

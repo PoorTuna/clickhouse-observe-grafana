@@ -11,12 +11,17 @@ import { DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
 import { applyOtelPreset } from '../../sql/schema';
-import { ColumnMapping, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
+import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
 
 interface CreateDataViewModalProps {
   isOpen: boolean;
   onDismiss: () => void;
+  /** When set, the modal edits this personal view in place (jumps straight to the column-mapping
+   *  step, pre-filled) instead of creating a new one. Only ever passed a personal view — shared
+   *  views are admin-managed via plugin config, matching the existing delete-personal-view-only
+   *  pattern in DataViewPicker. */
+  editingView?: DataView;
 }
 
 const NO_TIME_VALUE = '__no_time__';
@@ -41,8 +46,8 @@ function schemaTimeRange(): TimeRange {
 
 type Step = 'location' | 'columns';
 
-export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalProps) {
-  const { createPersonalView, setActiveViewId } = useContext(DataViewContext);
+export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDataViewModalProps) {
+  const { createPersonalView, updatePersonalView, setActiveViewId } = useContext(DataViewContext);
 
   // Step tracking
   const [step, setStep] = useState<Step>('location');
@@ -99,11 +104,24 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
   // Reset on open/close. isOpen is an external (parent-controlled) signal, so re-deriving
   // the modal's internal state from it here is the intended sync, not a render-time update.
   useEffect(() => {
-    if (isOpen) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      resetAll();
+    if (!isOpen) {
+      return;
     }
-  }, [isOpen, resetAll]);
+    resetAll();
+    if (editingView) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDatasourceUid(editingView.datasourceUid);
+      setDatabase(editingView.database);
+      setLogsTable(editingView.logsTable);
+      setMapping({ ...editingView.columns });
+      setTimestampField(editingView.columns.timestamp || NO_TIME_VALUE);
+      setBodyField(editingView.columns.body || NO_BODY_VALUE);
+      setApplyOtel(editingView.isOtel);
+      setName(editingView.name);
+      goToColumnsStepFor(editingView.datasourceUid, editingView.database, editingView.logsTable, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, editingView, resetAll]);
 
   // Fetch databases when datasource selected
   async function onDatasourceChange(uid: string) {
@@ -161,9 +179,12 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     }
   }
 
-  // Proceed to column config step — fetch columns, auto-detect OTel
-  async function goToColumnsStep() {
-    if (!datasourceUid || !database || !logsTable) {
+  // Proceed to column config step — fetch columns for the given location. Shared by the
+  // "Next →" button (fresh view, resets mapping) and the edit-view effect above (pre-fills
+  // mapping from the view being edited instead of resetting it) — the only difference is what
+  // happens to mapping/name after the columns load, controlled by `resetMapping`.
+  async function goToColumnsStepFor(uid: string, db: string, table: string, resetMapping = true) {
+    if (!uid || !db || !table) {
       return;
     }
     setError('');
@@ -171,8 +192,8 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     setStep('columns');
     try {
       const rows = await runQueryRows({
-        datasourceUid,
-        sql: buildColumnsQuery(database, logsTable),
+        datasourceUid: uid,
+        sql: buildColumnsQuery(db, table),
         timeRange: schemaTimeRange(),
       });
       const typedRows = rows as Array<Record<string, unknown>>;
@@ -193,18 +214,23 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
       setColumnOptions(timestampOpts);
       setAllColumnOptions(cols.map((c) => ({ label: c, value: c })));
 
-      // No auto-inference — leave mapping blank. User maps columns by hand or ticks the OTel checkbox.
-      setApplyOtel(false);
-      setMapping({ ...EMPTY_COLUMN_MAPPING });
-      setTimestampField(undefined);
-      setBodyField(undefined);
-
-      setName(`${database}.${logsTable}`);
+      if (resetMapping) {
+        // No auto-inference — leave mapping blank. User maps columns by hand or ticks the OTel checkbox.
+        setApplyOtel(false);
+        setMapping({ ...EMPTY_COLUMN_MAPPING });
+        setTimestampField(undefined);
+        setBodyField(undefined);
+        setName(`${db}.${table}`);
+      }
     } catch (e) {
       setError(`Failed to load columns: ${(e as Error)?.message ?? e}`);
     } finally {
       setLoadingCols(false);
     }
+  }
+
+  function goToColumnsStep() {
+    return goToColumnsStepFor(datasourceUid, database, logsTable);
   }
 
   function onTimestampChange(v: string) {
@@ -247,7 +273,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
     setSaving(true);
     setError('');
     try {
-      const view = createPersonalView({
+      const values = {
         datasourceUid,
         database,
         logsTable,
@@ -255,8 +281,14 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
         isOtel: applyOtel,
         columns: mapping,
         name: name.trim() || `${database}.${logsTable}`,
-      });
-      setActiveViewId(view.id);
+      };
+      if (editingView) {
+        updatePersonalView(editingView.id, values);
+        setActiveViewId(editingView.id);
+      } else {
+        const view = createPersonalView(values);
+        setActiveViewId(view.id);
+      }
       onDismiss();
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
@@ -276,7 +308,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
 
   return (
     <Modal
-      title="Create data view"
+      title={editingView ? `Edit data view: ${editingView.name}` : 'Create data view'}
       isOpen={isOpen}
       onDismiss={onDismiss}
     >
@@ -438,7 +470,7 @@ export function CreateDataViewModal({ isOpen, onDismiss }: CreateDataViewModalPr
                     disabled={!canSave || saving}
                     onClick={handleSave}
                   >
-                    {saving ? 'Saving…' : 'Save data view'}
+                    {saving ? 'Saving…' : editingView ? 'Save changes' : 'Save data view'}
                   </Button>
                 </div>
               </div>

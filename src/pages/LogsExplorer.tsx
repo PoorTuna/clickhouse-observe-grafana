@@ -892,7 +892,7 @@ export function LogsExplorer() {
                       <VolumeHistogram
                         data={volumeData}
                         timeRange={timeRange}
-                        height={32}
+                        height={110}
                         onSelectRange={onHistogramSelectRange}
                         onBreakdownFilter={onHistogramBreakdownFilter}
                         colorMode={

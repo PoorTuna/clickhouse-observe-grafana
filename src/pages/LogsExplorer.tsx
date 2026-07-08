@@ -90,11 +90,13 @@ type Action =
   | { type: 'SET_FILTERS'; filters: FilterPill[] }
   | { type: 'TOGGLE_RAW_SQL' }
   | { type: 'SET_RAW_SQL'; sql: string }
-  | { type: 'ADD_COLUMN'; col: SelectedColumn }
-  | { type: 'REMOVE_COLUMN'; id: string }
-  // `columns` is the caller's current *displayed* list (effectiveColumns), not state.columns —
-  // state.columns is empty until the user's first explicit column change, so reordering the
-  // still-default columns would silently no-op against an empty array otherwise.
+  // `columns` on every one of these is the caller's current *displayed* list (effectiveColumns),
+  // not state.columns — state.columns is empty until the user's first explicit column change, so
+  // acting against state.columns directly would silently no-op (reorder) or blow away the
+  // still-visible default set (add — appending to [] replaces defaultColumns() as soon as
+  // effectiveColumns switches from the fallback to state.columns).
+  | { type: 'ADD_COLUMN'; col: SelectedColumn; columns: SelectedColumn[] }
+  | { type: 'REMOVE_COLUMN'; id: string; columns: SelectedColumn[] }
   | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right'; columns: SelectedColumn[] }
   | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string; columns: SelectedColumn[] }
   | { type: 'SET_SORT'; col: string }
@@ -111,13 +113,13 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
     case 'SET_RAW_SQL':
       return { ...state, rawSql: action.sql };
     case 'ADD_COLUMN': {
-      if (state.columns.some((c) => c.id === action.col.id)) {
+      if (action.columns.some((c) => c.id === action.col.id)) {
         return state;
       }
-      return { ...state, columns: [...state.columns, action.col] };
+      return { ...state, columns: [...action.columns, action.col] };
     }
     case 'REMOVE_COLUMN':
-      return { ...state, columns: state.columns.filter((c) => c.id !== action.id) };
+      return { ...state, columns: action.columns.filter((c) => c.id !== action.id) };
     case 'REORDER_COLUMN': {
       const idx = action.columns.findIndex((c) => c.id === action.id);
       if (idx === -1) {
@@ -489,9 +491,9 @@ export function LogsExplorer() {
 
   const onToggleColumn = (col: SelectedColumn) => {
     if (effectiveColumns.some((c) => c.id === col.id)) {
-      dispatch({ type: 'REMOVE_COLUMN', id: col.id });
+      dispatch({ type: 'REMOVE_COLUMN', id: col.id, columns: effectiveColumns });
     } else {
-      dispatch({ type: 'ADD_COLUMN', col });
+      dispatch({ type: 'ADD_COLUMN', col, columns: effectiveColumns });
     }
   };
 
@@ -501,7 +503,7 @@ export function LogsExplorer() {
   const onDropField = (fieldId: string) => {
     const field = fieldsState.fields.find((f) => f.id === fieldId);
     if (field && !effectiveColumns.some((c) => c.id === field.id)) {
-      dispatch({ type: 'ADD_COLUMN', col: fieldToColumn(field) });
+      dispatch({ type: 'ADD_COLUMN', col: fieldToColumn(field), columns: effectiveColumns });
     }
   };
 
@@ -937,7 +939,7 @@ export function LogsExplorer() {
                   sort={queryState.sort}
                   onRowClick={setSelectedRow}
                   onSort={(col) => dispatch({ type: 'SET_SORT', col })}
-                  onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
+                  onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id, columns: effectiveColumns })}
                   onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction, columns: effectiveColumns })}
                   onMoveColumnTo={(id, targetId) => dispatch({ type: 'MOVE_COLUMN_TO', id, targetId, columns: effectiveColumns })}
                   selectedRow={selectedRow}

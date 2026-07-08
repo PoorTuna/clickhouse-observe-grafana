@@ -19,7 +19,7 @@ import { groupAttributes } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp, severityColor } from './LogsTable';
-import { makeColumnKey } from './FieldSidebar/FieldSidebar';
+import { makeColumnKey, fieldToColumn } from './FieldSidebar/FieldSidebar';
 import { JsonTree, allContainerPaths } from './JsonTree';
 
 interface LogDetailDrawerProps {
@@ -152,11 +152,12 @@ export function LogDetailDrawer({
       }
     }
     return flat.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  }, [effectiveRow, containerCols, attrGroups]);
+  }, [effectiveRow, containerCols, attrGroups, c.timestamp]);
 
   // Reset per-log UI state (not the search/selected-only filters, which the user likely wants to
   // keep applied while stepping through prev/next) whenever a new log is opened.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setExpandedValues(new Set());
     setFieldsPage(0);
   }, [row]);
@@ -173,14 +174,24 @@ export function LogDetailDrawer({
       onToggleColumn(existing);
       return;
     }
-    onToggleColumn({
-      id: clickhouseField,
-      key: 'fld_' + makeColumnKey(clickhouseField),
-      sqlExpr: clickhouseField,
-      displayName: field,
-      type: 'string',
-      isCore: false,
-    });
+    // Reuse the discovered FieldModel (same id/key the sidebar would produce via fieldToColumn)
+    // when one matches this sqlExpr, so adding the same field from the drawer vs. the sidebar
+    // converges on one column instead of two — a raw `id: clickhouseField` here previously
+    // diverged from the sidebar's `id: field.id`, letting the same field be added twice, and
+    // `'fld_' + makeColumnKey(...)` double-prefixed the alias (makeColumnKey already adds `fld_`).
+    const discovered = fields?.find((f) => f.sqlExpr === clickhouseField);
+    onToggleColumn(
+      discovered
+        ? fieldToColumn(discovered)
+        : {
+            id: clickhouseField,
+            key: makeColumnKey(clickhouseField),
+            sqlExpr: clickhouseField,
+            displayName: field,
+            type: 'string',
+            isCore: false,
+          }
+    );
   };
 
   const filterMatch = (key: string, value: string): boolean => {

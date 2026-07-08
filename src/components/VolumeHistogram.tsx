@@ -219,12 +219,11 @@ export function VolumeHistogram({
 
   const { bars, maxTotal, allLevels, colorMap } = useMemo(() => {
     if (!data.length) {
-      return { bars: [], maxTotal: 0, allLevels: [] as string[], totalCount: 0, colorMap: {} as Record<string, string> };
+      return { bars: [], maxTotal: 0, allLevels: [] as string[], colorMap: {} as Record<string, string> };
     }
 
     const levelSet = new Set<string>();
     let maxTotal = 0;
-    let totalCount = 0;
     const levelTotals: Record<string, number> = {};
 
     const bars = data.map((d) => {
@@ -233,7 +232,6 @@ export function VolumeHistogram({
         const key = level.toLowerCase();
         levelSet.add(key);
         bucketTotal += count;
-        totalCount += count;
         levelTotals[key] = (levelTotals[key] ?? 0) + count;
       }
       maxTotal = Math.max(maxTotal, bucketTotal);
@@ -277,7 +275,7 @@ export function VolumeHistogram({
       colorMap = Object.fromEntries(allLevels.map((l) => [l, SINGLE_STACK_COLOR]));
     }
 
-    return { bars, maxTotal, allLevels, totalCount, colorMap };
+    return { bars, maxTotal, allLevels, colorMap };
   }, [data, colorMode]);
 
   const visibleLevels = useMemo(() => allLevels.filter((l) => !hiddenLevels.has(l)), [allLevels, hiddenLevels]);
@@ -352,6 +350,7 @@ export function VolumeHistogram({
   // so a stale index would then read data from a *different* bucket than what's actually drawn
   // there. Clearing on every data change forces a fresh mousemove to re-resolve it.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHovered(null);
   }, [data]);
 

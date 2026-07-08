@@ -10,6 +10,22 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.2] — 2026-07-09
+
+### Fixed
+
+- **Sorting by a custom (non-core) column, then removing it, broke the query.** The column's
+  sort key was a synthetic SELECT alias that no longer existed once the column was removed,
+  producing an `ORDER BY` referencing an unknown identifier. Removing a column now clears sort
+  if that column was the active sort target.
+- **Adding the same field as a column from the log detail panel could create a duplicate
+  column.** The detail panel built its own id/alias for a field instead of reusing the one the
+  field sidebar uses, so the same field could end up selected twice under two different ids.
+- Field sidebar could spin indefinitely if no datasource was ever configured (loading state
+  never resolved).
+
+---
+
 ## [0.3.1] — 2026-07-09
 
 ### Fixed

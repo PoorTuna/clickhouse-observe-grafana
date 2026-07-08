@@ -97,6 +97,9 @@ export function useFieldDiscovery(
 
   async function loadFields(invalidateColumns = false) {
     if (!config.datasourceUid) {
+      // No datasource configured yet — nothing to discover. Without this, `loading` (which
+      // starts true) never resolves, so sidebar/pickers spin forever until a datasource shows up.
+      setLoading(false);
       return;
     }
     const runId = ++runRef.current;

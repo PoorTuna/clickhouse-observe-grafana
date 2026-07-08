@@ -126,8 +126,15 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
       next.splice(targetIdx, 0, action.col);
       return { ...state, columns: next };
     }
-    case 'REMOVE_COLUMN':
-      return { ...state, columns: action.columns.filter((c) => c.id !== action.id) };
+    case 'REMOVE_COLUMN': {
+      // If the removed column was the active sort target, clear sort — its `key` was only ever
+      // a synthetic SELECT alias (see extraSelect in buildLogsQuery), so leaving it in state.sort
+      // produces an `ORDER BY fld_...` with no matching column once the SELECT drops it, which
+      // ClickHouse rejects outright ("Unknown identifier").
+      const removed = action.columns.find((c) => c.id === action.id);
+      const sort = removed && state.sort?.col === removed.key ? undefined : state.sort;
+      return { ...state, columns: action.columns.filter((c) => c.id !== action.id), sort };
+    }
     case 'REORDER_COLUMN': {
       const idx = action.columns.findIndex((c) => c.id === action.id);
       if (idx === -1) {
@@ -672,8 +679,8 @@ export function LogsExplorer() {
   const selectedIndex = selectedRow ? pageRows.indexOf(selectedRow) : -1;
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCompareSelection(new Set());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageRows]);
 
   // Ensure the current page's full rows are hydrated whenever the drawer is open (covers both

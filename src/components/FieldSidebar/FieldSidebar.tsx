@@ -12,7 +12,7 @@ export function makeColumnKey(id: string): string {
   return 'fld_' + id.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').slice(0, 40);
 }
 
-function fieldToColumn(field: FieldModel): SelectedColumn {
+export function fieldToColumn(field: FieldModel): SelectedColumn {
   return {
     id: field.id,
     key: makeColumnKey(field.id),

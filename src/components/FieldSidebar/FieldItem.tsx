@@ -7,6 +7,7 @@ import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { FieldStatsPopover } from './FieldStatsPopover';
 import { FilterPill, LogsQueryState } from '../../types';
 import { makeFilter } from '../../sql/filters';
+import { FIELD_DRAG_MIME } from '../../constants';
 
 interface FieldItemProps {
   field: FieldModel;
@@ -59,6 +60,11 @@ export function FieldItem({
         className={`${styles.row} field-item-row ${isSelected ? styles.rowSelected : ''}`}
         title={field.sqlExpr}
         onClick={openPopover}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData(FIELD_DRAG_MIME, field.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
       >
         <Icon name={icon as any} size="xs" className={styles.typeIcon} />
         <span className={styles.name}>{field.displayName}</span>

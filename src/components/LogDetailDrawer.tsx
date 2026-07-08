@@ -21,7 +21,7 @@ import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp, severityColor } from './LogsTable';
 import { makeColumnKey } from './FieldSidebar/FieldSidebar';
-import { JsonTree } from './JsonTree';
+import { JsonTree, allContainerPaths } from './JsonTree';
 
 interface LogDetailDrawerProps {
   /** Narrow (grid-projection) row — always present, used for the header summary which must
@@ -138,6 +138,10 @@ export function LogDetailDrawer({
     () => groupAttributes(effectiveRow, config.columns, jsonColumns),
     [effectiveRow, config.columns, jsonColumns]
   );
+
+  // Kibana's JSON tab renders fully expanded by default — every object/array node open, not
+  // just the root.
+  const jsonExpandedPaths = useMemo(() => allContainerPaths(effectiveRow), [effectiveRow]);
 
   // Auto-expand every section (Kibana default) whenever a new log is opened. Keyed on `row`
   // identity, not `effectiveRow` — the lazy-hydrated detailRow arriving shouldn't re-collapse
@@ -319,7 +323,7 @@ export function LogDetailDrawer({
               <Spinner size="sm" /> Loading full row…
             </span>
           )}
-          <JsonTree data={effectiveRow} defaultExpanded={new Set(['root'])} />
+          <JsonTree data={effectiveRow} defaultExpanded={jsonExpandedPaths} />
         </div>
       ) : (
         <div className={styles.content} onMouseDown={clearSelectionPopover}>
@@ -519,7 +523,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: 0;
     margin-top: ${theme.spacing(0.25)};
     color: ${theme.colors.primary.text};
-    font-size: 11px;
+    font-size: 13px;
     &:hover { text-decoration: underline; }
   `,
   fieldsPagination: css`
@@ -536,12 +540,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   summaryTime: css`
     font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.secondary};
     font-variant-numeric: tabular-nums;
   `,
   severityChip: css`
-    font-size: 11px;
+    font-size: 13px;
     font-weight: ${theme.typography.fontWeightMedium};
     border: 1px solid;
     border-radius: ${theme.shape.radius.default};
@@ -551,7 +555,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: inline-flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.secondary};
   `,
   summarySpacer: css`
@@ -563,7 +567,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
   `,
   navLabel: css`
-    font-size: 11px;
+    font-size: 13px;
     color: ${theme.colors.text.secondary};
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -581,7 +585,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.secondary};
     margin-right: auto;
   `,
@@ -591,7 +595,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   // ── Table tab ─────────────────────────────────────────────────────────────
   content: css`
     padding: ${theme.spacing(1)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   toolbarRow: css`
     display: flex;
@@ -606,7 +610,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.75)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.secondary};
     white-space: nowrap;
     cursor: pointer;
@@ -622,7 +626,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
+    padding: ${theme.spacing(1)} ${theme.spacing(1.25)};
     background: ${theme.colors.background.secondary};
     border: none;
     cursor: pointer;
@@ -652,7 +656,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   attrCount: css`
     margin-left: auto;
     color: ${theme.colors.text.secondary};
-    font-size: 11px;
+    font-size: 13px;
     font-weight: normal;
   `,
   logLine: css`
@@ -681,9 +685,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
   attrRow: css`
     display: flex;
     align-items: flex-start;
-    gap: ${theme.spacing(1)};
-    padding: ${theme.spacing(0.5)};
+    gap: ${theme.spacing(1.5)};
+    padding: ${theme.spacing(0.75)};
     border-radius: ${theme.shape.radius.default};
+    font-size: ${theme.typography.body.fontSize};
+    line-height: 1.6;
     &:hover {
       background: ${theme.colors.action.hover};
     }

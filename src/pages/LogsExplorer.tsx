@@ -516,12 +516,13 @@ export function LogsExplorer() {
     });
   };
 
-  // Clicking a breakdown segment in the histogram filters for that value, Kibana-style, instead
-  // of the usual click-to-zoom (only reachable when breakdown.kind === 'field', since that's the
-  // only mode VolumeHistogram is given an onBreakdownFilter callback for).
-  const onHistogramBreakdownFilter = (value: string) => {
+  // Clicking a breakdown segment in the histogram pops up "filter for/out this value" (handled
+  // inside VolumeHistogram), Kibana-style, instead of the usual click-to-zoom. Only reachable
+  // when breakdown.kind === 'field', since that's the only mode VolumeHistogram is given an
+  // onBreakdownFilter callback for.
+  const onHistogramBreakdownFilter = (value: string, op: '=' | '!=') => {
     if (breakdown.kind === 'field') {
-      onAddFilter(makeFilter(breakdown.field.sqlExpr, value, '='));
+      onAddFilter(makeFilter(breakdown.field.sqlExpr, value, op));
     }
   };
 
@@ -789,52 +790,10 @@ export function LogsExplorer() {
           </div>
         )}
 
-        {/* Histogram panel: header (controls + meta) + chart in one bordered card */}
-        {caps.hasTime && (
-          <div className={styles.histogramPanel}>
-            <div className={styles.histogramHeader}>
-              <IntervalPicker
-                value={intervalMode}
-                onChange={setIntervalMode}
-                timeRange={timeRange}
-              />
-              <BreakdownPicker
-                value={breakdown}
-                onChange={setBreakdown}
-                hasSeverity={caps.hasSeverity}
-              />
-              <div className={styles.histogramHeaderSpacer} />
-              {volumeData.length > 0 && (
-                <span className={styles.histogramMeta}>
-                  {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
-                </span>
-              )}
-            </div>
-            {volumeData.length > 0 ? (
-              <VolumeHistogram
-                data={volumeData}
-                timeRange={timeRange}
-                height={44}
-                onSelectRange={onHistogramSelectRange}
-                onBreakdownFilter={onHistogramBreakdownFilter}
-                colorMode={
-                  breakdown.kind === 'field'
-                    ? 'breakdown'
-                    : breakdown.kind === 'severity'
-                    ? 'severity'
-                    : 'single'
-                }
-                bucketMs={resolvedInterval.intervalMs}
-              />
-            ) : (
-              <div className={styles.histogramEmpty}>
-                {loading ? 'Loading…' : 'No events in selected time range'}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Two-pane: sidebar + results */}
+        {/* Two-pane: sidebar + results. The histogram now lives inside the results pane (below)
+            instead of as a full-width row above it, so the sidebar spans the full height
+            alongside it — Kibana Discover's layout, rather than the sidebar only starting
+            beneath the histogram. */}
         <div
           {...(sidebarCollapsed ? {} : bodySplitterProps)}
           className={cx(styles.body, !sidebarCollapsed && bodySplitterProps.className)}
@@ -865,6 +824,51 @@ export function LogsExplorer() {
           )}
 
           <div {...(sidebarCollapsed ? {} : resultsPaneProps)} className={cx(sidebarCollapsed ? undefined : resultsPaneProps.className, styles.results)}>
+            {/* Histogram panel: header (controls + meta) + chart in one bordered card */}
+            {caps.hasTime && (
+              <div className={styles.histogramPanel}>
+                <div className={styles.histogramHeader}>
+                  <IntervalPicker
+                    value={intervalMode}
+                    onChange={setIntervalMode}
+                    timeRange={timeRange}
+                  />
+                  <BreakdownPicker
+                    value={breakdown}
+                    onChange={setBreakdown}
+                    hasSeverity={caps.hasSeverity}
+                  />
+                  <div className={styles.histogramHeaderSpacer} />
+                  {volumeData.length > 0 && (
+                    <span className={styles.histogramMeta}>
+                      {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
+                    </span>
+                  )}
+                </div>
+                {volumeData.length > 0 ? (
+                  <VolumeHistogram
+                    data={volumeData}
+                    timeRange={timeRange}
+                    height={32}
+                    onSelectRange={onHistogramSelectRange}
+                    onBreakdownFilter={onHistogramBreakdownFilter}
+                    colorMode={
+                      breakdown.kind === 'field'
+                        ? 'breakdown'
+                        : breakdown.kind === 'severity'
+                        ? 'severity'
+                        : 'single'
+                    }
+                    bucketMs={resolvedInterval.intervalMs}
+                  />
+                ) : (
+                  <div className={styles.histogramEmpty}>
+                    {loading ? 'Loading…' : 'No events in selected time range'}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Only overlay when we already have rows to show underneath (a refetch) —
                 the initial-load case is handled by LogsTable's own loading state, so the
                 two never show at once. */}
@@ -909,6 +913,7 @@ export function LogsExplorer() {
                   wrapLines={wrapLines}
                   compareSelection={compareSelection}
                   onToggleCompare={onToggleCompare}
+                  onAddFilter={onAddFilter}
                 />
                 <PaginationBar
                   page={currentPage}
@@ -1021,7 +1026,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: none;
     cursor: pointer;
     color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     text-align: left;
     padding: 0;
     &:hover { color: ${theme.colors.text.primary}; }
@@ -1035,7 +1040,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   sqlInspectPre: css`
     font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.primary};
     margin: 0;
     white-space: pre-wrap;
@@ -1051,14 +1056,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-radius: ${theme.shape.radius.default};
     cursor: pointer;
     color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     padding: ${theme.spacing(0.25)} ${theme.spacing(1)};
     &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
   `,
   sqlEditor: css`
     width: 100%;
     font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     background: ${theme.colors.background.secondary};
     border: 1px solid ${theme.colors.border.medium};
     border-radius: ${theme.shape.radius.default};
@@ -1073,7 +1078,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
   `,
   sqlRunHint: css`
-    font-size: 11px;
+    font-size: 13px;
     color: ${theme.colors.text.disabled};
   `,
   error: css`
@@ -1082,7 +1087,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: 1px solid ${theme.colors.error.border};
     border-radius: ${theme.shape.radius.default};
     color: ${theme.colors.error.text};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   histogramPanel: css`
     border: 1px solid ${theme.colors.border.weak};
@@ -1090,12 +1095,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: ${theme.colors.background.primary};
   `,
   histogramEmpty: css`
-    height: 44px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: ${theme.colors.text.disabled};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
   `,
   histogramHeader: css`
     display: flex;
@@ -1108,7 +1113,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: 1;
   `,
   histogramMeta: css`
-    font-size: 11px;
+    font-size: 13px;
     color: ${theme.colors.text.disabled};
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1120,7 +1125,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     overflow: hidden;
   `,
   sidebarPane: css`
-    min-width: 160px;
+    /* useSplitter sets an inline min-width: min-content on this pane, which floors it at
+     * whatever its widest child (e.g. a long field name) needs — effectively locking the drag
+     * handle in place well before the panel looks "small". Override with !important so dragging
+     * can actually shrink it down close to the collapsed rail, same as Kibana's sidebar. */
+    min-width: 60px !important;
     overflow: hidden;
   `,
   splitterHandle: css`
@@ -1152,14 +1161,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
   `,
   detailPane: css`
-    min-width: 320px;
+    /* Same min-content override as sidebarPane — otherwise the panel's own content floors how
+     * far it can be dragged. */
+    min-width: 60px !important;
     overflow: hidden;
   `,
   wrapToggleLabel: css`
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.75)};
-    font-size: ${theme.typography.bodySmall.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     color: ${theme.colors.text.secondary};
     cursor: pointer;
     white-space: nowrap;

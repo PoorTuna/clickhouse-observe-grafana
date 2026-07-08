@@ -298,12 +298,12 @@ export function VolumeHistogram({
 
   // Round-number y-axis (Kibana-style: 0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
   // niceMax (the last tick) is what bar heights actually scale against, so bars and gridlines
-  // always agree. Tick *count* is capped by how much vertical room there actually is — each
-  // label needs ~14px to avoid overlapping its neighbor, so a short chart (e.g. 32px) gets only
-  // 2-3 ticks instead of blindly cramming in 5 and having them collide.
-  const maxTicksForHeight = Math.max(2, Math.floor(height / 14) + 1);
+  // always agree. Tick *count* is capped by how much vertical room there actually is. A label's
+  // own line-height needs ~20px of clearance, not just its font-size, or adjacent ticks collide —
+  // at our 32px default histogram height that means exactly 2 ticks (0 and max), not 3+.
+  const maxTicksForHeight = Math.max(2, Math.min(5, Math.floor(height / 20)));
   const yTicks = useMemo(
-    () => niceYTicks(visibleMaxTotal, Math.min(5, maxTicksForHeight)),
+    () => niceYTicks(visibleMaxTotal, maxTicksForHeight),
     [visibleMaxTotal, maxTicksForHeight]
   );
   const niceMax = yTicks[yTicks.length - 1] || 0;
@@ -364,13 +364,35 @@ export function VolumeHistogram({
     return bars[clamped].time;
   }
 
-  function getSvgXPct(e: React.MouseEvent<SVGSVGElement>): number {
+  /** Percent across the chart's x-axis for a raw clientX — not tied to a React SVG event, so it
+   *  can be reused by both the SVG's own handlers and the window-level listeners a drag attaches
+   *  (see handleMouseDown) once the pointer has left the SVG's bounds. Deliberately NOT clamped
+   *  to 0-100: dragging past either edge should still register as "select to the edge", which the
+   *  x1/x2 min/max math below already handles regardless of sign or overshoot. */
+  function getXPctFromClientX(clientX: number): number {
     const svg = svgRef.current;
     if (!svg) {
       return 0;
     }
     const rect = svg.getBoundingClientRect();
-    return ((e.clientX - rect.left) / rect.width) * 100;
+    return ((clientX - rect.left) / rect.width) * 100;
+  }
+
+  function getSvgXPct(e: React.MouseEvent<SVGSVGElement>): number {
+    return getXPctFromClientX(e.clientX);
+  }
+
+  function updateSelectionRect(cur: number) {
+    if (dragStart.current === null) {
+      return;
+    }
+    const x1 = Math.min(dragStart.current, cur);
+    const x2 = Math.max(dragStart.current, cur);
+    if (selectionRef.current) {
+      selectionRef.current.setAttribute('x', `${x1}%`);
+      selectionRef.current.setAttribute('width', `${x2 - x1}%`);
+      selectionRef.current.setAttribute('display', 'block');
+    }
   }
 
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -380,22 +402,29 @@ export function VolumeHistogram({
     dragStart.current = getSvgXPct(e);
     setIsDragging(true);
     setHovered(null);
+
+    // A drag that leaves the SVG's bounds (mouse dips below the chart, say) shouldn't cancel —
+    // Kibana keeps tracking as long as the button is held, wherever the pointer wanders. Window-
+    // level listeners (not the SVG's own onMouseMove/onMouseUp) are what make that possible.
+    const onWindowMouseMove = (ev: MouseEvent) => {
+      updateSelectionRect(getXPctFromClientX(ev.clientX));
+    };
+    const onWindowMouseUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onWindowMouseMove);
+      window.removeEventListener('mouseup', onWindowMouseUp);
+      finishDrag(ev.clientX, ev.clientY);
+    };
+    window.addEventListener('mousemove', onWindowMouseMove);
+    window.addEventListener('mouseup', onWindowMouseUp);
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const pct = getSvgXPct(e);
-
+    // While dragging, the window-level listener attached in handleMouseDown owns the selection
+    // rect — this handler only needs to run for hover, which is irrelevant during a drag anyway.
     if (dragStart.current !== null) {
-      const cur = pct;
-      const x1 = Math.min(dragStart.current, cur);
-      const x2 = Math.max(dragStart.current, cur);
-      if (selectionRef.current) {
-        selectionRef.current.setAttribute('x', `${x1}%`);
-        selectionRef.current.setAttribute('width', `${x2 - x1}%`);
-        selectionRef.current.setAttribute('display', 'block');
-      }
       return;
     }
+    const pct = getSvgXPct(e);
 
     if (bars.length > 0) {
       const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((pct / 100) * bars.length)));
@@ -433,13 +462,15 @@ export function VolumeHistogram({
     return null;
   }
 
-  const handleMouseUp = (e: React.MouseEvent<SVGSVGElement>) => {
+  /** Shared end-of-drag logic — called from the window-level mouseup listener attached in
+   *  handleMouseDown, wherever the pointer ends up (inside or outside the SVG). */
+  function finishDrag(clientX: number, clientY: number) {
     if (dragStart.current === null || !onSelectRange) {
       dragStart.current = null;
       setIsDragging(false);
       return;
     }
-    const end = getSvgXPct(e);
+    const end = getXPctFromClientX(clientX);
     const x1 = Math.min(dragStart.current, end);
     const x2 = Math.max(dragStart.current, end);
     dragStart.current = null;
@@ -451,10 +482,10 @@ export function VolumeHistogram({
       const t = xPctToTime(end);
       if (colorMode === 'breakdown' && onBreakdownFilter) {
         const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((end / 100) * bars.length)));
-        const level = bars[idx] ? pickLevelAtY(bars[idx], e.clientY) : null;
+        const level = bars[idx] ? pickLevelAtY(bars[idx], clientY) : null;
         if (level) {
           setHovered(null);
-          setBreakdownPopover({ level, clientX: e.clientX, clientY: e.clientY });
+          setBreakdownPopover({ level, clientX, clientY });
           return;
         }
       }
@@ -464,7 +495,7 @@ export function VolumeHistogram({
     } else {
       onSelectRange(xPctToTime(x1), xPctToTime(x2));
     }
-  };
+  }
 
   const hasLegend = (colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0;
 
@@ -489,13 +520,10 @@ export function VolumeHistogram({
           className={`${styles.svg} ${onSelectRange ? styles.svgZoomable : ''}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
           onMouseLeave={() => {
-            dragStart.current = null;
-            setIsDragging(false);
-            if (selectionRef.current) {
-              selectionRef.current.setAttribute('display', 'none');
-            }
+            // Only clear hover state here — an active drag is tracked by the window-level
+            // listeners from handleMouseDown regardless of whether the pointer is still over the
+            // SVG, so leaving must NOT cancel it (see finishDrag / getXPctFromClientX).
             setHovered(null);
           }}
         >

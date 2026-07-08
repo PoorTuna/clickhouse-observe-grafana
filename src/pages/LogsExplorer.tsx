@@ -92,8 +92,11 @@ type Action =
   | { type: 'SET_RAW_SQL'; sql: string }
   | { type: 'ADD_COLUMN'; col: SelectedColumn }
   | { type: 'REMOVE_COLUMN'; id: string }
-  | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right' }
-  | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string }
+  // `columns` is the caller's current *displayed* list (effectiveColumns), not state.columns —
+  // state.columns is empty until the user's first explicit column change, so reordering the
+  // still-default columns would silently no-op against an empty array otherwise.
+  | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right'; columns: SelectedColumn[] }
+  | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string; columns: SelectedColumn[] }
   | { type: 'SET_SORT'; col: string }
   | { type: 'LOAD_SAVED'; state: Partial<LogsQueryState> };
 
@@ -116,11 +119,11 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
     case 'REMOVE_COLUMN':
       return { ...state, columns: state.columns.filter((c) => c.id !== action.id) };
     case 'REORDER_COLUMN': {
-      const idx = state.columns.findIndex((c) => c.id === action.id);
+      const idx = action.columns.findIndex((c) => c.id === action.id);
       if (idx === -1) {
         return state;
       }
-      const next = [...state.columns];
+      const next = [...action.columns];
       const swapIdx = action.direction === 'left' ? idx - 1 : idx + 1;
       if (swapIdx < 0 || swapIdx >= next.length) {
         return state;
@@ -134,12 +137,12 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
       if (action.id === action.targetId) {
         return state;
       }
-      const fromIdx = state.columns.findIndex((c) => c.id === action.id);
-      const toIdx = state.columns.findIndex((c) => c.id === action.targetId);
+      const fromIdx = action.columns.findIndex((c) => c.id === action.id);
+      const toIdx = action.columns.findIndex((c) => c.id === action.targetId);
       if (fromIdx === -1 || toIdx === -1) {
         return state;
       }
-      const next = [...state.columns];
+      const next = [...action.columns];
       const [moved] = next.splice(fromIdx, 1);
       next.splice(toIdx, 0, moved);
       return { ...state, columns: next };
@@ -928,8 +931,8 @@ export function LogsExplorer() {
                   onRowClick={setSelectedRow}
                   onSort={(col) => dispatch({ type: 'SET_SORT', col })}
                   onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
-                  onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
-                  onMoveColumnTo={(id, targetId) => dispatch({ type: 'MOVE_COLUMN_TO', id, targetId })}
+                  onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction, columns: effectiveColumns })}
+                  onMoveColumnTo={(id, targetId) => dispatch({ type: 'MOVE_COLUMN_TO', id, targetId, columns: effectiveColumns })}
                   selectedRow={selectedRow}
                   wrapLines={wrapLines}
                   compareSelection={compareSelection}

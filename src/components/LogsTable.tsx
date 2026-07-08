@@ -374,7 +374,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   table: css`
     width: 100%;
     border-collapse: collapse;
-    font-size: ${theme.typography.body.fontSize};
+    font-size: 14px;
   `,
   th: css`
     padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
@@ -491,10 +491,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(2.5)} ${theme.spacing(1.5)};
+    padding: ${theme.spacing(1.25)} ${theme.spacing(1.5)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
-    line-height: 1.8;
+    line-height: 1.5;
   `,
   dataTd: css`
     position: relative;
@@ -533,13 +533,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
   timestamp: css`
     color: ${theme.colors.text.primary};
     white-space: nowrap;
-    font-size: 13px;
+    font-size: 14px;
     display: block;
     font-variant-numeric: tabular-nums;
   `,
   severity: css`
     font-weight: ${theme.typography.fontWeightMedium};
-    font-size: 13px;
+    font-size: 14px;
     white-space: nowrap;
     display: block;
   `,
@@ -556,7 +556,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   cell: css`
     color: ${theme.colors.text.primary};
-    font-size: 13px;
+    font-size: 14px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

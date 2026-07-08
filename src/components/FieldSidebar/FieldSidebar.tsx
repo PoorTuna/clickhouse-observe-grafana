@@ -126,11 +126,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     height: 100%;
     display: flex;
     flex-direction: column;
-    gap: ${theme.spacing(1)};
+    gap: ${theme.spacing(1.25)};
     overflow-y: auto;
     border-right: 1px solid ${theme.colors.border.weak};
-    padding-right: ${theme.spacing(1)};
-    padding-top: ${theme.spacing(0.5)};
+    padding: ${theme.spacing(1)};
   `,
   header: css`
     display: flex;

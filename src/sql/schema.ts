@@ -78,11 +78,72 @@ export function parseMapValue(raw: unknown): Record<string, string> {
   return {};
 }
 
-/** Group log attributes by OTel category for the detail drawer. */
+export interface GroupedAttrRow {
+  key: string;
+  value: string;
+  /** SQL expression to use for filter/column-toggle actions on this row. */
+  sqlExpr: string;
+}
+
+/**
+ * Recursively flatten a JSON-typed column's parsed value into dotted-path leaves, mirroring the
+ * accessor convention field discovery uses (FieldsContext.tsx's json fields: `${jsonCol}.${path}`)
+ * so a row's sqlExpr always matches what discovery would have produced for the same path.
+ * Arrays and primitives are treated as leaves (JSON.stringify'd if not already a string) — only
+ * plain objects are recursed into.
+ */
+function flattenJson(value: unknown, prefix = ''): Array<{ key: string; value: string }> {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value)
+  ) {
+    const out: Array<{ key: string; value: string }> = [];
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      out.push(...flattenJson(v, path));
+    }
+    return out;
+  }
+  if (!prefix) {
+    return [];
+  }
+  return [{ key: prefix, value: value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '') }];
+}
+
+/** Parse a JSON-typed column's raw DataFrame value (object or JSON string) into a plain object. */
+function parseJsonColumnValue(raw: unknown): Record<string, unknown> {
+  if (raw === null || raw === undefined) {
+    return {};
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string') {
+    if (!raw) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Group log attributes by OTel category for the detail drawer.
+ * `jsonColumns` — names of columns known (from field discovery) to be native ClickHouse JSON type
+ * rather than Map(String,String). When omitted, every attribute column is treated as Map — the
+ * original behavior — so existing callers (and Map-schema views) are unaffected.
+ */
 export function groupAttributes(
   row: Record<string, unknown>,
-  columns: ColumnMapping
-): Array<{ group: AttributeGroup; label: string; col: string; attrs: Record<string, string> }> {
+  columns: ColumnMapping,
+  jsonColumns?: Set<string>
+): Array<{ group: AttributeGroup; label: string; col: string; rows: GroupedAttrRow[] }> {
   const groups: Array<{ group: AttributeGroup; label: string; col: string }> = [
     { group: 'resource', label: 'Resource Attributes', col: columns.resourceAttributes },
     { group: 'log', label: 'Log Attributes', col: columns.logAttributes },
@@ -92,9 +153,23 @@ export function groupAttributes(
 
   return groups
     .filter((g) => g.col)
-    .map((g) => ({
-      ...g,
-      attrs: parseMapValue(row[g.col] ?? row[g.col.split('[')[0]]),
-    }))
-    .filter((g) => Object.keys(g.attrs).length > 0);
+    .map((g) => {
+      const rawValue = row[g.col] ?? row[g.col.split('[')[0]];
+      let rows: GroupedAttrRow[];
+      if (jsonColumns?.has(g.col)) {
+        rows = flattenJson(parseJsonColumnValue(rawValue)).map(({ key, value }) => ({
+          key,
+          value,
+          sqlExpr: `${g.col}.${key}`,
+        }));
+      } else {
+        rows = Object.entries(parseMapValue(rawValue)).map(([key, value]) => ({
+          key,
+          value,
+          sqlExpr: `${g.col}['${key}']`,
+        }));
+      }
+      return { ...g, rows };
+    })
+    .filter((g) => g.rows.length > 0);
 }

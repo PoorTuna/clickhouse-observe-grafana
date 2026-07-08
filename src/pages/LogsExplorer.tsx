@@ -47,10 +47,17 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
 const DEFAULT_PAGE_SIZE = 50;
 const SIDEBAR_SPLIT_KEY = 'clickhouse-observe.logsExplorer.sidebarSplit';
 const DEFAULT_SIDEBAR_SPLIT = 0.18;
+const DETAIL_SPLIT_KEY = 'clickhouse-observe.logsExplorer.detailSplit';
+const DEFAULT_DETAIL_SPLIT = 0.55;
 
 function readSidebarSplit(): number {
   const raw = Number(window.localStorage.getItem(SIDEBAR_SPLIT_KEY));
   return raw > 0.05 && raw < 0.6 ? raw : DEFAULT_SIDEBAR_SPLIT;
+}
+
+function readDetailSplit(): number {
+  const raw = Number(window.localStorage.getItem(DETAIL_SPLIT_KEY));
+  return raw > 0.2 && raw < 0.8 ? raw : DEFAULT_DETAIL_SPLIT;
 }
 
 function defaultTimeRange(): TimeRange {
@@ -220,6 +227,18 @@ export function LogsExplorer() {
       dragPosition: 'middle',
       onSizeChanged: (flexSize) => window.localStorage.setItem(SIDEBAR_SPLIT_KEY, String(flexSize)),
     });
+  // Table | inline log detail split (replaces the old overlay Drawer) — same persistence pattern.
+  const {
+    containerProps: detailSplitterProps,
+    primaryProps: tablePaneProps,
+    secondaryProps: detailPaneProps,
+    splitterProps: detailHandleProps,
+  } = useSplitter({
+    direction: 'row',
+    initialSize: readDetailSplit(),
+    dragPosition: 'middle',
+    onSizeChanged: (flexSize) => window.localStorage.setItem(DETAIL_SPLIT_KEY, String(flexSize)),
+  });
   const [showSqlInspect, setShowSqlInspect] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
   // Uncommitted raw-SQL textarea contents — kept local so typing never re-runs the query.
@@ -817,62 +836,72 @@ export function LogsExplorer() {
                 Wrap lines
               </label>
             </div>
-            <LogsTable
-              rows={pageRows}
-              loading={loading && rows.length === 0}
-              columns={effectiveColumns}
-              sort={queryState.sort}
-              onRowClick={setSelectedRow}
-              onSort={(col) => dispatch({ type: 'SET_SORT', col })}
-              onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
-              onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
-              selectedRow={selectedRow}
-              wrapLines={wrapLines}
-            />
-            <PaginationBar
-              page={currentPage}
-              pageSize={pageSize}
-              pageSizeOptions={PAGE_SIZE_OPTIONS}
-              totalLoaded={rows.length}
-              hasMore={hasMore}
-              fetchingMore={fetchingMore}
-              onPageChange={onPageChange}
-              onPageSizeChange={onPageSizeChange}
-            />
+            <div
+              {...(selectedRow ? detailSplitterProps : {})}
+              className={cx(styles.tableDetailSplit, selectedRow && detailSplitterProps.className)}
+            >
+              <div
+                {...(selectedRow ? tablePaneProps : {})}
+                className={cx(styles.tablePane, selectedRow && tablePaneProps.className)}
+              >
+                <LogsTable
+                  rows={pageRows}
+                  loading={loading && rows.length === 0}
+                  columns={effectiveColumns}
+                  sort={queryState.sort}
+                  onRowClick={setSelectedRow}
+                  onSort={(col) => dispatch({ type: 'SET_SORT', col })}
+                  onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
+                  onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
+                  selectedRow={selectedRow}
+                  wrapLines={wrapLines}
+                />
+                <PaginationBar
+                  page={currentPage}
+                  pageSize={pageSize}
+                  pageSizeOptions={PAGE_SIZE_OPTIONS}
+                  totalLoaded={rows.length}
+                  hasMore={hasMore}
+                  fetchingMore={fetchingMore}
+                  onPageChange={onPageChange}
+                  onPageSizeChange={onPageSizeChange}
+                />
+              </div>
+              {selectedRow && (
+                <>
+                  <div {...detailHandleProps} className={cx(detailHandleProps.className, styles.splitterHandle)} />
+                  <div {...detailPaneProps} className={cx(detailPaneProps.className, styles.detailPane)}>
+                    <LogDetailDrawer
+                      row={selectedRow}
+                      detailRow={detailRow}
+                      detailLoading={detailLoading}
+                      config={config}
+                      fields={fieldsState.fields}
+                      columns={effectiveColumns}
+                      onClose={() => setSelectedRow(null)}
+                      onAddFilter={onAddFilter}
+                      onToggleColumn={onToggleColumn}
+                      onViewTrace={
+                        caps.hasTraces && selectedRow[CORE_ALIAS.traceId]
+                          ? (traceId) => {
+                              window.location.href = `${PLUGIN_BASE_URL}/traces/${traceId}`;
+                            }
+                          : undefined
+                      }
+                      onPrev={selectedIndex > 0 ? () => setSelectedRow(pageRows[selectedIndex - 1]) : undefined}
+                      onNext={
+                        selectedIndex >= 0 && selectedIndex < pageRows.length - 1
+                          ? () => setSelectedRow(pageRows[selectedIndex + 1])
+                          : undefined
+                      }
+                      navLabel={selectedIndex >= 0 ? `${selectedIndex + 1} of ${pageRows.length}` : undefined}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Detail drawer */}
-        {selectedRow && (
-          <LogDetailDrawer
-            row={selectedRow}
-            detailRow={detailRow}
-            detailLoading={detailLoading}
-            config={config}
-            fields={fieldsState.fields}
-            columns={effectiveColumns}
-            onClose={() => setSelectedRow(null)}
-            onAddFilter={(f) => {
-              onAddFilter(f);
-              setSelectedRow(null);
-            }}
-            onToggleColumn={onToggleColumn}
-            onViewTrace={
-              caps.hasTraces && selectedRow[CORE_ALIAS.traceId]
-                ? (traceId) => {
-                    window.location.href = `${PLUGIN_BASE_URL}/traces/${traceId}`;
-                  }
-                : undefined
-            }
-            onPrev={selectedIndex > 0 ? () => setSelectedRow(pageRows[selectedIndex - 1]) : undefined}
-            onNext={
-              selectedIndex >= 0 && selectedIndex < pageRows.length - 1
-                ? () => setSelectedRow(pageRows[selectedIndex + 1])
-                : undefined
-            }
-            navLabel={selectedIndex >= 0 ? `${selectedIndex + 1} of ${pageRows.length}` : undefined}
-          />
-        )}
 
         <AddToDashboardModal
           isOpen={addToDashboardOpen}
@@ -1048,6 +1077,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     padding-bottom: ${theme.spacing(0.5)};
+  `,
+  tableDetailSplit: css`
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  `,
+  tablePane: css`
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(1)};
+  `,
+  detailPane: css`
+    min-width: 320px;
+    overflow: hidden;
   `,
   wrapToggleLabel: css`
     display: flex;

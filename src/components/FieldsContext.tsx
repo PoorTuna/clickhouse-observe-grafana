@@ -85,7 +85,11 @@ export function useFieldDiscovery(
     [mapColumns, config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes]
   );
   const [fields, setFields] = useState<FieldModel[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Starts true (not false): discovery always kicks off on mount once datasourceUid is known, so
+  // an initial `false` is indistinguishable from "already checked, found nothing" to consumers
+  // like BreakdownPicker's severity-fallback guard — that false-negative made it permanently
+  // downgrade the severity breakdown to "none" on every fresh load, before fields even arrived.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const runRef = useRef(0);
 

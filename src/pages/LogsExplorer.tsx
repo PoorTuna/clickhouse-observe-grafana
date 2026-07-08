@@ -347,6 +347,19 @@ export function LogsExplorer() {
       setRows(logRows);
       setCurrentPage(0);
       setHasMore(!queryState.useRawSql && logRows.length === INITIAL_FETCH);
+      // Any query re-run (auto-refresh, filter/search/time-range change) replaces `rows` with
+      // fresh row objects — the open detail panel's `selectedRow` would otherwise keep pointing
+      // at a now-detached old object, invisible in the new array, collapsing the panel down to
+      // just the narrow grid columns it was opened with (hydratedRows was just cleared above too).
+      // Re-point it at the matching row in the new results by content key, or close the panel if
+      // that row is gone (e.g. it no longer matches the filters).
+      setSelectedRow((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        const key = logRowKey(prev);
+        return logRows.find((r) => logRowKey(r) === key) ?? null;
+      });
 
       const volMap = new Map<number, Record<string, number>>();
       for (const r of volRows) {

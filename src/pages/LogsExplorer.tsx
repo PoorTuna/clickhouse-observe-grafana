@@ -214,7 +214,13 @@ export function LogsExplorer() {
   // that — whatever caps.hasSeverity is *right now* is what an unset choice resolves to.
   const [intervalMode, setIntervalMode] = useState<IntervalMode>('auto');
   const [breakdownChoice, setBreakdown] = useState<BreakdownSel | null>(null);
-  const breakdown: BreakdownSel = breakdownChoice ?? (caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
+  // Memoized: when breakdownChoice is null this falls back to a freshly-built object literal —
+  // without useMemo that's a new reference every render, which churns executeQuery's identity
+  // (it depends on breakdown) and retriggers the effect that calls it, in an infinite fetch loop.
+  const breakdown: BreakdownSel = useMemo(
+    () => breakdownChoice ?? (caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' }),
+    [breakdownChoice, caps.hasSeverity]
+  );
 
   // Reset query state when the active data view changes so stale field refs don't carry over.
   const prevViewId = useRef<string | undefined>(undefined);

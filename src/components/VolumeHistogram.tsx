@@ -516,7 +516,10 @@ export function VolumeHistogram({
       <div className={styles.chartRow}>
         <div className={styles.yAxis} style={{ height }}>
           {[...yTicks].reverse().map((tick) => (
-            <span key={tick} style={{ top: `${(1 - tick / niceMax) * 100}%` }}>
+            <span
+              key={tick}
+              style={{ top: `${niceMax > 0 ? (1 - tick / niceMax) * 100 : 100}%` }}
+            >
               {formatCompact(tick)}
             </span>
           ))}

@@ -263,7 +263,7 @@ export function SearchBar({
         )}
       </div>
 
-      <Button variant="secondary" onClick={commit} size="md">
+      <Button variant="primary" onClick={commit} size="md">
         Search
       </Button>
     </div>

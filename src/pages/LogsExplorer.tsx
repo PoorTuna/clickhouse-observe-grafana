@@ -93,6 +93,7 @@ type Action =
   | { type: 'ADD_COLUMN'; col: SelectedColumn }
   | { type: 'REMOVE_COLUMN'; id: string }
   | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right' }
+  | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string }
   | { type: 'SET_SORT'; col: string }
   | { type: 'LOAD_SAVED'; state: Partial<LogsQueryState> };
 
@@ -125,6 +126,22 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
         return state;
       }
       [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      return { ...state, columns: next };
+    }
+    case 'MOVE_COLUMN_TO': {
+      // Drag-and-drop reorder: pull the dragged column out and reinsert it at the target
+      // column's position — an arbitrary-distance move, unlike REORDER_COLUMN's adjacent swap.
+      if (action.id === action.targetId) {
+        return state;
+      }
+      const fromIdx = state.columns.findIndex((c) => c.id === action.id);
+      const toIdx = state.columns.findIndex((c) => c.id === action.targetId);
+      if (fromIdx === -1 || toIdx === -1) {
+        return state;
+      }
+      const next = [...state.columns];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
       return { ...state, columns: next };
     }
     case 'SET_SORT': {
@@ -658,9 +675,10 @@ export function LogsExplorer() {
     <FieldsContext.Provider value={fieldsState}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
-        {/* Row 1: view picker (left) + controls (right) */}
+        {/* Row 1: view picker + add filter (left) + saved/dashboard/time/refresh (right) */}
         <div className={styles.header}>
           <DataViewPicker />
+          <AddFilterPopover loadValues={logsLoadValues} onAddFilter={onAddFilter} />
           <div className={styles.headerSpacer} />
           <SavedSearchMenu
             queryState={{ ...queryState, columns: effectiveColumns }}
@@ -668,6 +686,16 @@ export function LogsExplorer() {
             onLoad={onLoadSaved}
             activeDataViewId={activeView?.id}
           />
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="apps"
+            onClick={() => setAddToDashboardOpen(true)}
+            disabled={!canAddToDashboard}
+            tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
+          >
+            Add to dashboard
+          </Button>
           {caps.hasTime && (
             <TimeRangePicker
               value={timeRange}
@@ -681,26 +709,17 @@ export function LogsExplorer() {
               fiscalYearStartMonth={0}
             />
           )}
-          <Button
-            variant="primary"
-            size="sm"
-            icon="apps"
-            onClick={() => setAddToDashboardOpen(true)}
-            disabled={!canAddToDashboard}
-            tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
-          >
-            Add to dashboard
-          </Button>
           <RefreshPicker
             onRefresh={executeQuery}
             onIntervalChanged={setRefreshInterval}
             value={refreshInterval}
             isLoading={loading}
-            tooltip="Refresh"
+            tooltip="Refresh — click the arrow to set an auto-refresh interval"
+            width="80px"
           />
         </div>
 
-        {/* Row 2: search + add filter */}
+        {/* Row 2: search */}
         <div className={styles.toolbar}>
           <SearchBar
             value={queryState.search}
@@ -708,7 +727,6 @@ export function LogsExplorer() {
             onSearch={() => {}}
             loadValues={logsLoadValues}
           />
-          <AddFilterPopover loadValues={logsLoadValues} onAddFilter={onAddFilter} />
         </div>
 
         {/* Filter pills */}
@@ -824,51 +842,6 @@ export function LogsExplorer() {
           )}
 
           <div {...(sidebarCollapsed ? {} : resultsPaneProps)} className={cx(sidebarCollapsed ? undefined : resultsPaneProps.className, styles.results)}>
-            {/* Histogram panel: header (controls + meta) + chart in one bordered card */}
-            {caps.hasTime && (
-              <div className={styles.histogramPanel}>
-                <div className={styles.histogramHeader}>
-                  <IntervalPicker
-                    value={intervalMode}
-                    onChange={setIntervalMode}
-                    timeRange={timeRange}
-                  />
-                  <BreakdownPicker
-                    value={breakdown}
-                    onChange={setBreakdown}
-                    hasSeverity={caps.hasSeverity}
-                  />
-                  <div className={styles.histogramHeaderSpacer} />
-                  {volumeData.length > 0 && (
-                    <span className={styles.histogramMeta}>
-                      {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
-                    </span>
-                  )}
-                </div>
-                {volumeData.length > 0 ? (
-                  <VolumeHistogram
-                    data={volumeData}
-                    timeRange={timeRange}
-                    height={32}
-                    onSelectRange={onHistogramSelectRange}
-                    onBreakdownFilter={onHistogramBreakdownFilter}
-                    colorMode={
-                      breakdown.kind === 'field'
-                        ? 'breakdown'
-                        : breakdown.kind === 'severity'
-                        ? 'severity'
-                        : 'single'
-                    }
-                    bucketMs={resolvedInterval.intervalMs}
-                  />
-                ) : (
-                  <div className={styles.histogramEmpty}>
-                    {loading ? 'Loading…' : 'No events in selected time range'}
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Only overlay when we already have rows to show underneath (a refetch) —
                 the initial-load case is handled by LogsTable's own loading state, so the
                 two never show at once. */}
@@ -880,18 +853,6 @@ export function LogsExplorer() {
                 </div>
               </div>
             )}
-            <div className={styles.tableToolbar}>
-              {compareSelection.size >= 2 && (
-                <Button variant="secondary" size="sm" icon="columns" onClick={() => setCompareOpen(true)}>
-                  Compare ({compareSelection.size})
-                </Button>
-              )}
-              <div className={styles.headerSpacer} />
-              <label className={styles.wrapToggleLabel}>
-                <Switch value={wrapLines} onChange={(e) => setWrapLines(e.currentTarget.checked)} />
-                Wrap lines
-              </label>
-            </div>
             <div
               {...(selectedRow ? detailSplitterProps : {})}
               className={cx(styles.tableDetailSplit, selectedRow && detailSplitterProps.className)}
@@ -900,6 +861,64 @@ export function LogsExplorer() {
                 {...(selectedRow ? tablePaneProps : {})}
                 className={cx(styles.tablePane, selectedRow && tablePaneProps.className)}
               >
+                {/* Histogram + toolbar live inside the table pane (not the results pane as a
+                    whole) so they shrink along with the table when the detail panel opens,
+                    instead of spanning the full width behind it. */}
+                {caps.hasTime && (
+                  <div className={styles.histogramPanel}>
+                    <div className={styles.histogramHeader}>
+                      <IntervalPicker
+                        value={intervalMode}
+                        onChange={setIntervalMode}
+                        timeRange={timeRange}
+                      />
+                      <BreakdownPicker
+                        value={breakdown}
+                        onChange={setBreakdown}
+                        hasSeverity={caps.hasSeverity}
+                      />
+                      <div className={styles.histogramHeaderSpacer} />
+                      {volumeData.length > 0 && (
+                        <span className={styles.histogramMeta}>
+                          {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
+                        </span>
+                      )}
+                    </div>
+                    {volumeData.length > 0 ? (
+                      <VolumeHistogram
+                        data={volumeData}
+                        timeRange={timeRange}
+                        height={32}
+                        onSelectRange={onHistogramSelectRange}
+                        onBreakdownFilter={onHistogramBreakdownFilter}
+                        colorMode={
+                          breakdown.kind === 'field'
+                            ? 'breakdown'
+                            : breakdown.kind === 'severity'
+                            ? 'severity'
+                            : 'single'
+                        }
+                        bucketMs={resolvedInterval.intervalMs}
+                      />
+                    ) : (
+                      <div className={styles.histogramEmpty}>
+                        {loading ? 'Loading…' : 'No events in selected time range'}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className={styles.tableToolbar}>
+                  {compareSelection.size >= 2 && (
+                    <Button variant="secondary" size="sm" icon="columns" onClick={() => setCompareOpen(true)}>
+                      Compare ({compareSelection.size})
+                    </Button>
+                  )}
+                  <div className={styles.headerSpacer} />
+                  <label className={styles.wrapToggleLabel}>
+                    <Switch value={wrapLines} onChange={(e) => setWrapLines(e.currentTarget.checked)} />
+                    Wrap lines
+                  </label>
+                </div>
                 <LogsTable
                   rows={pageRows}
                   loading={loading && rows.length === 0}
@@ -909,6 +928,7 @@ export function LogsExplorer() {
                   onSort={(col) => dispatch({ type: 'SET_SORT', col })}
                   onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id })}
                   onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
+                  onMoveColumnTo={(id, targetId) => dispatch({ type: 'MOVE_COLUMN_TO', id, targetId })}
                   selectedRow={selectedRow}
                   wrapLines={wrapLines}
                   compareSelection={compareSelection}

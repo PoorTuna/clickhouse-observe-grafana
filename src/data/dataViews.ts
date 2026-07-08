@@ -40,6 +40,20 @@ export function deletePersonalView(id: string): void {
   writeAll(readAll().filter((v) => v.id !== id));
 }
 
+/** Update an existing personal view in place, preserving its id/origin/createdAt. */
+export function updatePersonalView(id: string, updates: Omit<DataView, 'id' | 'createdAt' | 'origin'>): DataView | null {
+  const all = readAll();
+  const idx = all.findIndex((v) => v.id === id);
+  if (idx === -1) {
+    return null;
+  }
+  const updated: DataView = { ...all[idx], ...updates };
+  const next = [...all];
+  next[idx] = updated;
+  writeAll(next);
+  return updated;
+}
+
 /** Combined list: shared views first, then personal. */
 export function mergeViews(shared: DataView[], personal: DataView[]): DataView[] {
   return [...shared, ...personal];

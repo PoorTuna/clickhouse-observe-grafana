@@ -17,6 +17,7 @@ import {
   migrateLegacyConfig,
   persistActiveViewId,
   savePersonalView,
+  updatePersonalView as updatePVStorage,
 } from '../../data/dataViews';
 
 const LogsExplorer = React.lazy(() =>
@@ -34,6 +35,7 @@ export interface DataViewContextValue {
   activeView: DataView | null;
   setActiveViewId: (id: string) => void;
   createPersonalView: (view: Omit<DataView, 'id' | 'createdAt' | 'origin'>) => DataView;
+  updatePersonalView: (id: string, updates: Omit<DataView, 'id' | 'createdAt' | 'origin'>) => void;
   deletePersonalView: (id: string) => void;
 }
 
@@ -42,6 +44,7 @@ export const DataViewContext = createContext<DataViewContextValue>({
   activeView: null,
   setActiveViewId: () => {},
   createPersonalView: () => { throw new Error('DataViewContext not mounted'); },
+  updatePersonalView: () => {},
   deletePersonalView: () => {},
 });
 
@@ -89,6 +92,16 @@ function App(props: AppRootProps<AppJsonData>) {
     []
   );
 
+  const updatePersonalView = useCallback(
+    (id: string, updates: Omit<DataView, 'id' | 'createdAt' | 'origin'>) => {
+      const saved = updatePVStorage(id, updates);
+      if (saved) {
+        setPersonalViews((prev) => prev.map((v) => (v.id === id ? saved : v)));
+      }
+    },
+    []
+  );
+
   const deletePersonalView = useCallback((id: string) => {
     deletePVStorage(id);
     setPersonalViews((prev) => prev.filter((v) => v.id !== id));
@@ -107,7 +120,7 @@ function App(props: AppRootProps<AppJsonData>) {
 
   return (
     <DataViewContext.Provider
-      value={{ views: allViews, activeView, setActiveViewId, createPersonalView, deletePersonalView }}
+      value={{ views: allViews, activeView, setActiveViewId, createPersonalView, updatePersonalView, deletePersonalView }}
     >
       <SourceConfigContext.Provider value={sourceConfig}>
         <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>

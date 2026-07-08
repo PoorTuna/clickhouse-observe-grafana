@@ -17,6 +17,10 @@ interface LogsTableProps {
   selectedRow?: LogRow | null;
   /** Wrap the message/body cell instead of truncating with an ellipsis. */
   wrapLines?: boolean;
+  /** Rows currently checked for comparison (by index within `rows`). Omit the pair to hide the
+   *  checkbox column entirely. */
+  compareSelection?: Set<number>;
+  onToggleCompare?: (index: number) => void;
 }
 
 /** Shared with LogDetailDrawer's header summary so the row and detail view agree on color. */
@@ -79,7 +83,10 @@ export function LogsTable({
   onMoveColumn,
   selectedRow,
   wrapLines = false,
+  compareSelection,
+  onToggleCompare,
 }: LogsTableProps) {
+  const showCompare = compareSelection !== undefined && onToggleCompare !== undefined;
   const styles = useStyles2(getStyles);
   // Roving keyboard focus, independent of `selectedRow` (which opens the detail panel).
   // Arrow keys move this; Enter opens the row under it.
@@ -143,6 +150,7 @@ export function LogsTable({
       <table className={styles.table}>
         <thead>
           <tr>
+            {showCompare && <th className={cx(styles.th, styles.compareTh)} aria-hidden="true" />}
             <th className={cx(styles.th, styles.expandTh)} aria-hidden="true" />
             {columns.map((col, idx) => {
               const isSorted = sort?.col === col.key;
@@ -218,6 +226,16 @@ export function LogsTable({
                   onMouseDown={() => setFocusIndex(i)}
                   aria-selected={isSelected}
                 >
+                  {showCompare && (
+                    <td className={cx(styles.td, styles.compareTd)}>
+                      <input
+                        type="checkbox"
+                        checked={compareSelection!.has(i)}
+                        onChange={() => onToggleCompare!(i)}
+                        aria-label="Select for comparison"
+                      />
+                    </td>
+                  )}
                   <td className={cx(styles.td, styles.expandTd)}>
                     <button
                       className={styles.expandBtn}
@@ -272,6 +290,7 @@ export function LogsTable({
                 </tr>
                 {isExpanded && (
                   <tr className={styles.expandedRow}>
+                    {showCompare && <td className={styles.td} />}
                     <td className={styles.td} />
                     <td className={styles.td} colSpan={columns.length + 1}>
                       <pre className={styles.expandedJson}>{JSON.stringify(row, null, 2)}</pre>
@@ -330,6 +349,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   expandTd: css`
     width: 24px;
+    padding-left: ${theme.spacing(1)};
+    padding-right: 0;
+  `,
+  compareTh: css`
+    width: 28px;
+    padding-left: ${theme.spacing(1)};
+    padding-right: 0;
+  `,
+  compareTd: css`
+    width: 28px;
     padding-left: ${theme.spacing(1)};
     padding-right: 0;
   `,

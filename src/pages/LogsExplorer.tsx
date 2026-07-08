@@ -1,12 +1,13 @@
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
-import { dateTime, GrafanaTheme2, PageLayoutType, TimeRange } from '@grafana/data';
+import { dateTime, GrafanaTheme2, PageLayoutType, rangeUtil, TimeRange } from '@grafana/data';
 import { PluginPage } from '@grafana/runtime';
-import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker, useSplitter } from '@grafana/ui';
+import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker, RefreshPicker, useSplitter } from '@grafana/ui';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
 import { LogDetailDrawer } from '../components/LogDetailDrawer';
+import { CompareLogsModal } from '../components/CompareLogsModal';
 import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
 import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
 import { BreakdownPicker } from '../components/HistogramControls/BreakdownPicker';
@@ -241,6 +242,22 @@ export function LogsExplorer() {
   });
   const [showSqlInspect, setShowSqlInspect] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
+  // Multi-select for the "Compare" action — indices into `pageRows`. Cleared whenever the page
+  // of rows changes (new query, sort, or pagination) since indices from a prior page are
+  // meaningless against a new one.
+  const [compareSelection, setCompareSelection] = useState<Set<number>>(new Set());
+  const [compareOpen, setCompareOpen] = useState(false);
+  const onToggleCompare = (i: number) => {
+    setCompareSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) {
+        next.delete(i);
+      } else {
+        next.add(i);
+      }
+      return next;
+    });
+  };
   // Uncommitted raw-SQL textarea contents — kept local so typing never re-runs the query.
   // Only `runRawSql` (Run button / Ctrl+Enter) commits it to queryState.rawSql.
   const [rawSqlDraft, setRawSqlDraft] = useState('');
@@ -412,6 +429,22 @@ export function LogsExplorer() {
   useLayoutEffect(() => {
     latestExecuteQuery.current = executeQuery;
   });
+
+  // Auto-refresh: re-run the query on a tunable interval via RefreshPicker. Reads through
+  // latestExecuteQuery (kept fresh above) rather than closing over `executeQuery` directly, so
+  // the interval doesn't need to be torn down and restarted on every queryState change.
+  const [refreshInterval, setRefreshInterval] = useState<string>('');
+  useEffect(() => {
+    if (!refreshInterval || refreshInterval === RefreshPicker.offOption.value) {
+      return;
+    }
+    const ms = rangeUtil.intervalToMs(refreshInterval);
+    if (!ms) {
+      return;
+    }
+    const id = window.setInterval(() => latestExecuteQuery.current(), ms);
+    return () => window.clearInterval(id);
+  }, [refreshInterval]);
 
   // Tracks the previous useRawSql value so the auto-run effect below can tell "just switched
   // into raw mode" apart from any other queryState change.
@@ -591,6 +624,11 @@ export function LogsExplorer() {
   // even across re-renders as long as selectedRow came from onRowClick(row).
   const selectedIndex = selectedRow ? pageRows.indexOf(selectedRow) : -1;
 
+  useEffect(() => {
+    setCompareSelection(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRows]);
+
   // Ensure the current page's full rows are hydrated whenever the drawer is open (covers both
   // opening a row and paging prev/next across a page boundary while it's open).
   useEffect(() => {
@@ -643,7 +681,7 @@ export function LogsExplorer() {
             />
           )}
           <Button
-            variant="secondary"
+            variant="primary"
             size="sm"
             icon="apps"
             onClick={() => setAddToDashboardOpen(true)}
@@ -652,12 +690,11 @@ export function LogsExplorer() {
           >
             Add to dashboard
           </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="sync"
-            onClick={executeQuery}
-            disabled={loading}
+          <RefreshPicker
+            onRefresh={executeQuery}
+            onIntervalChanged={setRefreshInterval}
+            value={refreshInterval}
+            isLoading={loading}
             tooltip="Refresh"
           />
         </div>
@@ -840,6 +877,11 @@ export function LogsExplorer() {
               </div>
             )}
             <div className={styles.tableToolbar}>
+              {compareSelection.size >= 2 && (
+                <Button variant="secondary" size="sm" icon="columns" onClick={() => setCompareOpen(true)}>
+                  Compare ({compareSelection.size})
+                </Button>
+              )}
               <div className={styles.headerSpacer} />
               <label className={styles.wrapToggleLabel}>
                 <Switch value={wrapLines} onChange={(e) => setWrapLines(e.currentTarget.checked)} />
@@ -865,6 +907,8 @@ export function LogsExplorer() {
                   onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction })}
                   selectedRow={selectedRow}
                   wrapLines={wrapLines}
+                  compareSelection={compareSelection}
+                  onToggleCompare={onToggleCompare}
                 />
                 <PaginationBar
                   page={currentPage}
@@ -912,6 +956,13 @@ export function LogsExplorer() {
             </div>
           </div>
         </div>
+
+        {compareOpen && compareSelection.size >= 2 && (
+          <CompareLogsModal
+            rows={[...compareSelection].sort((a, b) => a - b).map((i) => pageRows[i])}
+            onDismiss={() => setCompareOpen(false)}
+          />
+        )}
 
         <AddToDashboardModal
           isOpen={addToDashboardOpen}

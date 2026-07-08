@@ -10,6 +10,21 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.1] — 2026-07-09
+
+### Fixed
+
+- **Filter pills didn't match Kibana's look.** Squared corners (was fully rounded), a thicker
+  saturated polarity border with a matching tint instead of a flat gray chip, and negated
+  exists/one-of filters now show a "NOT" prefix (e.g. "NOT field is one of [...]") matching
+  Kibana's wording — display-only, `filterLabel()`'s underlying text is unchanged.
+- **Compare modal collapsed multi-line messages (e.g. stack traces) onto one line.** The value
+  cell had no `white-space: pre-wrap`, so embedded line breaks were silently collapsed by the
+  default `white-space: normal`.
+- Compare button and Wrap-lines toggle had no gap between them, sitting flush against each other.
+
+---
+
 ## [0.3.0] — 2026-07-09
 
 ### Added

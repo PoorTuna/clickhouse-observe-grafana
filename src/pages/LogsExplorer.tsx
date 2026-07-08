@@ -1210,6 +1210,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   tableToolbar: css`
     display: flex;
     align-items: center;
+    gap: ${theme.spacing(1.5)};
     padding-bottom: ${theme.spacing(0.5)};
   `,
   tableDetailSplit: css`

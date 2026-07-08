@@ -135,6 +135,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-bottom: 1px solid ${theme.colors.border.weak};
     word-break: break-word;
     overflow-wrap: anywhere;
+    /* Default white-space: normal collapses embedded newlines in multi-line messages (e.g. stack
+       traces) into one squashed line — pre-wrap keeps real line breaks while still wrapping long
+       unbroken text at the cell width. */
+    white-space: pre-wrap;
   `,
   valueMatches: css`
     color: ${theme.colors.success.text};

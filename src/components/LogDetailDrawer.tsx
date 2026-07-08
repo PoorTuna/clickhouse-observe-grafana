@@ -3,7 +3,6 @@ import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import {
   useStyles2,
-  Button,
   Icon,
   IconButton,
   ClipboardButton,
@@ -39,8 +38,8 @@ interface LogDetailDrawerProps {
   detailLoading?: boolean;
   config: SourceConfig;
   /** Discovered fields (from useFieldDiscovery) — used to tell JSON-typed attribute columns apart
-   *  from Map-typed ones so attribute rows get the right SQL accessor. Optional: omitted callers
-   *  fall back to treating every attribute column as Map, matching prior behavior. */
+   *  from Map-typed ones so flattened attribute rows get the right SQL accessor. Optional: omitted
+   *  callers fall back to treating every attribute column as Map. */
   fields?: FieldModel[];
   /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
   columns: SelectedColumn[];
@@ -57,13 +56,7 @@ interface LogDetailDrawerProps {
 
 type DrawerTab = 'table' | 'json';
 
-interface SelectionPopover {
-  left: number;
-  top: number;
-  text: string;
-}
-
-/** Kibana shows 50 keys per page in the "All fields" list — mirrored here. */
+/** Kibana shows 50 keys per page in the flat field list — mirrored here. */
 const FIELDS_PAGE_SIZE = 50;
 /** Attribute values longer than this render truncated, with a "Show more" toggle. */
 const VALUE_TRUNCATE_LEN = 300;
@@ -84,13 +77,9 @@ export function LogDetailDrawer({
   navLabel,
 }: LogDetailDrawerProps) {
   const styles = useStyles2(getStyles);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(['logLine', 'links', 'raw'])
-  );
   const [searchAttr, setSearchAttr] = useState('');
   const [activeTab, setActiveTab] = useState<DrawerTab>('table');
   const [selectedOnly, setSelectedOnly] = useState(false);
-  const [selectionPopover, setSelectionPopover] = useState<SelectionPopover | null>(null);
   const [expandedValues, setExpandedValues] = useState<Set<string>>(new Set());
   const [fieldsPage, setFieldsPage] = useState(0);
 
@@ -106,22 +95,9 @@ export function LogDetailDrawer({
     });
   };
 
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-      }
-      return next;
-    });
-  };
-
   // Header summary reads the narrow `row` directly — it must render instantly, before/without
-  // the full row ever arriving. Attribute groups / All fields / JSON below read `effectiveRow`,
-  // which is the hydrated full row once available, falling back to the narrow row (never blank).
-  const traceId = row[CORE_ALIAS.traceId] ? String(row[CORE_ALIAS.traceId]) : null;
+  // the full row ever arriving. The flat field/value table below reads `effectiveRow`, which is
+  // the hydrated full row once available, falling back to the narrow row (never blank).
   const timestamp = formatTimestamp(row[CORE_ALIAS.timestamp]);
   const severity = row[CORE_ALIAS.severity] ? String(row[CORE_ALIAS.severity]) : null;
   const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
@@ -134,23 +110,49 @@ export function LogDetailDrawer({
       ),
     [fields]
   );
-  const attrGroups = useMemo(
-    () => groupAttributes(effectiveRow, config.columns, jsonColumns),
-    [effectiveRow, config.columns, jsonColumns]
-  );
 
   // Kibana's JSON tab renders fully expanded by default — every object/array node open, not
   // just the root.
   const jsonExpandedPaths = useMemo(() => allContainerPaths(effectiveRow), [effectiveRow]);
 
-  // Auto-expand every section (Kibana default) whenever a new log is opened. Keyed on `row`
-  // identity, not `effectiveRow` — the lazy-hydrated detailRow arriving shouldn't re-collapse
-  // sections the user already toggled while viewing the same log.
+  // Flat Field | Value table (Kibana's default) — no OTel category grouping. Map/JSON container
+  // columns (ResourceAttributes, LogAttributes, …) are excluded in their raw blob form and
+  // replaced by their already-flattened dotted-path children from groupAttributes, so
+  // "LogAttributes.http.method" is its own row instead of one giant stringified-object row.
+  const c = config.columns;
+  const containerCols = useMemo(
+    () => new Set([c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes].filter(Boolean)),
+    [c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes]
+  );
+  const attrGroups = useMemo(
+    () => groupAttributes(effectiveRow, config.columns, jsonColumns),
+    [effectiveRow, config.columns, jsonColumns]
+  );
+  const allRows = useMemo(() => {
+    const flat: Array<{ key: string; value: string; sqlExpr: string }> = [];
+    for (const [k, v] of Object.entries(effectiveRow)) {
+      if (!k || containerCols.has(k)) {
+        continue;
+      }
+      flat.push({
+        key: k,
+        value: v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
+        sqlExpr: k,
+      });
+    }
+    for (const g of attrGroups) {
+      for (const r of g.rows) {
+        flat.push({ key: `${g.col}.${r.key}`, value: r.value, sqlExpr: r.sqlExpr });
+      }
+    }
+    return flat.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }, [effectiveRow, containerCols, attrGroups]);
+
+  // Reset per-log UI state (not the search/selected-only filters, which the user likely wants to
+  // keep applied while stepping through prev/next) whenever a new log is opened.
   useEffect(() => {
-    setExpandedSections(new Set(['logLine', 'links', 'raw', ...attrGroups.map((g) => g.group)]));
     setExpandedValues(new Set());
     setFieldsPage(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row]);
 
   const isColumnSelected = (clickhouseField: string): boolean =>
@@ -235,37 +237,18 @@ export function LogDetailDrawer({
               onClick={() => toggleAsColumn(field, clickhouseField)}
             />
           )}
+          {onViewTrace && clickhouseField === config.columns.traceId && (
+            <IconButton
+              name="link"
+              size="sm"
+              tooltip="View trace"
+              onClick={() => onViewTrace(value)}
+            />
+          )}
         </div>
       </div>
     );
   };
-
-  const onLogLineMouseUp = () => {
-    const sel = window.getSelection();
-    const text = sel?.toString().trim() ?? '';
-    if (!text || !sel || sel.rangeCount === 0 || !config.columns.body) {
-      return;
-    }
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    setSelectionPopover({ left: rect.left + rect.width / 2, top: rect.top, text });
-  };
-
-  const clearSelectionPopover = () => setSelectionPopover(null);
-
-  const bodyText = String(row[CORE_ALIAS.body] ?? '');
-
-  // Keys shown in dedicated sections (aliases + their source columns) — skip in All fields.
-  const c = config.columns;
-  const hiddenKeys = useMemo(
-    () =>
-      new Set([
-        CORE_ALIAS.timestamp, CORE_ALIAS.body, CORE_ALIAS.severity,
-        CORE_ALIAS.traceId, CORE_ALIAS.spanId, CORE_ALIAS.serviceName,
-        c.timestamp, c.body, c.severity, c.traceId, c.spanId, c.serviceName,
-        c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes,
-      ]),
-    [c]
-  );
 
   return (
     <div className={styles.panel}>
@@ -326,7 +309,7 @@ export function LogDetailDrawer({
           <JsonTree data={effectiveRow} defaultExpanded={jsonExpandedPaths} />
         </div>
       ) : (
-        <div className={styles.content} onMouseDown={clearSelectionPopover}>
+        <div className={styles.content}>
           {/* Field/value search + selected-only toggle */}
           <div className={styles.toolbarRow}>
             <Input
@@ -340,143 +323,39 @@ export function LogDetailDrawer({
               <Switch value={selectedOnly} onChange={(e) => setSelectedOnly(e.currentTarget.checked)} />
               Selected only
             </label>
+            {hydrating && <Spinner size="sm" />}
           </div>
 
-          {/* Log line */}
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <button className={styles.sectionToggle} onClick={() => toggleSection('logLine')}>
-                <Icon name={expandedSections.has('logLine') ? 'angle-down' : 'angle-right'} />
-                <span>Log line</span>
-              </button>
-              <ClipboardButton
-                icon="clipboard-alt"
-                size="sm"
-                variant="secondary"
-                fill="text"
-                tooltip="Copy log line"
-                aria-label="Copy log line"
-                getText={() => bodyText}
-              />
-            </div>
-            {expandedSections.has('logLine') && (
-              <div className={styles.logLine} onMouseUp={onLogLineMouseUp}>
-                {bodyText}
-              </div>
-            )}
-          </section>
-
-          {/* Trace / Log links */}
-          {(traceId || onViewTrace) && (
-            <section className={styles.section}>
-              <button className={styles.sectionHeader} onClick={() => toggleSection('links')}>
-                <Icon name={expandedSections.has('links') ? 'angle-down' : 'angle-right'} />
-                <span>Links</span>
-              </button>
-              {expandedSections.has('links') && traceId && (
-                <div className={styles.linksBody}>
-                  <span className={styles.attrKey}>traceID</span>
-                  <span className={styles.attrValue}>{traceId}</span>
-                  {onViewTrace && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      icon="link"
-                      onClick={() => onViewTrace(traceId)}
-                      className={styles.linkBtn}
-                    >
-                      View trace
-                    </Button>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* OTel attribute groups */}
-          {attrGroups.map(({ group, label, rows }) => {
-            const visible = rows
+          {/* Flat Field | Value table — Kibana's default, no OTel category grouping. */}
+          {(() => {
+            const visible = allRows
               .filter((r) => filterMatch(r.key, r.value))
               .filter((r) => !selectedOnly || isColumnSelected(r.sqlExpr));
-            if (visible.length === 0 && (searchAttr || selectedOnly)) {
-              return null;
-            }
+            const numberOfPages = Math.max(1, Math.ceil(visible.length / FIELDS_PAGE_SIZE));
+            const page = Math.min(fieldsPage, numberOfPages - 1);
+            const pageRows = visible.slice(page * FIELDS_PAGE_SIZE, (page + 1) * FIELDS_PAGE_SIZE);
             return (
-              <section key={group} className={styles.section}>
-                <button className={styles.sectionHeader} onClick={() => toggleSection(group)}>
-                  <Icon name={expandedSections.has(group) ? 'angle-down' : 'angle-right'} />
-                  <span>{label}</span>
-                  <span className={styles.attrCount}>{visible.length}</span>
-                </button>
-                {expandedSections.has(group) && (
-                  <div className={styles.attrList}>
-                    {visible.map((r) => renderAttrRow(r.key, r.value, r.sqlExpr))}
+              <>
+                <div className={styles.attrListHeader}>
+                  <span className={styles.attrKey}>Field</span>
+                  <span className={styles.attrValue}>Value</span>
+                </div>
+                <div className={styles.attrList}>
+                  {pageRows.map((r) => renderAttrRow(r.key, r.value, r.sqlExpr))}
+                </div>
+                {numberOfPages > 1 && (
+                  <div className={styles.fieldsPagination}>
+                    <Pagination
+                      currentPage={page + 1}
+                      numberOfPages={numberOfPages}
+                      onNavigate={(p) => setFieldsPage(p - 1)}
+                      hideWhenSinglePage
+                    />
                   </div>
                 )}
-              </section>
+              </>
             );
-          })}
-
-          {/* All fields: every column from SELECT *, deduped against fixed aliases and mapped columns */}
-          <section className={styles.section}>
-            <button className={styles.sectionHeader} onClick={() => toggleSection('raw')}>
-              <Icon name={expandedSections.has('raw') ? 'angle-down' : 'angle-right'} />
-              <span>All fields</span>
-              {hydrating && <Spinner size="sm" className={styles.hydratingSpinner} />}
-            </button>
-            {expandedSections.has('raw') &&
-              (() => {
-                const allFields = Object.entries(effectiveRow)
-                  .filter(([k]) => !hiddenKeys.has(k) && k !== '')
-                  .filter(([k, v]) => filterMatch(k, String(v ?? '')))
-                  .filter(([k]) => !selectedOnly || isColumnSelected(k));
-                const numberOfPages = Math.max(1, Math.ceil(allFields.length / FIELDS_PAGE_SIZE));
-                const page = Math.min(fieldsPage, numberOfPages - 1);
-                const pageFields = allFields.slice(page * FIELDS_PAGE_SIZE, (page + 1) * FIELDS_PAGE_SIZE);
-                return (
-                  <>
-                    <div className={styles.attrList}>
-                      {pageFields.map(([k, v]) =>
-                        renderAttrRow(k, v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''), undefined)
-                      )}
-                    </div>
-                    {numberOfPages > 1 && (
-                      <div className={styles.fieldsPagination}>
-                        <Pagination
-                          currentPage={page + 1}
-                          numberOfPages={numberOfPages}
-                          onNavigate={(p) => setFieldsPage(p - 1)}
-                          hideWhenSinglePage
-                        />
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-          </section>
-        </div>
-      )}
-
-      {/* Select-text-in-log-line → "line contains" filter, floating near the selection */}
-      {selectionPopover && (
-        <div
-          className={styles.selectionPopover}
-          style={{ left: selectionPopover.left, top: selectionPopover.top - 40 }}
-        >
-          <Button
-            size="sm"
-            variant="secondary"
-            icon="filter-plus"
-            onClick={() => {
-              onAddFilter(makeFilter(config.columns.body, selectionPopover.text, 'contains'));
-              setSelectionPopover(null);
-              window.getSelection()?.removeAllRanges();
-            }}
-          >
-            Line contains &ldquo;
-            {selectionPopover.text.length > 24 ? selectionPopover.text.slice(0, 24) + '…' : selectionPopover.text}
-            &rdquo;
-          </Button>
+          })()}
         </div>
       )}
       </div>
@@ -589,9 +468,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.secondary};
     margin-right: auto;
   `,
-  hydratingSpinner: css`
-    margin-left: auto;
-  `,
   // ── Table tab ─────────────────────────────────────────────────────────────
   content: css`
     padding: ${theme.spacing(1)};
@@ -615,69 +491,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     cursor: pointer;
   `,
-  section: css`
-    margin-bottom: ${theme.spacing(0.5)};
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    overflow: hidden;
-  `,
-  sectionHeader: css`
-    width: 100%;
+  attrListHeader: css`
     display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(1)} ${theme.spacing(1.25)};
-    background: ${theme.colors.background.secondary};
-    border: none;
-    cursor: pointer;
+    gap: ${theme.spacing(1.5)};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)};
+    font-size: ${theme.typography.body.fontSize};
     font-weight: ${theme.typography.fontWeightMedium};
-    color: ${theme.colors.text.primary};
-    text-align: left;
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
-  `,
-  /** Used inside `sectionHeader` when it's a div (not a button) hosting a trailing action —
-   *  e.g. Log line's copy button — so we never nest a real <button> inside another <button>. */
-  sectionToggle: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    flex: 1;
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    font: inherit;
-    font-weight: inherit;
-    color: inherit;
-    text-align: left;
-  `,
-  attrCount: css`
-    margin-left: auto;
     color: ${theme.colors.text.secondary};
-    font-size: 13px;
-    font-weight: normal;
-  `,
-  logLine: css`
-    padding: ${theme.spacing(1)};
-    font-family: ${theme.typography.fontFamilyMonospace};
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-    color: ${theme.colors.text.primary};
-    background: ${theme.colors.background.canvas};
-    user-select: text;
-  `,
-  linksBody: css`
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    flex-wrap: wrap;
-  `,
-  linkBtn: css`
-    margin-left: auto;
+    border-bottom: 1px solid ${theme.colors.border.weak};
+    & > span:first-of-type {
+      width: 40%;
+      min-width: 100px;
+      flex-shrink: 0;
+    }
   `,
   attrList: css`
     padding: ${theme.spacing(0.5)};
@@ -726,13 +552,4 @@ const getStyles = (theme: GrafanaTheme2) => ({
       }
     `
   ),
-
-  // ── Select-text → filter popover ─────────────────────────────────────────
-  selectionPopover: css`
-    position: fixed;
-    z-index: 1100;
-    transform: translateX(-50%);
-    box-shadow: ${theme.shadows.z2};
-    border-radius: ${theme.shape.radius.default};
-  `,
 });

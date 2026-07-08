@@ -203,26 +203,16 @@ export function LogsExplorer() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Histogram controls.
-  // Breakdown initial value is set once at mount — no effect ever forces it back,
-  // so user choices (including "No breakdown") always persist.
+  // Breakdown: `breakdownChoice` is null until the user explicitly picks something — the
+  // *effective* value (`breakdown`, derived below) falls back to severity/none based on the
+  // view's current capabilities. Deriving it instead of computing a default once at mount and
+  // trying to "catch up" via an effect sidesteps a real race: on a full page load `config` starts
+  // out empty and hydrates async (see SourceConfigContext), so caps.hasSeverity often isn't true
+  // yet on the render that would have set the initial value. A derived value can't go stale like
+  // that — whatever caps.hasSeverity is *right now* is what an unset choice resolves to.
   const [intervalMode, setIntervalMode] = useState<IntervalMode>('auto');
-  const [breakdown, setBreakdownState] = useState<BreakdownSel>(() =>
-    caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' }
-  );
-  // On a full page load, `config` starts out empty and hydrates async (see SourceConfigContext) —
-  // so the useState initializer above often runs before caps.hasSeverity is true, defaulting to
-  // 'none' even for a severity-capable view. This ref distinguishes that race from a real user
-  // pick, so the one-time catch-up effect below never clobbers an explicit "No breakdown" choice.
-  const breakdownUserSetRef = useRef(false);
-  const setBreakdown = useCallback((sel: BreakdownSel) => {
-    breakdownUserSetRef.current = true;
-    setBreakdownState(sel);
-  }, []);
-  useEffect(() => {
-    if (!breakdownUserSetRef.current && caps.hasSeverity && breakdown.kind === 'none') {
-      setBreakdownState({ kind: 'severity' });
-    }
-  }, [caps.hasSeverity, breakdown.kind]);
+  const [breakdownChoice, setBreakdown] = useState<BreakdownSel | null>(null);
+  const breakdown: BreakdownSel = breakdownChoice ?? (caps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
 
   // Reset query state when the active data view changes so stale field refs don't carry over.
   const prevViewId = useRef<string | undefined>(undefined);
@@ -230,10 +220,7 @@ export function LogsExplorer() {
     const viewId = activeView?.id;
     if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
       dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
-      // Re-derive capabilities from the latest config (updates with activeView).
-      const newCaps = viewCapabilities(config);
-      breakdownUserSetRef.current = false;
-      setBreakdownState(newCaps.hasSeverity ? { kind: 'severity' } : { kind: 'none' });
+      setBreakdown(null);
     }
     prevViewId.current = viewId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -453,7 +440,7 @@ export function LogsExplorer() {
   // Auto-refresh: re-run the query on a tunable interval via RefreshPicker. Reads through
   // latestExecuteQuery (kept fresh above) rather than closing over `executeQuery` directly, so
   // the interval doesn't need to be torn down and restarted on every queryState change.
-  const [refreshInterval, setRefreshInterval] = useState<string>('');
+  const [refreshInterval, setRefreshInterval] = useState<string>('30s');
   useEffect(() => {
     if (!refreshInterval || refreshInterval === RefreshPicker.offOption.value) {
       return;

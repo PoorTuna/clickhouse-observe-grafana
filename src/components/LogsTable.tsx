@@ -577,6 +577,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: block;
   `,
   empty: css`
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     padding: ${theme.spacing(4)};
     text-align: center;
     color: ${theme.colors.text.secondary};

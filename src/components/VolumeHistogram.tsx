@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { dateTime, formattedValueToString, getValueFormat, GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Button, Portal, useStyles2 } from '@grafana/ui';
@@ -339,6 +339,15 @@ export function VolumeHistogram({
     const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
     return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
   }, [bars]);
+
+  // A hovered bucket index is only meaningful against the `bars` array it was computed from.
+  // Auto-refresh (or any new data prop) can reflow buckets under an unmoved cursor — the sliding
+  // time window shifts which bucket sits at a given pixel, most noticeably at the trailing edge —
+  // so a stale index would then read data from a *different* bucket than what's actually drawn
+  // there. Clearing on every data change forces a fresh mousemove to re-resolve it.
+  useEffect(() => {
+    setHovered(null);
+  }, [data]);
 
   const hoveredBar = hovered !== null ? bars[hovered.index] : null;
 

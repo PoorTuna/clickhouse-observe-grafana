@@ -159,6 +159,7 @@ export function LogsTable({
                   key={col.id}
                   className={cx(
                     styles.th,
+                    styles.dataTh,
                     draggable && styles.thDraggable,
                     draggedId === col.id && styles.thDragging,
                     dragOverId === col.id && dragOverId !== draggedId && styles.thDragOver
@@ -390,6 +391,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: sticky;
     top: 0;
     z-index: 1;
+  `,
+  /** Hover feedback only for real data-column headers — the leading checkbox/expand-chevron
+   *  header cells aren't interactive and shouldn't visually react on hover. */
+  dataTh: css`
     &:hover {
       background: ${theme.colors.action.hover};
     }
@@ -491,7 +496,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
   `,
   td: css`
-    padding: ${theme.spacing(1.25)} ${theme.spacing(1.5)};
+    padding: ${theme.spacing(2)} ${theme.spacing(1.5)};
     vertical-align: top;
     font-family: ${theme.typography.fontFamilyMonospace};
     line-height: 1.5;

@@ -840,11 +840,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-    gap: 2px;
-    max-width: 160px;
-    max-height: 100px;
+    gap: ${theme.spacing(0.5)};
+    width: 220px;
+    max-height: 100%;
     overflow-y: auto;
-    padding: 2px;
+    padding: 2px ${theme.spacing(1)};
     border-left: 1px solid ${theme.colors.border.weak};
   `,
   axisRow: css`
@@ -886,7 +886,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   legendLabel: css`
     font-size: 13px;
     color: ${theme.colors.text.secondary};
-    max-width: 120px;
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

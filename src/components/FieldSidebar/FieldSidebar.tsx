@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Icon, Input, useStyles2 } from '@grafana/ui';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { FieldModel } from '../../sql/fieldModel';
 import { useFields } from '../FieldsContext';
 import { FieldItem } from './FieldItem';
@@ -61,6 +62,19 @@ export function FieldSidebar({
     };
   }, [fields, nameFilter, selectedIds]);
 
+  // The "Available" list is the one that scales with schema width — a table with hundreds of
+  // columns, or Map/JSON columns that explode into thousands of discovered keys/paths, used to
+  // render every one of them as a real DOM row with no windowing. Virtualize just this list
+  // (react-virtual is already a dependency) — "Selected" stays plain since it's bounded by
+  // however many columns the user has actually added to the grid.
+  const availableScrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: available.length,
+    getScrollElement: () => availableScrollRef.current,
+    estimateSize: () => 32,
+    overscan: 12,
+  });
+
   return (
     <div className={styles.sidebar}>
       <div className={styles.header}>
@@ -99,22 +113,39 @@ export function FieldSidebar({
         </section>
       )}
 
-      <section className={styles.section}>
+      <section className={styles.availableSection}>
         <div className={styles.sectionLabel}>Available ({available.length})</div>
-        {available.map((f) => (
-          <FieldItem
-            key={f.id}
-            field={f}
-            isSelected={false}
-            queryState={queryState}
-            timeRange={timeRange}
-            onToggleColumn={(field) => onToggleColumn(fieldToColumn(field))}
-            onAddFilter={onAddFilter}
-          />
-        ))}
-        {!loading && fields.length === 0 && (
-          <div className={styles.empty}>No fields discovered yet</div>
-        )}
+        <div ref={availableScrollRef} className={styles.availableScroll}>
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+            {rowVirtualizer.getVirtualItems().map((vRow) => {
+              const f = available[vRow.index];
+              return (
+                <div
+                  key={f.id}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${vRow.start}px)`,
+                  }}
+                >
+                  <FieldItem
+                    field={f}
+                    isSelected={false}
+                    queryState={queryState}
+                    timeRange={timeRange}
+                    onToggleColumn={(field) => onToggleColumn(fieldToColumn(field))}
+                    onAddFilter={onAddFilter}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {!loading && fields.length === 0 && (
+            <div className={styles.empty}>No fields discovered yet</div>
+          )}
+        </div>
       </section>
     </div>
   );
@@ -127,7 +158,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     flex-direction: column;
     gap: ${theme.spacing(1.25)};
-    overflow-y: auto;
+    /* Was overflow-y: auto on the whole sidebar — the "Available" section now scrolls itself
+     * (see availableScroll) so the virtualizer's getScrollElement() has a bounded, measurable
+     * viewport instead of an ever-growing one. */
+    overflow: hidden;
     border-right: 1px solid ${theme.colors.border.weak};
     padding: ${theme.spacing(1)};
   `,
@@ -171,6 +205,18 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     flex-direction: column;
     gap: 1px;
+  `,
+  availableSection: css`
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 1px;
+  `,
+  availableScroll: css`
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   `,
   sectionLabel: css`
     font-size: 13px;

@@ -10,6 +10,42 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.3] — 2026-07-09
+
+### Fixed
+
+- **Column add/remove/reorder redundantly re-ran the volume histogram query.** The logs and
+  histogram queries were split into independent fetches so a column mutation only re-runs the
+  grid query, not the histogram.
+- **No loading cue on multi-query actions.** Rapid filter/sort/column mutations now debounce
+  (~200ms) instead of firing a query burst; the volume histogram shows a dim overlay + spinner
+  during a refetch instead of silently keeping stale bars.
+- **Edit data view modal resized/flickered while loading columns.** The columns step now holds a
+  stable min-height across the loading→loaded swap.
+- **Wide tables (hundreds of columns) and large discovered field lists were slow to render.** The
+  field sidebar's "Available" list is now virtualized; the per-row hover toolbar in the log table
+  now mounts only for the hovered cell instead of every cell in every row.
+- **JSON path discovery scanned each row's `JSONAllPathsWithTypes` twice.** Rewritten to evaluate
+  it once per row, halving that query's per-row cost.
+- **Map-typed fields displayed the same icon as JSON fields**, making a Map column read as JSON in
+  the field sidebar. Map now has its own icon.
+- **Severity breakdown in the histogram couldn't be filtered** — only field breakdowns could.
+  Both bar-click and shift-click-legend filtering now work for severity too.
+- **Inconsistent filter icons** across the table, histogram, field sidebar, and log detail —
+  standardized on filter-plus/filter-minus everywhere.
+- **Histogram tooltip capitalized severity labels** while the legend didn't. Both now match.
+- **Only "Close" collapsed the log detail panel.** Clicking the already-open row now also
+  collapses it; added an expand/shrink button on the panel header.
+- **Non-attribute JSON columns showed as one raw stringified blob in the log detail table.** Any
+  JSON-typed column now flattens into dotted-path rows, not just the four configured attribute
+  containers.
+- **Column-mapping fields were free-text with no column list**, and the Logs data-view editor
+  showed trace-only fields (Span ID, Duration, etc.) that have no effect there. Fields are now
+  searchable dropdowns sourced from the table's actual columns; trace-only fields are hidden in
+  the Logs editor (Trace ID stays, since it powers the log→trace jump link).
+
+---
+
 ## [0.3.2] — 2026-07-09
 
 ### Fixed

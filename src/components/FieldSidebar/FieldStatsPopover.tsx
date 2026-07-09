@@ -175,14 +175,14 @@ export function FieldStatsPopover({
                 title={`Filter for ${field.displayName}: "${v.value}"`}
                 onClick={() => onAddFilter(makeFilter(field.sqlExpr, v.value, '='))}
               >
-                <Icon name="plus-circle" size="xs" />
+                <Icon name="filter-plus" size="xs" />
               </button>
               <button
                 className={styles.filterBtn}
                 title={`Filter out ${field.displayName}: "${v.value}"`}
                 onClick={() => onAddFilter(makeFilter(field.sqlExpr, v.value, '!='))}
               >
-                <Icon name="minus-circle" size="xs" />
+                <Icon name="filter-minus" size="xs" />
               </button>
             </div>
           </div>

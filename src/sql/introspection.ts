@@ -59,14 +59,18 @@ export function buildJsonPathsQuery(
 ): string {
   const tbl = `"${config.database}"."${table}"`;
   const ts = config.columns.timestamp;
-  // JSONAllPathsWithTypes(...) returns Map(String, String) (path -> type). Zip its keys/values
-  // into Tuple(String, String) pairs first so ARRAY JOIN yields one (path, type) row per element —
-  // ARRAY JOIN-ing a Map directly is ambiguous about key/value pairing across CH versions.
+  // JSONAllPathsWithTypes(...) returns Map(String, String) (path -> type). Evaluate it once per
+  // row in the inner subquery (aliased `m`) instead of calling it twice at the outer level (once
+  // for mapKeys, once for mapValues) — the previous version paid for the same dynamic-path
+  // introspection twice per row, which is the expensive part of this query.
   return [
     `SELECT DISTINCT pt.1 AS path, pt.2 AS type`,
-    `FROM ${tbl}`,
-    `ARRAY JOIN arrayZip(mapKeys(JSONAllPathsWithTypes(${jsonColumn})), mapValues(JSONAllPathsWithTypes(${jsonColumn}))) AS pt`,
-    ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
+    `FROM (`,
+    `  SELECT JSONAllPathsWithTypes(${jsonColumn}) AS m`,
+    `  FROM ${tbl}`,
+    ts ? `  WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
+    `)`,
+    `ARRAY JOIN arrayZip(mapKeys(m), mapValues(m)) AS pt`,
     `LIMIT ${limit}`,
   ].filter(Boolean).join('\n');
 }

@@ -202,8 +202,17 @@ export function LogsExplorer() {
   const [rows, setRows] = useState<LogRow[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  // Separate from `loading` (which tracks the logs/grid query only) so a column add/remove —
+  // which never touches the volume query, see fetchVolume's narrower deps below — doesn't make
+  // the histogram appear to reload, and so the histogram can show its own stale-data overlay
+  // instead of silently keeping old bars during an actual volume refetch.
+  const [volLoading, setVolLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
+  // Elastic-style "expand" on the log detail pane — visually overrides the splitter's flex-basis
+  // without touching its underlying drag state, so collapsing back returns to whatever width the
+  // user last dragged it to. Reset whenever the drawer closes so the next log opens at normal size.
+  const [detailExpanded, setDetailExpanded] = useState(false);
 
   // Detail-drawer hydration: the grid query is narrowed (no SELECT *, see executeQuery below),
   // so the drawer's full row (Map attribute columns, "All fields", JSON) is fetched lazily per
@@ -301,6 +310,9 @@ export function LogsExplorer() {
   const [fetchingMore, setFetchingMore] = useState(false);
 
   const runRef = useRef(0);
+  // Separate cancellation token for the volume query, which now runs on its own effect/deps
+  // (see fetchVolume) independent of the logs query's runRef.
+  const volRunRef = useRef(0);
   // Always tracks the latest executeQuery closure so deferred calls get fresh state.
   const latestExecuteQuery = useRef<() => void>(() => {});
 
@@ -319,7 +331,11 @@ export function LogsExplorer() {
     [volumeData]
   );
 
-  const executeQuery = useCallback(async () => {
+  // Logs/grid query only. Deps intentionally include effectiveColumns (a column add/remove does
+  // need to re-run this — the grid projection's SELECT list is exactly the displayed columns) but
+  // NOT the volume-only inputs (intervalMode/breakdown) — see fetchVolume below for why those are
+  // split out instead of living in one combined fetch.
+  const fetchLogs = useCallback(async () => {
     if (!config.datasourceUid) {
       setError('No ClickHouse datasource configured. Go to Configuration to set it up.');
       return;
@@ -346,20 +362,8 @@ export function LogsExplorer() {
       const sql = queryState.useRawSql
         ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, undefined, fieldIndex)
         : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' }, fieldIndex);
-      const resolved = resolveInterval(intervalMode, timeRange);
-      const volSql = buildVolumeQuery(config, queryState, {
-        interval: { unit: resolved.unit, value: resolved.value },
-        breakdown: resolveVolumeBreakdown(breakdown, config),
-      }, fieldIndex);
 
-      const volPromise = caps.hasTime
-        ? runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' })
-        : Promise.resolve<Array<ReturnType<typeof Object>>>([]);
-
-      const [logRows, volRows] = await Promise.all([
-        runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' }),
-        volPromise,
-      ]);
+      const logRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' });
 
       if (runRef.current !== runId) {
         return;
@@ -381,6 +385,40 @@ export function LogsExplorer() {
         const key = logRowKey(prev);
         return logRows.find((r) => logRowKey(r) === key) ?? null;
       });
+    } catch (err) {
+      if (runRef.current === runId) {
+        setError(String((err as Error)?.message ?? err));
+      }
+    } finally {
+      if (runRef.current === runId) {
+        setLoading(false);
+      }
+    }
+  }, [config, queryState, timeRange, effectiveColumns, fieldIndex]);
+
+  // Volume/histogram query only. Deps deliberately narrower than fetchLogs: buildVolumeQuery
+  // never reads state.columns, state.sort, or raw-SQL mode (see queryBuilder.ts), so a column
+  // add/remove/reorder or a sort click must NOT re-run this — it used to, because both queries
+  // lived in one callback that closed over the whole queryState/effectiveColumns.
+  const fetchVolume = useCallback(async () => {
+    if (!config.datasourceUid || !caps.hasTime) {
+      setVolumeData([]);
+      return;
+    }
+    const runId = ++volRunRef.current;
+    setVolLoading(true);
+    try {
+      const resolved = resolveInterval(intervalMode, timeRange);
+      const volSql = buildVolumeQuery(config, queryState, {
+        interval: { unit: resolved.unit, value: resolved.value },
+        breakdown: resolveVolumeBreakdown(breakdown, config),
+      }, fieldIndex);
+
+      const volRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' });
+
+      if (volRunRef.current !== runId) {
+        return;
+      }
 
       const volMap = new Map<number, Record<string, number>>();
       for (const r of volRows) {
@@ -395,17 +433,30 @@ export function LogsExplorer() {
       const volPoints: VolumeDataPoint[] = Array.from(volMap.entries())
         .sort(([a], [b]) => a - b)
         .map(([time, levels]) => ({ time, levels }));
-      setVolumeData(caps.hasTime ? fillEmptyBuckets(volPoints, resolved, timeRange) : volPoints);
+      setVolumeData(fillEmptyBuckets(volPoints, resolved, timeRange));
     } catch (err) {
-      if (runRef.current === runId) {
+      if (volRunRef.current === runId) {
         setError(String((err as Error)?.message ?? err));
       }
     } finally {
-      if (runRef.current === runId) {
-        setLoading(false);
+      if (volRunRef.current === runId) {
+        setVolLoading(false);
       }
     }
-  }, [config, queryState, timeRange, effectiveColumns, intervalMode, breakdown, caps.hasTime, fieldIndex]);
+    // Deliberately narrowed: buildVolumeQuery reads the whole `queryState` object but only ever
+    // uses .search/.filters (via buildWhereConditions) — never .columns/.sort/.rawSql/.useRawSql
+    // (see queryBuilder.ts). Depending on the full object would re-run this on every column/sort
+    // mutation, exactly the redundant volume re-query this split was meant to eliminate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, queryState.search, queryState.filters, timeRange, intervalMode, breakdown, caps.hasTime, fieldIndex]);
+
+  // Combined re-run for call sites that mean "run the whole thing again" (manual refresh button,
+  // auto-refresh interval, loading a saved search) — as opposed to the narrower per-effect fetches
+  // below that only fire the query actually affected by what changed.
+  const executeQuery = useCallback(() => {
+    fetchLogs();
+    fetchVolume();
+  }, [fetchLogs, fetchVolume]);
 
   // Fetches the full ('full' projection) rows for one grid page, so the detail drawer can show
   // Map attribute columns / "All fields" / JSON without the live list query paying SELECT *'s
@@ -493,6 +544,13 @@ export function LogsExplorer() {
   // into raw mode" apart from any other queryState change.
   const prevUseRawSql = useRef(queryState.useRawSql);
 
+  // Coalescing window for both auto-run effects below: a rapid sequence of mutations (e.g.
+  // several column adds, or a filter add immediately followed by a sort click) used to fire one
+  // full query pair per mutation with no debounce at all. 200ms is short enough that a single
+  // deliberate action still feels instant, but long enough to collapse a fast burst into one
+  // request instead of N.
+  const MUTATION_DEBOUNCE_MS = 200;
+
   useEffect(() => {
     // Entering raw-SQL mode alone shouldn't fetch: the textarea is seeded with whatever query
     // is already on screen (see onToggleRawSql), so there's nothing new to run yet — only the
@@ -502,8 +560,17 @@ export function LogsExplorer() {
     if (enteringRawMode) {
       return;
     }
-    executeQuery();
-  }, [executeQuery, queryState.useRawSql]);
+    const t = window.setTimeout(() => fetchLogs(), MUTATION_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [fetchLogs, queryState.useRawSql]);
+
+  // Runs independently of the logs fetch above — fetchVolume's own deps already exclude columns/
+  // sort/raw-SQL, so this effect only re-fires for inputs that actually change the histogram
+  // (time range, search, filters, interval, breakdown).
+  useEffect(() => {
+    const t = window.setTimeout(() => fetchVolume(), MUTATION_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [fetchVolume]);
 
   const onAddFilter = (filter: FilterPill) => {
     dispatch({
@@ -570,12 +637,15 @@ export function LogsExplorer() {
   };
 
   // Clicking a breakdown segment in the histogram pops up "filter for/out this value" (handled
-  // inside VolumeHistogram), Kibana-style, instead of the usual click-to-zoom. Only reachable
-  // when breakdown.kind === 'field', since that's the only mode VolumeHistogram is given an
-  // onBreakdownFilter callback for.
+  // inside VolumeHistogram), Kibana-style, instead of the usual click-to-zoom. Wired for both
+  // 'field' and 'severity' breakdowns — severity used to be excluded here (no field to filter by
+  // was more true reasoning: this callback simply didn't handle it), which is why the severity
+  // breakdown couldn't be filtered from the chart at all.
   const onHistogramBreakdownFilter = (value: string, op: '=' | '!=') => {
     if (breakdown.kind === 'field') {
       onAddFilter(makeFilter(breakdown.field.sqlExpr, value, op));
+    } else if (breakdown.kind === 'severity' && config.columns.severity) {
+      onAddFilter(makeFilter(config.columns.severity, value, op));
     }
   };
 
@@ -895,6 +965,13 @@ export function LogsExplorer() {
             >
               <div
                 {...(selectedRow ? tablePaneProps : {})}
+                style={
+                  selectedRow && detailExpanded
+                    ? { ...tablePaneProps.style, flexGrow: 0, flexBasis: '12%' }
+                    : selectedRow
+                    ? tablePaneProps.style
+                    : undefined
+                }
                 className={cx(styles.tablePane, selectedRow && tablePaneProps.className)}
               >
                 {/* Histogram + toolbar live inside the table pane (not the results pane as a
@@ -925,6 +1002,7 @@ export function LogsExplorer() {
                         data={volumeData}
                         timeRange={timeRange}
                         height={110}
+                        loading={volLoading}
                         onSelectRange={onHistogramSelectRange}
                         onBreakdownFilter={onHistogramBreakdownFilter}
                         colorMode={
@@ -938,7 +1016,7 @@ export function LogsExplorer() {
                       />
                     ) : (
                       <div className={styles.histogramEmpty}>
-                        {loading ? 'Loading…' : 'No events in selected time range'}
+                        {volLoading ? 'Loading…' : 'No events in selected time range'}
                       </div>
                     )}
                   </div>
@@ -971,7 +1049,14 @@ export function LogsExplorer() {
                   loading={loading && rows.length === 0}
                   columns={effectiveColumns}
                   sort={queryState.sort}
-                  onRowClick={setSelectedRow}
+                  onRowClick={(row) => {
+                    if (selectedRow === row) {
+                      setSelectedRow(null);
+                      setDetailExpanded(false);
+                    } else {
+                      setSelectedRow(row);
+                    }
+                  }}
                   onSort={(col) => dispatch({ type: 'SET_SORT', col })}
                   onRemoveColumn={(col) => dispatch({ type: 'REMOVE_COLUMN', id: col.id, columns: effectiveColumns })}
                   onMoveColumn={(id, direction) => dispatch({ type: 'REORDER_COLUMN', id, direction, columns: effectiveColumns })}
@@ -997,7 +1082,11 @@ export function LogsExplorer() {
               {selectedRow && (
                 <>
                   <div {...detailHandleProps} className={cx(detailHandleProps.className, styles.splitterHandle)} />
-                  <div {...detailPaneProps} className={cx(detailPaneProps.className, styles.detailPane)}>
+                  <div
+                    {...detailPaneProps}
+                    style={detailExpanded ? { ...detailPaneProps.style, flexGrow: 1, flexBasis: '88%' } : detailPaneProps.style}
+                    className={cx(detailPaneProps.className, styles.detailPane)}
+                  >
                     <LogDetailDrawer
                       row={selectedRow}
                       detailRow={detailRow}
@@ -1005,7 +1094,12 @@ export function LogsExplorer() {
                       config={config}
                       fields={fieldsState.fields}
                       columns={effectiveColumns}
-                      onClose={() => setSelectedRow(null)}
+                      onClose={() => {
+                        setSelectedRow(null);
+                        setDetailExpanded(false);
+                      }}
+                      expanded={detailExpanded}
+                      onToggleExpanded={() => setDetailExpanded((v) => !v)}
                       onAddFilter={onAddFilter}
                       onToggleColumn={onToggleColumn}
                       onViewTrace={

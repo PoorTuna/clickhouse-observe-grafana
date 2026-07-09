@@ -378,9 +378,22 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       )}
 
       {step === 'columns' && (
-        <>
+        // Fixed min-height across the loading→loaded swap: <Modal> auto-sizes to its content, so
+        // without this the small spinner block (previously just `padding: 24px 0`) made the modal
+        // shrink, then jump/resize again the instant the full form replaced it — the visible
+        // flicker reported against this step. Matching the loaded form's rough height up front
+        // keeps the modal's bounding box stable through the transition.
+        <div style={{ minHeight: 420 }}>
           {loadingCols && (
-            <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <div
+              style={{
+                minHeight: 420,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
               <Spinner size="xl" />
               <div style={{ marginTop: 8, color: 'var(--color-text-secondary)' }}>
                 Loading columns…
@@ -447,6 +460,12 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                     setTimestampField(updated.timestamp || NO_TIME_VALUE);
                     setBodyField(updated.body || NO_BODY_VALUE);
                   }}
+                  columnOptions={allColumnOptions}
+                  // This modal never sets tracesTable (always saved as '' — see handleSave), so
+                  // Span/Parent Span ID, Duration, Span name/status/kind, Span Attributes have no
+                  // effect on anything this view can do. Only AppConfig's traces-aware mapping
+                  // (which does configure a tracesTable) shows the full field set.
+                  hideTraceFields
                 />
               )}
 
@@ -476,7 +495,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
               </div>
             </>
           )}
-        </>
+        </div>
       )}
     </Modal>
   );

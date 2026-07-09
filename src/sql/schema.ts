@@ -92,7 +92,7 @@ export interface GroupedAttrRow {
  * Arrays and primitives are treated as leaves (JSON.stringify'd if not already a string) — only
  * plain objects are recursed into.
  */
-function flattenJson(value: unknown, prefix = ''): Array<{ key: string; value: string }> {
+export function flattenJson(value: unknown, prefix = ''): Array<{ key: string; value: string }> {
   if (
     value !== null &&
     typeof value === 'object' &&
@@ -112,7 +112,7 @@ function flattenJson(value: unknown, prefix = ''): Array<{ key: string; value: s
 }
 
 /** Parse a JSON-typed column's raw DataFrame value (object or JSON string) into a plain object. */
-function parseJsonColumnValue(raw: unknown): Record<string, unknown> {
+export function parseJsonColumnValue(raw: unknown): Record<string, unknown> {
   if (raw === null || raw === undefined) {
     return {};
   }

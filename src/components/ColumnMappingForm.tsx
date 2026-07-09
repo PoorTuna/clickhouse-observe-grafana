@@ -1,6 +1,22 @@
 import React, { ChangeEvent } from 'react';
-import { Button, Field, FieldSet, Input } from '@grafana/ui';
+import { Button, Field, FieldSet, Input, Select } from '@grafana/ui';
+import { SelectableValue } from '@grafana/data';
 import { ColumnMapping, OTEL_COLUMN_MAPPING } from '../types';
+
+/** Keys that only affect the Traces page — no effect in the Logs Explorer (see each field's
+ * `description` below). Hidden there via `hideTraceFields` so the Logs data-view editor isn't
+ * cluttered with mappings it can't use; `traceId` is deliberately NOT in this set since it powers
+ * the log→trace jump link, which IS a Logs Explorer feature. */
+const TRACE_ONLY_KEYS: ReadonlySet<keyof ColumnMapping> = new Set([
+  'spanId',
+  'parentSpanId',
+  'duration',
+  'spanName',
+  'statusCode',
+  'statusMessage',
+  'spanKind',
+  'spanAttributes',
+]);
 
 // `description` says what mapping the field actually turns on — the field name/label alone
 // doesn't communicate that (this was a real source of confusion: none of this requires OTel,
@@ -99,6 +115,14 @@ interface ColumnMappingFormProps {
   /** When provided, show apply/clear preset buttons that also touch logsTable/tracesTable. */
   onApplyOtelPreset?: () => void;
   onClearMapping?: () => void;
+  /** Available column names for this table, from introspection — when provided, each mapping
+   * field renders as a searchable dropdown (still free-typeable via allowCustomValue) instead of
+   * a plain text input. Omit to keep the old free-text behavior (e.g. AppConfig, which has no
+   * live column list to offer). */
+  columnOptions?: Array<SelectableValue<string>>;
+  /** Hide the trace-only fields (Span/Parent Span ID, Duration, Span name/status/kind, Span
+   * Attributes) — set by callers editing a Logs-only data view, where they have no effect. */
+  hideTraceFields?: boolean;
 }
 
 export function ColumnMappingForm({
@@ -106,10 +130,14 @@ export function ColumnMappingForm({
   onChange,
   onApplyOtelPreset,
   onClearMapping,
+  columnOptions,
+  hideTraceFields,
 }: ColumnMappingFormProps) {
   const setField = (key: keyof ColumnMapping, v: string) => {
     onChange({ ...value, [key]: v });
   };
+
+  const fields = hideTraceFields ? COL_FIELDS.filter((f) => !TRACE_ONLY_KEYS.has(f.key)) : COL_FIELDS;
 
   return (
     <FieldSet label="Column Mapping">
@@ -132,14 +160,27 @@ export function ColumnMappingForm({
         </div>
       )}
 
-      {COL_FIELDS.map(({ key, label, description, required }) => (
+      {fields.map(({ key, label, description, required }) => (
         <Field key={key} label={label} description={description} required={required}>
-          <Input
-            width={40}
-            value={value[key]}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setField(key, e.target.value)}
-            placeholder={OTEL_COLUMN_MAPPING[key] ?? '—'}
-          />
+          {columnOptions ? (
+            <Select
+              width={40}
+              value={value[key] || undefined}
+              options={columnOptions}
+              onChange={(opt) => setField(key, opt?.value ?? '')}
+              placeholder={OTEL_COLUMN_MAPPING[key] ?? '—'}
+              allowCustomValue
+              onCreateOption={(v) => setField(key, v)}
+              isClearable
+            />
+          ) : (
+            <Input
+              width={40}
+              value={value[key]}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setField(key, e.target.value)}
+              placeholder={OTEL_COLUMN_MAPPING[key] ?? '—'}
+            />
+          )}
         </Field>
       ))}
     </FieldSet>

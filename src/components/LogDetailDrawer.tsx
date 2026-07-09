@@ -15,7 +15,7 @@ import {
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
 import { FieldModel } from '../sql/fieldModel';
-import { groupAttributes } from '../sql/schema';
+import { groupAttributes, flattenJson, parseJsonColumnValue } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp, severityColor } from './LogsTable';
@@ -44,6 +44,9 @@ interface LogDetailDrawerProps {
   /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
   columns: SelectedColumn[];
   onClose: () => void;
+  /** Elastic-style "expand" toggle — grows the detail pane to near-full width. Omit to hide the button. */
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
   onAddFilter: (filter: FilterPill) => void;
   onToggleColumn?: (col: SelectedColumn) => void;
   onViewTrace?: (traceId: string) => void;
@@ -69,6 +72,8 @@ export function LogDetailDrawer({
   fields,
   columns,
   onClose,
+  expanded,
+  onToggleExpanded,
   onAddFilter,
   onToggleColumn,
   onViewTrace,
@@ -138,6 +143,19 @@ export function LogDetailDrawer({
       // otherwise — every other timestamp-shaped value in this UI (header, table) goes through
       // formatTimestamp, so this flat list shouldn't be the one place that doesn't.
       const isTimestampField = k === c.timestamp || k === CORE_ALIAS.timestamp;
+      // Any other JSON-typed column (not one of the four configured attribute containers, which
+      // attrGroups below already handles) used to fall through to JSON.stringify — a single raw
+      // blob row instead of the dotted-path rows every JSON column elsewhere in the app gets.
+      // Flatten it the same way groupAttributes does for JSON attribute columns.
+      if (jsonColumns.has(k)) {
+        const leaves = flattenJson(parseJsonColumnValue(v));
+        if (leaves.length > 0) {
+          for (const leaf of leaves) {
+            flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}` });
+          }
+          continue;
+        }
+      }
       flat.push({
         key: k,
         value: isTimestampField
@@ -152,7 +170,7 @@ export function LogDetailDrawer({
       }
     }
     return flat.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  }, [effectiveRow, containerCols, attrGroups, c.timestamp]);
+  }, [effectiveRow, containerCols, attrGroups, c.timestamp, jsonColumns]);
 
   // Reset per-log UI state (not the search/selected-only filters, which the user likely wants to
   // keep applied while stepping through prev/next) whenever a new log is opened.
@@ -273,6 +291,15 @@ export function LogDetailDrawer({
         <div className={styles.panelTitleRow}>
           <span className={styles.panelTitle}>Log detail</span>
           <div className={styles.summarySpacer} />
+          {onToggleExpanded && (
+            <IconButton
+              name={expanded ? 'angle-double-right' : 'angle-double-left'}
+              size="lg"
+              tooltip={expanded ? 'Shrink' : 'Expand'}
+              aria-label={expanded ? 'Shrink log detail' : 'Expand log detail'}
+              onClick={onToggleExpanded}
+            />
+          )}
           <IconButton name="times" size="lg" tooltip="Close" aria-label="Close log detail" onClick={onClose} />
         </div>
         <div className={styles.summary}>

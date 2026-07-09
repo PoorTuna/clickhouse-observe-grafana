@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { dateTime, formattedValueToString, getValueFormat, GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Button, Portal, useStyles2 } from '@grafana/ui';
+import { Button, Portal, Spinner, useStyles2 } from '@grafana/ui';
 import { VolumeDataPoint, IntervalMode } from '../types';
 import { CHIntervalUnit } from '../sql/queryBuilder';
 import {
@@ -133,10 +133,15 @@ interface VolumeHistogramProps {
   colorMode: HistogramColorMode;
   /** Bucket width in ms — drives single-click zoom width. */
   bucketMs: number;
+  /** True while the volume query backing `data` is refetching — shows a dim overlay + spinner
+   *  over the existing (stale) bars instead of silently leaving them on screen with no cue. */
+  loading?: boolean;
   onSelectRange?: (from: number, to: number) => void;
   /** Fired when the user picks "Filter for value" / "Filter out value" from the popup shown
-   *  after clicking a breakdown segment directly — see BreakdownClickPopover below. Only ever
-   *  reachable when colorMode === 'breakdown'. */
+   *  after clicking a breakdown segment directly, or shift-clicking a legend entry — see
+   *  BreakdownClickPopover below. Reachable in both 'breakdown' and 'severity' colorModes —
+   *  severity used to be excluded, which is why the severity breakdown couldn't be filtered from
+   *  the chart at all. */
   onBreakdownFilter?: (value: string, op: '=' | '!=') => void;
 }
 
@@ -195,6 +200,7 @@ export function VolumeHistogram({
   height = 64,
   colorMode,
   bucketMs,
+  loading,
   onSelectRange,
   onBreakdownFilter,
 }: VolumeHistogramProps) {
@@ -313,6 +319,12 @@ export function VolumeHistogram({
   const niceMax = yTicks[yTicks.length - 1] || 0;
 
   const onLegendClick = (level: string, e: React.MouseEvent) => {
+    // Shift-click a legend entry to filter by it — previously the legend only ever isolated/hid
+    // series client-side and had no way to add a real filter, unlike clicking a bar segment.
+    if (e.shiftKey && onBreakdownFilter && (colorMode === 'breakdown' || colorMode === 'severity')) {
+      setBreakdownPopover({ level, clientX: e.clientX, clientY: e.clientY });
+      return;
+    }
     if (e.ctrlKey || e.metaKey) {
       setHiddenLevels((prev) => {
         const next = new Set(prev);
@@ -494,7 +506,7 @@ export function VolumeHistogram({
     }
     if (x2 - x1 < 0.5) {
       const t = xPctToTime(end);
-      if (colorMode === 'breakdown' && onBreakdownFilter) {
+      if ((colorMode === 'breakdown' || colorMode === 'severity') && onBreakdownFilter) {
         const idx = Math.max(0, Math.min(bars.length - 1, Math.floor((end / 100) * bars.length)));
         const level = bars[idx] ? pickLevelAtY(bars[idx], clientY) : null;
         if (level) {
@@ -517,6 +529,13 @@ export function VolumeHistogram({
     <div className={styles.wrapper}>
       <div className={styles.mainRow}>
       <div className={styles.chartCol}>
+      {/* Dim overlay + spinner while a volume refetch is in flight — without this the chart
+          silently kept showing the previous (now stale) bars with no loading cue at all. */}
+      {loading && (
+        <div className={styles.chartLoadingOverlay}>
+          <Spinner size="md" />
+        </div>
+      )}
       {/* SVG bar chart, with a y-axis gutter to its left for scale reference */}
       <div className={styles.chartRow}>
         <div className={styles.yAxis} style={{ height }}>
@@ -649,7 +668,13 @@ export function VolumeHistogram({
                 key={level}
                 className={cx(styles.legendItem, isHidden && styles.legendItemHidden)}
                 onClick={(e) => onLegendClick(level, e)}
-                title={isHidden ? 'Hidden — click to isolate, ctrl/cmd-click to show' : 'Click to isolate, ctrl/cmd-click to toggle'}
+                title={
+                  isHidden
+                    ? 'Hidden — click to isolate, ctrl/cmd-click to show'
+                    : onBreakdownFilter
+                    ? 'Click to isolate, ctrl/cmd-click to toggle, shift-click to filter'
+                    : 'Click to isolate, ctrl/cmd-click to toggle'
+                }
               >
                 <span
                   className={styles.legendSwatch}
@@ -728,7 +753,7 @@ export function VolumeHistogram({
             <Button
               size="sm"
               variant="secondary"
-              icon="filter"
+              icon="filter-plus"
               fill="text"
               onClick={() => {
                 onBreakdownFilter(breakdownPopover.level, '=');
@@ -740,7 +765,7 @@ export function VolumeHistogram({
             <Button
               size="sm"
               variant="secondary"
-              icon="ban"
+              icon="filter-minus"
               fill="text"
               onClick={() => {
                 onBreakdownFilter(breakdownPopover.level, '!=');
@@ -797,11 +822,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
   `,
   chartCol: css`
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 2px;
     flex: 1;
     min-width: 0;
+  `,
+  chartLoadingOverlay: css`
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: ${theme.colors.background.primary}99;
+    pointer-events: none;
   `,
   chartRow: css`
     display: flex;
@@ -944,7 +980,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   tooltipLevel: css`
     flex: 1;
     color: ${theme.colors.text.primary};
-    text-transform: capitalize;
   `,
   tooltipCount: css`
     color: ${theme.colors.text.secondary};

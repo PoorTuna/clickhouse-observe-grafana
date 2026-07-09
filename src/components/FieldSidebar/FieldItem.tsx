@@ -74,7 +74,7 @@ export function FieldItem({
             title="Filter out rows that have this field"
             onClick={(e) => { e.stopPropagation(); onAddFilter(makeFilter(field.sqlExpr, '', '=')); }}
           >
-            <Icon name="minus-circle" size="xs" />
+            <Icon name="filter-minus" size="xs" />
           </button>
           <button
             className={`${styles.actionBtn} ${isSelected ? styles.actionBtnActive : ''}`}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2, DateTime, dateTimeFormat, toUtc } from '@grafana/data';
 import { Icon, IconButton, LoadingPlaceholder, EmptyState, useStyles2 } from '@grafana/ui';
@@ -108,6 +108,11 @@ export function LogsTable({
   // Roving keyboard focus, independent of `selectedRow` (which opens the detail panel).
   // Arrow keys move this; Enter opens the row under it.
   const [focusIndex, setFocusIndex] = useState(-1);
+  // Which single cell's hover toolbar (filter for/out, copy, open detail) is currently mounted.
+  // Previously every data cell in every row always mounted its toolbar (just opacity:0, revealed
+  // by CSS :hover) — with a few hundred user-added columns that's tens of thousands of always-in-
+  // the-DOM IconButtons. Only the actually-hovered cell now mounts its toolbar at all.
+  const [hoveredCell, setHoveredCell] = useState<{ ri: number; ci: string } | null>(null);
   // Column drag-and-drop reorder (native HTML5 DnD — no extra dependency). draggedId tracks
   // which column is being lifted (dimmed at its origin); dragOverId tracks the current drop
   // target (highlighted) so the user always sees where a drop would land.
@@ -120,6 +125,9 @@ export function LogsTable({
   // inserted at that position on drop, rather than always appended at the end.
   const [fieldDropTargetId, setFieldDropTargetId] = useState<string | null>(null);
   const acceptsFieldDrag = Boolean(onDropField);
+  // Hoisted out of the row-render loop below — this used to run `columns.find(...)` once per
+  // row on every render, pure wasted work since `columns` doesn't change per-row.
+  const levelCol = useMemo(() => columns.find((c) => c.type === 'level'), [columns]);
   const onTableDragOver = (e: React.DragEvent) => {
     if (!acceptsFieldDrag || !e.dataTransfer.types.includes(FIELD_DRAG_MIME)) {
       return;
@@ -331,7 +339,6 @@ export function LogsTable({
           {rows.map((row, i) => {
             const isSelected = selectedRow === row;
             const isFocused = focusIndex === i;
-            const levelCol = columns.find((c) => c.type === 'level');
             const stripeColor = levelCol ? severityColor(row[levelCol.key]) : 'transparent';
             return (
               <React.Fragment key={i}>
@@ -377,6 +384,10 @@ export function LogsTable({
                         )}
                         onDragOver={(e) => onColumnFieldDragOver(e, col.id)}
                         onDrop={(e) => onColumnFieldDrop(e, col.id)}
+                        onMouseEnter={() => setHoveredCell({ ri: i, ci: col.id })}
+                        onMouseLeave={() =>
+                          setHoveredCell((prev) => (prev && prev.ri === i && prev.ci === col.id ? null : prev))
+                        }
                       >
                         <span
                           className={cx(
@@ -392,49 +403,51 @@ export function LogsTable({
                         >
                           {renderCell(col, row)}
                         </span>
-                        <div className={cx(styles.cellToolbar, 'cell-toolbar')}>
-                            {filterable && (
-                              <>
-                                <IconButton
-                                  name="search-plus"
-                                  size="sm"
-                                  tooltip="Filter for value"
-                                  aria-label={`Filter for ${col.displayName}`}
-                                  onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '='))}
-                                />
-                                <IconButton
-                                  name="search-minus"
-                                  size="sm"
-                                  tooltip="Filter out value"
-                                  aria-label={`Filter out ${col.displayName}`}
-                                  onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '!='))}
-                                />
-                              </>
-                            )}
-                            <IconButton
-                              name="copy"
-                              size="sm"
-                              tooltip="Copy value"
-                              aria-label={`Copy ${col.displayName}`}
-                              onClick={() =>
-                                navigator.clipboard.writeText(
-                                  rawValue !== null && typeof rawValue === 'object'
-                                    ? JSON.stringify(rawValue)
-                                    : String(rawValue ?? '')
-                                )
-                              }
-                            />
-                            <IconButton
-                              name="table"
-                              size="sm"
-                              tooltip="Open detail"
-                              aria-label="Open log detail"
-                              onClick={() => {
-                                setFocusIndex(i);
-                                onRowClick(row);
-                              }}
-                            />
-                        </div>
+                        {hoveredCell?.ri === i && hoveredCell.ci === col.id && (
+                          <div className={styles.cellToolbar} style={{ opacity: 1, pointerEvents: 'auto' }}>
+                              {filterable && (
+                                <>
+                                  <IconButton
+                                    name="filter-plus"
+                                    size="sm"
+                                    tooltip="Filter for value"
+                                    aria-label={`Filter for ${col.displayName}`}
+                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '='))}
+                                  />
+                                  <IconButton
+                                    name="filter-minus"
+                                    size="sm"
+                                    tooltip="Filter out value"
+                                    aria-label={`Filter out ${col.displayName}`}
+                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '!='))}
+                                  />
+                                </>
+                              )}
+                              <IconButton
+                                name="copy"
+                                size="sm"
+                                tooltip="Copy value"
+                                aria-label={`Copy ${col.displayName}`}
+                                onClick={() =>
+                                  navigator.clipboard.writeText(
+                                    rawValue !== null && typeof rawValue === 'object'
+                                      ? JSON.stringify(rawValue)
+                                      : String(rawValue ?? '')
+                                  )
+                                }
+                              />
+                              <IconButton
+                                name="table"
+                                size="sm"
+                                tooltip="Open detail"
+                                aria-label="Open log detail"
+                                onClick={() => {
+                                  setFocusIndex(i);
+                                  onRowClick(row);
+                                }}
+                              />
+                          </div>
+                        )}
                       </td>
                     );
                   })}
@@ -609,10 +622,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: relative;
     &:hover {
       box-shadow: inset 0 0 0 1px ${theme.colors.primary.border};
-    }
-    &:hover .cell-toolbar {
-      opacity: 1;
-      pointer-events: auto;
     }
   `,
   cellToolbar: css`

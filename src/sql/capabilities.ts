@@ -9,10 +9,6 @@ export interface ViewCapabilities {
   hasService: boolean;
   /** Whether trace ID + traces table are both set (enables trace-jump links). */
   hasTraces: boolean;
-  /** Whether ResourceAttributes Map is mapped (enables resource attr group in drawer). */
-  hasResourceAttrs: boolean;
-  /** Whether LogAttributes Map is mapped (enables log attr group + dotted-key filters). */
-  hasLogAttrs: boolean;
   /** Whether SpanKind is mapped (enables span-kind icon/filter). */
   hasSpanKind: boolean;
   /** Whether StatusMessage is mapped (enables status message row in span drawer). */
@@ -40,8 +36,6 @@ export function viewCapabilities(config: SourceConfig): ViewCapabilities {
     hasSeverity: Boolean(c.severity),
     hasService: Boolean(c.serviceName),
     hasTraces,
-    hasResourceAttrs: Boolean(c.resourceAttributes),
-    hasLogAttrs: Boolean(c.logAttributes),
     hasSpanKind: Boolean(c.spanKind),
     hasStatusMessage: Boolean(c.statusMessage),
     hasSpanEvents: hasTraces,

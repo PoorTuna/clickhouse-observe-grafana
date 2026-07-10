@@ -17,9 +17,9 @@ A Grafana App plugin for exploring logs and traces stored in ClickHouse.
 
 ### Logs Explorer
 
-Browse and search log data from ClickHouse with a Kibana-style interface:
+Browse and search log data from ClickHouse:
 
-- **KQL search** — filter logs using Kibana Query Language (field:value, wildcards, ranges, boolean operators)
+- **KQL search** — filter logs using a KQL-style query syntax (field:value, wildcards, ranges, boolean operators)
 - **Field sidebar** — auto-discovered columns with top-value breakdown and one-click filtering
 - **Volume histogram** — log count over time; click-and-drag to narrow the time range
 - **Filter pills** — active filters shown as removable chips

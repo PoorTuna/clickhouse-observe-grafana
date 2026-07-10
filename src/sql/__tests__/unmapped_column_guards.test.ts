@@ -41,7 +41,7 @@ describe('buildVolumeQuery', () => {
 
 describe('buildMapKeysQuery', () => {
   it('omits the time filter (not "undefined") when timestamp is unmapped', () => {
-    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, logAttributes: 'attrs' } };
+    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING } };
     const sql = buildMapKeysQuery(cfg, 'attrs');
     expect(sql).not.toContain('undefined');
     expect(sql).not.toContain('WHERE');
@@ -50,6 +50,20 @@ describe('buildMapKeysQuery', () => {
   it('includes the time filter when timestamp is mapped', () => {
     const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
     expect(sql).toContain('WHERE ts >= $__fromTime');
+  });
+
+  it('defaults to a 1000-row limit and matches HyperDX\'s execution guardrails', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
+    expect(sql).toContain('LIMIT 1000');
+    expect(sql).toContain('max_execution_time = 15');
+    expect(sql).toContain("timeout_overflow_mode = 'break'");
+    expect(sql).toContain('max_rows_to_read = 3000000');
+    expect(sql).toContain("read_overflow_mode = 'break'");
+  });
+
+  it('still honors an explicit limit override', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', 50);
+    expect(sql).toContain('LIMIT 50');
   });
 });
 

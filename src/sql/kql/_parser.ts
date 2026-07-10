@@ -1,7 +1,7 @@
 /**
  * KQL recursive-descent parser.
  *
- * Grammar (mirrors Kibana's kuery/grammar/grammar.peggy):
+ * Grammar:
  *
  *   OrQuery      → AndQuery ('or'  AndQuery)*
  *   AndQuery     → NotQuery ('and' NotQuery)*
@@ -32,7 +32,7 @@ class Parser {
   parse(): KqlNode {
     const node = this.parseOr();
     if (this.peek().type !== 'EOF') {
-      // Implicit AND with anything that follows (lenient — matches Kibana behaviour for
+      // Implicit AND with anything that follows (lenient — allows
       // space-separated terms even without an explicit "and").
       return this.foldAnd(node);
     }

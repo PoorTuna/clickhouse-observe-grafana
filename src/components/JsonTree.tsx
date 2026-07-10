@@ -36,7 +36,7 @@ function preview(v: unknown, kind: Kind): string {
 }
 
 /** Every object/array node's path, so a caller can pass this as `defaultExpanded` to fully
- *  auto-expand the tree (Kibana's JSON view default) instead of collapsing anything nested. */
+ *  auto-expand the tree instead of collapsing anything nested. */
 export function allContainerPaths(data: unknown, prefix = 'root'): Set<string> {
   const paths = new Set<string>();
   const walk = (value: unknown, path: string) => {
@@ -55,7 +55,7 @@ export function allContainerPaths(data: unknown, prefix = 'root'): Set<string> {
   return paths;
 }
 
-/** Kibana-style collapsible JSON tree — click any brace/bracket row to fold just that subtree. */
+/** Collapsible JSON tree — click any brace/bracket row to fold just that subtree. */
 export function JsonTree({ data, defaultExpanded }: JsonTreeProps) {
   const styles = useStyles2(getStyles);
   const [expanded, setExpanded] = useState<Set<string>>(defaultExpanded ?? new Set(['root']));

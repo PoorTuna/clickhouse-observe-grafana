@@ -1,6 +1,5 @@
 /**
- * KQL (Kibana Query Language) abstract syntax tree node types.
- * Grammar mirrors elastic/kibana kbn-es-query kuery/grammar/grammar.peggy.
+ * KQL abstract syntax tree node types.
  */
 
 export type KqlNode = KqlAnd | KqlOr | KqlNot | KqlIs | KqlRange;

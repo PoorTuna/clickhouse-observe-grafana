@@ -303,10 +303,14 @@ export function buildVolumeQuery(
 
   if (breakdown.kind === 'severity') {
     // Stack by severity column — no CTE, identical to the original behaviour.
-    // Lowercase in SQL (not just client-side) so mixed-case severity values (e.g. 'ERROR' vs
-    // 'error' from different log sources) group into one bucket/series instead of duplicating.
+    // No case normalization: 'INFO' and 'info' are genuinely separate values unless the data
+    // itself normalizes them — silently lower()-ing here just meant the value shown, colored, and
+    // filterable was never what was actually in the column, which is its own bug (filter clicks
+    // on a breakdown segment produced `SeverityText = 'error'` against data stored as 'ERROR',
+    // matching nothing). If a table's severity values are genuinely inconsistently cased, that's
+    // real data to show as real data, not something to paper over here.
     return [
-      `SELECT ${timeExpr} AS time, lower(toString(${breakdown.expr})) AS level, count() AS count`,
+      `SELECT ${timeExpr} AS time, toString(${breakdown.expr}) AS level, count() AS count`,
       `FROM ${tbl}`,
       whereSql || null,
       `GROUP BY time, level`,
@@ -699,8 +703,9 @@ export function buildTraceVolumeQuery(
   if (breakdown.kind === 'severity') {
     // Reused for "status" breakdown on traces (breakdown.expr = statusCode column) — the kind name
     // is generic in VolumeBreakdown, only the expr differs from the logs severity case.
+    // No case normalization — see the logs severity branch above for why.
     return [
-      `SELECT ${timeExpr} AS time, lower(toString(${breakdown.expr})) AS level, count() AS count`,
+      `SELECT ${timeExpr} AS time, toString(${breakdown.expr}) AS level, count() AS count`,
       `FROM ${tbl}`,
       whereSql || null,
       `GROUP BY time, level`,

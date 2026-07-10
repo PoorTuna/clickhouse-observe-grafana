@@ -1,5 +1,5 @@
 /**
- * Public API for the KQL (Kibana Query Language) engine.
+ * Public API for the KQL query engine.
  */
 
 export { parseKql } from './_parser';

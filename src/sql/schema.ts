@@ -19,25 +19,6 @@ export function applyOtelPreset(config: SourceConfig): SourceConfig {
   };
 }
 
-export type AttributeGroup = 'resource' | 'log' | 'scope' | 'span';
-
-/** Return the Map column name for an attribute group, or '' if absent. */
-export function getAttributeMapColumn(
-  group: AttributeGroup,
-  columns: ColumnMapping
-): string {
-  switch (group) {
-    case 'resource':
-      return columns.resourceAttributes;
-    case 'log':
-      return columns.logAttributes;
-    case 'scope':
-      return columns.scopeAttributes;
-    case 'span':
-      return columns.spanAttributes;
-  }
-}
-
 /**
  * Parse a serialized ClickHouse Map value from the DataFrame.
  * The CH datasource returns Map columns as JSON-like strings or plain objects.
@@ -134,42 +115,42 @@ export function parseJsonColumnValue(raw: unknown): Record<string, unknown> {
 }
 
 /**
- * Group log attributes by OTel category for the detail drawer.
- * `jsonColumns` — names of columns known (from field discovery) to be native ClickHouse JSON type
- * rather than Map(String,String). When omitted, every attribute column is treated as Map — the
- * original behavior — so existing callers (and Map-schema views) are unaffected.
+ * Group attribute-container columns (Map or JSON) into flattened dotted-path rows for the detail
+ * drawer. `mapColumns`/`jsonColumns` are discovered column names (field discovery — auto for
+ * both types now, no config mapping required) rather than a fixed OTel-category list: Resource/
+ * Log/Scope Attributes used to be 3 explicitly-mapped fields, but any Map-typed column is treated
+ * the same way now, matching how JSON columns already worked. `columns.spanAttributes` stays
+ * config-driven (shared with Traces, untouched by this) and is folded in alongside if mapped.
  */
 export function groupAttributes(
   row: Record<string, unknown>,
   columns: ColumnMapping,
+  mapColumns: Set<string>,
   jsonColumns?: Set<string>
-): Array<{ group: AttributeGroup; label: string; col: string; rows: GroupedAttrRow[] }> {
-  const groups: Array<{ group: AttributeGroup; label: string; col: string }> = [
-    { group: 'resource', label: 'Resource Attributes', col: columns.resourceAttributes },
-    { group: 'log', label: 'Log Attributes', col: columns.logAttributes },
-    { group: 'scope', label: 'Scope Attributes', col: columns.scopeAttributes },
-    { group: 'span', label: 'Span Attributes', col: columns.spanAttributes },
-  ];
+): Array<{ col: string; rows: GroupedAttrRow[] }> {
+  const cols = new Set<string>([...mapColumns, ...(jsonColumns ?? [])]);
+  if (columns.spanAttributes) {
+    cols.add(columns.spanAttributes);
+  }
 
-  return groups
-    .filter((g) => g.col)
-    .map((g) => {
-      const rawValue = row[g.col] ?? row[g.col.split('[')[0]];
+  return Array.from(cols)
+    .map((col) => {
+      const rawValue = row[col] ?? row[col.split('[')[0]];
       let rows: GroupedAttrRow[];
-      if (jsonColumns?.has(g.col)) {
+      if (jsonColumns?.has(col)) {
         rows = flattenJson(parseJsonColumnValue(rawValue)).map(({ key, value }) => ({
           key,
           value,
-          sqlExpr: `${g.col}.${key}`,
+          sqlExpr: `${col}.${key}`,
         }));
       } else {
         rows = Object.entries(parseMapValue(rawValue)).map(([key, value]) => ({
           key,
           value,
-          sqlExpr: `${g.col}['${key}']`,
+          sqlExpr: `${col}['${key}']`,
         }));
       }
-      return { ...g, rows };
+      return { col, rows };
     })
     .filter((g) => g.rows.length > 0);
 }

@@ -45,7 +45,16 @@ describe('buildJsonPathsQuery', () => {
     expect(sqlStr).toContain('$__fromTime');
     expect(sqlStr).toContain('$__toTime');
     expect(sqlStr).toContain('JSONAllPathsWithTypes(Payload)');
-    expect(sqlStr).toContain('LIMIT 500');
+    expect(sqlStr).toContain('LIMIT 1000');
+  });
+
+  it('defaults to a 1000-row limit and matches HyperDX\'s execution guardrails', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload');
+    expect(sqlStr).toContain('LIMIT 1000');
+    expect(sqlStr).toContain('max_execution_time = 15');
+    expect(sqlStr).toContain("timeout_overflow_mode = 'break'");
+    expect(sqlStr).toContain('max_rows_to_read = 3000000');
+    expect(sqlStr).toContain("read_overflow_mode = 'break'");
   });
 
   it('degrades to an unbounded scan when no timestamp column is mapped', () => {
@@ -85,8 +94,8 @@ describe('buildFieldIndex + resolveField — JSON paths', () => {
     expect(resolved).toEqual({ sqlExpr: 'Payload.user.id', kind: 'json' });
   });
 
-  it('without an index, the same dotted name falls back to the Map-lookup heuristic', () => {
+  it('without an index, the same dotted name resolves to null (no Map-lookup guessing)', () => {
     const resolved = resolveField('user.id', config);
-    expect(resolved).toEqual({ sqlExpr: "LogAttributes['user.id']", kind: 'map' });
+    expect(resolved).toBeNull();
   });
 });

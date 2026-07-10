@@ -1,7 +1,7 @@
 /**
- * Side-by-side field diff for a handful of selected log rows — Kibana's "Compare selected"
- * action. Each selected row becomes a column; each distinct field across all selected rows
- * becomes a row, so it reads like a diff table (values that differ stand out visually).
+ * Side-by-side field diff for a handful of selected log rows — a "Compare selected" action.
+ * Each selected row becomes a column; each distinct field across all selected rows becomes a
+ * row, so it reads like a diff table (values that differ stand out visually).
  */
 import React, { useMemo } from 'react';
 import { css, cx } from '@emotion/css';

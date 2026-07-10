@@ -19,10 +19,9 @@ export interface ColumnMapping {
   statusMessage: string;
   // Span kind column (e.g. OTel SpanKind: CLIENT/SERVER/INTERNAL/PRODUCER/CONSUMER) — empty means absent.
   spanKind: string;
-  // Map columns — empty string means column absent (non-OTel tables)
+  // Map column — empty string means column absent. Shared with Traces (span resource-attrs
+  // select); Logs auto-detects Map attribute columns via field discovery, no longer reads this.
   resourceAttributes: string;
-  logAttributes: string;
-  scopeAttributes: string;
   spanAttributes: string;
 }
 
@@ -40,8 +39,6 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   statusMessage: 'StatusMessage',
   spanKind: 'SpanKind',
   resourceAttributes: 'ResourceAttributes',
-  logAttributes: 'LogAttributes',
-  scopeAttributes: 'ScopeAttributes',
   spanAttributes: 'SpanAttributes',
 };
 
@@ -59,8 +56,6 @@ export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
   statusMessage: '',
   spanKind: '',
   resourceAttributes: '',
-  logAttributes: '',
-  scopeAttributes: '',
   spanAttributes: '',
 };
 
@@ -73,6 +68,15 @@ export interface SourceConfig {
   // Kept for backwards-compat with persisted jsonData; new views leave it false.
   isOtel: boolean;
   columns: ColumnMapping;
+  /**
+   * Extra non-core columns this view loads with the grid by default, in display order — e.g.
+   * "LogAttributes.http.method". Appended after the fixed core columns (Time/Level/Service/
+   * Message), never replaces them; core columns are always emitted regardless of this list (see
+   * defaultColumns() in LogsExplorer.tsx). Undefined/empty = today's core-only behavior. Labeled
+   * "Pinned columns" in the UI — "pinned" means saved with the view, not position-locked; they
+   * remain reorderable/removable in the grid like any manually-added column (isCore: false).
+   */
+  pinnedColumns?: SelectedColumn[];
 }
 
 export const DEFAULT_SOURCE_CONFIG: SourceConfig = {

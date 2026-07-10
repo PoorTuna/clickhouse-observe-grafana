@@ -71,7 +71,8 @@ describe('buildHistogramPanel', () => {
       { kind: 'severity', expr: config.columns.severity },
       { id: 2, gridPos: { x: 0, y: 0, w: 24, h: 8 } }
     );
-    expect(panel.targets[0].rawSql).toContain(`lower(toString(${config.columns.severity})) AS level`);
+    expect(panel.targets[0].rawSql).toContain(`toString(${config.columns.severity}) AS level`);
+    expect(panel.targets[0].rawSql).not.toContain('lower(');
   });
 });
 

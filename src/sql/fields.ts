@@ -69,7 +69,14 @@ export function resolveField(rawField: string, config: SourceConfig, index?: Fie
       return { sqlExpr: bySqlExpr.sqlExpr, kind: kindForField(bySqlExpr, config) };
     }
     const byName = index.byName.get(f);
-    if (byName) {
+    // Map fields are deliberately excluded from name-based resolution — typing a bare/dotted
+    // key ("http.method") used to resolve it by matching FieldModel.name, which reads as
+    // shorthand syntax but is really just a coincidence of indexing. Explicit bracket syntax
+    // (Col['key'], handled below) or picking the field from autocomplete/sidebar (which now
+    // inserts the real sqlExpr, not the bare name — see suggest.ts) are the only ways to resolve
+    // a Map field. JSON/column fields keep name-based resolution — JSON's dotted sqlExpr already
+    // matches what a user would naturally type, so it's not a guess in the same sense.
+    if (byName && byName.source !== 'map') {
       return { sqlExpr: byName.sqlExpr, kind: kindForField(byName, config) };
     }
   }
@@ -89,16 +96,14 @@ export function resolveField(rawField: string, config: SourceConfig, index?: Fie
     return { sqlExpr: raw, kind: raw.includes('[') ? 'map' : 'exact' };
   }
 
-  // Dotted key → Map attribute lookup (logAttributes preferred, then resourceAttributes)
-  const mapCol = c.logAttributes || c.resourceAttributes;
-  if (mapCol && rawField.includes('.')) {
-    return { sqlExpr: `${mapCol}['${rawField}']`, kind: 'map' };
-  }
-
-  // Single-word unknown → try logAttributes Map access if available
-  if (mapCol) {
-    return { sqlExpr: `${mapCol}['${rawField}']`, kind: 'map' };
-  }
-
+  // No blind Map-column guessing beyond this point — a field name that doesn't match a discovered
+  // field (via `index`, checked above) or an exact config-column name is genuinely unresolved.
+  // This used to fall back to `(logAttributes || resourceAttributes)['field']` — silently guessing
+  // a Map column with no signal when the guess was wrong (query runs, returns nothing, no error).
+  // Callers already degrade gracefully on `null` (treat the field name as a direct column
+  // reference — see kqlIsToSql/kqlRangeToSql in kql/toSql.ts, buildFilterClause in queryBuilder.ts)
+  // which surfaces a real ClickHouse error for a genuinely unknown field instead of a silent
+  // empty result — explicit `Col['key']` bracket syntax above, or real field discovery, are the
+  // only ways to resolve a Map field now.
   return null;
 }

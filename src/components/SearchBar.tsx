@@ -1,9 +1,9 @@
 /**
- * KQL search bar with Kibana-style autocomplete.
+ * KQL search bar with autocomplete.
  *
- * Suggestion types mirror elastic/kibana kql/public/autocomplete/providers/:
+ * Suggestion types:
  *   field       – field names from useFields(), insert "name " (trailing space)
- *   operator    – :  :*  >=  <=  >  <   with Kibana-exact insert-text
+ *   operator    – :  :*  >=  <=  >  <   with exact insert-text
  *   value       – top values fetched from ClickHouse (debounced 250ms, cached)
  *   conjunction – "and " / "or "
  */
@@ -365,7 +365,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     text-transform: uppercase;
     letter-spacing: 0.02em;
   `,
-  // Per-type badge colors (Kibana-inspired)
+  // Per-type badge colors
   badge_field: css`
     background: ${theme.colors.primary.transparent};
     color: ${theme.colors.primary.text};

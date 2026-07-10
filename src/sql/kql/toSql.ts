@@ -47,7 +47,8 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
   // ── Exists: field:* ──────────────────────────────────────────────────────
   if (node.isExists) {
     const resolved = resolveField(node.field, config, index);
-    const expr = resolved?.sqlExpr ?? fallbackMapExpr(node.field, config);
+    // Unresolved → direct column reference, same fallback kqlIsToSql/kqlRangeToSql use below.
+    const expr = resolved?.sqlExpr ?? node.field;
     // notEmpty(toString(expr)) works for String, Map, JSON, numeric, etc.
     return `notEmpty(toString(${maybeQuote(expr)}))`;
   }
@@ -66,7 +67,7 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
     return `${maybeQuote(sqlExpr)} ILIKE ${quoteString(wildcardLike(val))}`;
   }
 
-  // Phrase — behavior is field-kind-dependent (Kibana-faithful):
+  // Phrase — behavior is field-kind-dependent:
   //   text  → word-boundary match() (full-text semantics)
   //   exact / map → exact equality (keyword-field semantics, quotes = precision)
   if (node.isPhrase) {
@@ -76,7 +77,7 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
     return `${maybeQuote(sqlExpr)} = ${quoteString(val)}`;
   }
 
-  // Unquoted text column → substring contains (Kibana full-text behaviour).
+  // Unquoted text column → substring contains (full-text behaviour).
   if (kind === 'text') {
     return `${maybeQuote(sqlExpr)} ILIKE ${quoteString('%' + escapeLike(val) + '%')}`;
   }
@@ -173,10 +174,4 @@ function escapeRe2(s: string): string {
  */
 function maybeQuote(expr: string): string {
   return quoteIdentifier(expr);
-}
-
-/** Build a map-attribute accessor for an unknown field. */
-function fallbackMapExpr(field: string, config: SourceConfig): string {
-  const mapCol = config.columns.logAttributes || config.columns.resourceAttributes;
-  return mapCol ? `${mapCol}['${field}']` : field;
 }

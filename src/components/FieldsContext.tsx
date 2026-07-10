@@ -22,6 +22,37 @@ function jsonPathCacheKey(config: SourceConfig, table: string, jsonCol: string, 
   return `${config.datasourceUid}:${config.database}:${table}:${jsonCol}:${bucket}`;
 }
 
+/**
+ * Discovery concurrency cap — Phase B (Map keys) and Phase C (JSON paths) used to fire one scan
+ * query per column via a plain Promise.all, unbounded. Each query is now individually bounded
+ * (see DISCOVERY_SETTINGS in introspection.ts, matching HyperDX's own execution guardrails), but
+ * nothing capped how many ran *at once* — a table with 50 JSON columns fired 50 concurrent scans.
+ * This staggers them instead: same total columns discovered, same accuracy, just a few at a time.
+ */
+const DISCOVERY_CONCURRENCY = 4;
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight at once. `fn` is expected to handle its
+ * own errors (both call sites here already wrap their query in try/catch and resolve to a
+ * fallback value) — a rejection from `fn` propagates out of this function same as Promise.all.
+ */
+export async function runWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 export function coarseTimeBucket(timeRange: TimeRange): string {
   // Relative strings (e.g. 'now-1h') → stable key; absolute → round to 5 min.
   if (typeof timeRange.raw.from === 'string') {
@@ -58,7 +89,9 @@ export function useFields(): FieldsContextValue {
 export interface FieldDiscoveryOpts {
   /** Table to introspect. Defaults to config.logsTable (existing Logs behavior). */
   table?: string;
-  /** Map(String,String) columns to expand into individual key fields. Defaults to the logs Map columns. */
+  /** Map(String,String) columns to expand into individual key fields. Omit to auto-detect every
+   *  Map-typed column found in phase A (the Logs default) — only pass this to narrow discovery to
+   *  a specific list, e.g. TraceExplorer's Resource/Span attribute columns. */
   mapColumns?: string[];
 }
 
@@ -78,12 +111,6 @@ export function useFieldDiscovery(
 ): FieldsContextValue {
   const { table, mapColumns } = opts;
   const resolvedTable = table ?? config.logsTable;
-  const resolvedMapColumns = useMemo(
-    () =>
-      mapColumns ?? [config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes],
-
-    [mapColumns, config.columns.resourceAttributes, config.columns.logAttributes, config.columns.scopeAttributes]
-  );
   const [fields, setFields] = useState<FieldModel[]>([]);
   // Starts true (not false): discovery always kicks off on mount once datasourceUid is known, so
   // an initial `false` is indistinguishable from "already checked, found nothing" to consumers
@@ -151,60 +178,62 @@ export function useFieldDiscovery(
     }
 
     // Phase B: Map keys (time-bounded, cached per table + coarse bucket). Fired concurrently —
-    // each column writes its own cache key, so there's no cross-column dependency. Narrowed to
-    // columns actually typed Map in phase A — mapKeys() throws ILLEGAL_TYPE_OF_ARGUMENT (CH error
-    // 43) against JSON/String columns, which some schemas use in place of the OTel-default Map.
-    const mapCols = selectMapColumns(resolvedMapColumns, columns);
+    // each column writes its own cache key, so there's no cross-column dependency.
+    // With an explicit `mapColumns` opt (TraceExplorer's own attribute-column list), narrow to
+    // just those, still filtered down to ones actually typed Map in phase A — mapKeys() throws
+    // ILLEGAL_TYPE_OF_ARGUMENT (CH error 43) against JSON/String columns. Without an explicit opt
+    // (the Logs default), auto-detect every Map-typed column found in phase A — same treatment
+    // JSON columns already get; no config field is required to enable discovery/autocomplete for
+    // a Map attribute column anymore.
+    const mapCols = mapColumns
+      ? selectMapColumns(mapColumns, columns)
+      : columns.filter((f) => f.type === 'map').map((f) => f.name);
 
-    const mapKeysPromise = Promise.all(
-      mapCols.map(async (mapCol) => {
-        const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
-        const cached = mapKeyCache.get(mKey);
-        if (cached) {
-          return { mapCol, keys: cached };
-        }
-        try {
-          const rows = await runQueryRows({
-            datasourceUid: config.datasourceUid,
-            sql: buildMapKeysQuery(config, mapCol, 500, resolvedTable),
-            timeRange,
-          });
-          const keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
-          mapKeyCache.set(mKey, keys);
-          return { mapCol, keys };
-        } catch {
-          return { mapCol, keys: [] as string[] };
-        }
-      })
-    );
+    const mapKeysPromise = runWithConcurrencyLimit(mapCols, DISCOVERY_CONCURRENCY, async (mapCol) => {
+      const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
+      const cached = mapKeyCache.get(mKey);
+      if (cached) {
+        return { mapCol, keys: cached };
+      }
+      try {
+        const rows = await runQueryRows({
+          datasourceUid: config.datasourceUid,
+          sql: buildMapKeysQuery(config, mapCol, undefined, resolvedTable),
+          timeRange,
+        });
+        const keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
+        mapKeyCache.set(mKey, keys);
+        return { mapCol, keys };
+      } catch {
+        return { mapCol, keys: [] as string[] };
+      }
+    });
 
     // Phase C: JSON paths (time-bounded, cached per table + coarse bucket) — one query per
     // JSON-typed column discovered in phase A, run concurrently alongside phase B's Map-key scans.
     const jsonCols = columns.filter((f) => f.type === 'json').map((f) => f.name);
 
-    const jsonPathsPromise = Promise.all(
-      jsonCols.map(async (jsonCol) => {
-        const jKey = jsonPathCacheKey(config, resolvedTable, jsonCol, bucket);
-        const cached = jsonPathCache.get(jKey);
-        if (cached) {
-          return { jsonCol, paths: cached };
-        }
-        try {
-          const rows = await runQueryRows({
-            datasourceUid: config.datasourceUid,
-            sql: buildJsonPathsQuery(config, jsonCol, 500, resolvedTable),
-            timeRange,
-          });
-          const paths = rows
-            .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
-            .filter((p) => p.path);
-          jsonPathCache.set(jKey, paths);
-          return { jsonCol, paths };
-        } catch {
-          return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };
-        }
-      })
-    );
+    const jsonPathsPromise = runWithConcurrencyLimit(jsonCols, DISCOVERY_CONCURRENCY, async (jsonCol) => {
+      const jKey = jsonPathCacheKey(config, resolvedTable, jsonCol, bucket);
+      const cached = jsonPathCache.get(jKey);
+      if (cached) {
+        return { jsonCol, paths: cached };
+      }
+      try {
+        const rows = await runQueryRows({
+          datasourceUid: config.datasourceUid,
+          sql: buildJsonPathsQuery(config, jsonCol, undefined, resolvedTable),
+          timeRange,
+        });
+        const paths = rows
+          .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
+          .filter((p) => p.path);
+        jsonPathCache.set(jKey, paths);
+        return { jsonCol, paths };
+      } catch {
+        return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };
+      }
+    });
 
     const [perColKeys, perColPaths] = await Promise.all([mapKeysPromise, jsonPathsPromise]);
 

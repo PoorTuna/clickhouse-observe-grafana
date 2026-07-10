@@ -26,8 +26,8 @@ interface LogsTableProps {
    *  checkbox column entirely. */
   compareSelection?: Set<number>;
   onToggleCompare?: (index: number) => void;
-  /** Enables the per-cell hover toolbar (filter for/out, copy) — Kibana shows this floating just
-   *  above whichever cell is under the cursor. Omit to hide it (e.g. read-only contexts). */
+  /** Enables the per-cell hover toolbar (filter for/out, copy), floating just above whichever
+   *  cell is under the cursor. Omit to hide it (e.g. read-only contexts). */
   onAddFilter?: (f: FilterPill) => void;
   /** Fired with a field id when a FieldSidebar row is dropped onto the table — adds it as a
    *  column. `targetId` is the column the drop landed on/near (header or body cell), so the new
@@ -64,6 +64,14 @@ export function formatTimestamp(ts: unknown): string {
   return String(ts);
 }
 
+/** Text form of a raw cell value usable as a filter/comparison value — a JSON field's value comes
+ *  back as a parsed object/array (e.g. a nested leaf or array leaf), not a primitive; stringify it
+ *  the same way the cell itself renders it, instead of `String(raw)` which would produce the
+ *  useless "[object Object]". */
+function cellTextValue(raw: unknown): string {
+  return raw !== null && typeof raw === 'object' ? JSON.stringify(raw) : String(raw ?? '');
+}
+
 function renderCell(col: SelectedColumn, row: LogRow): React.ReactNode {
   const raw = row[col.key];
   if (col.type === 'time') {
@@ -80,10 +88,7 @@ function renderCell(col: SelectedColumn, row: LogRow): React.ReactNode {
   if (raw === null || raw === undefined) {
     return '—';
   }
-  if (typeof raw === 'object') {
-    return JSON.stringify(raw);
-  }
-  return String(raw);
+  return cellTextValue(raw);
 }
 
 export function LogsTable({
@@ -372,7 +377,19 @@ export function LogsTable({
                   </td>
                   {columns.map((col) => {
                     const rawValue = row[col.key];
-                    const filterable = onAddFilter && rawValue !== null && rawValue !== undefined && typeof rawValue !== 'object';
+                    // A raw Map/JSON *container* column (added as its own column, e.g. the whole
+                    // `ResourceAttributes` blob — sqlExpr is just the bare column name, no accessor)
+                    // has no sensible equality filter — comparing a Map/JSON value to a stringified
+                    // blob never matches. A flattened *leaf* (sqlExpr like `Col['key']` or
+                    // `Col.path`) is a real scalar value and should stay filterable — its value
+                    // comes back as a parsed object/array sometimes (nested/array leaf), not
+                    // excluded outright; filtered using the same stringified form the cell already
+                    // renders (cellTextValue), same as the drawer does.
+                    const isRawContainer =
+                      (col.type === 'map' || col.type === 'json') &&
+                      !col.sqlExpr.includes('[') &&
+                      !col.sqlExpr.includes('.');
+                    const filterable = onAddFilter && rawValue !== null && rawValue !== undefined && !isRawContainer;
                     return (
                       <td
                         key={col.id}
@@ -412,14 +429,14 @@ export function LogsTable({
                                     size="sm"
                                     tooltip="Filter for value"
                                     aria-label={`Filter for ${col.displayName}`}
-                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '='))}
+                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, cellTextValue(rawValue), '='))}
                                   />
                                   <IconButton
                                     name="filter-minus"
                                     size="sm"
                                     tooltip="Filter out value"
                                     aria-label={`Filter out ${col.displayName}`}
-                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, String(rawValue), '!='))}
+                                    onClick={() => onAddFilter!(makeFilter(col.sqlExpr, cellTextValue(rawValue), '!='))}
                                   />
                                 </>
                               )}
@@ -428,13 +445,7 @@ export function LogsTable({
                                 size="sm"
                                 tooltip="Copy value"
                                 aria-label={`Copy ${col.displayName}`}
-                                onClick={() =>
-                                  navigator.clipboard.writeText(
-                                    rawValue !== null && typeof rawValue === 'object'
-                                      ? JSON.stringify(rawValue)
-                                      : String(rawValue ?? '')
-                                  )
-                                }
+                                onClick={() => navigator.clipboard.writeText(cellTextValue(rawValue))}
                               />
                               <IconButton
                                 name="table"
@@ -474,8 +485,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
       box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
     }
   `,
-  /** Dashed accent while a field from the sidebar is dragged over the table — Kibana shows the
-   *  same cue so it's obvious dropping here will add the field as a column. */
+  /** Dashed accent while a field from the sidebar is dragged over the table, so it's obvious
+   *  dropping here will add the field as a column. */
   tableWrapperDragOver: css`
     box-shadow: inset 0 0 0 2px ${theme.colors.primary.border};
   `,

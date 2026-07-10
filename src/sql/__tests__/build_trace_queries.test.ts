@@ -216,7 +216,8 @@ describe('buildTraceVolumeQuery', () => {
     });
     expect(sql).toContain('FROM "default"."otel_traces"');
     expect(sql).toContain('toStartOfInterval(Timestamp, INTERVAL 5 MINUTE)');
-    expect(sql).toContain('lower(toString(StatusCode))');
+    expect(sql).toContain('toString(StatusCode)');
+    expect(sql).not.toContain('lower(');
   });
 
   it('buckets by service with top-N + Other breakdown', () => {

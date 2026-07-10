@@ -69,7 +69,7 @@ function defaultTimeRange(): TimeRange {
   };
 }
 
-function defaultColumns(config: SourceConfig): SelectedColumn[] {
+export function defaultColumns(config: SourceConfig): SelectedColumn[] {
   const c = config.columns;
   // Only include columns for which a mapping exists. Empty mapping = column not present in this view.
   // `id` stays a stable plain name (used for React keys/reorder, unrelated to SQL); `key` must
@@ -80,9 +80,16 @@ function defaultColumns(config: SourceConfig): SelectedColumn[] {
     { id: 'serviceName', key: CORE_ALIAS.serviceName, sqlExpr: c.serviceName, displayName: 'Service', type: 'exact' },
     { id: 'body', key: CORE_ALIAS.body, sqlExpr: c.body, displayName: 'Message', type: 'text' },
   ];
-  return cols
+  const core = cols
     .filter((col) => Boolean(col.sqlExpr))
     .map((col) => ({ ...col, isCore: true }));
+  // "Pinned columns" — a per-view saved set of extra (non-core) columns appended after the fixed
+  // core set (see SourceConfig.pinnedColumns). Core is never replaced or reordered by this; a
+  // pinned entry that happens to duplicate a mapped core column's sqlExpr (e.g. someone pinned
+  // ServiceName by hand) is dropped so it doesn't render twice.
+  const coreExprs = new Set(core.map((col) => col.sqlExpr));
+  const pinned = (config.pinnedColumns ?? []).filter((col) => !coreExprs.has(col.sqlExpr));
+  return [...core, ...pinned];
 }
 
 type Action =
@@ -209,7 +216,7 @@ export function LogsExplorer() {
   const [volLoading, setVolLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
-  // Elastic-style "expand" on the log detail pane — visually overrides the splitter's flex-basis
+  // "Expand" on the log detail pane — visually overrides the splitter's flex-basis
   // without touching its underlying drag state, so collapsing back returns to whatever width the
   // user last dragged it to. Reset whenever the drawer closes so the next log opens at normal size.
   const [detailExpanded, setDetailExpanded] = useState(false);
@@ -423,7 +430,7 @@ export function LogsExplorer() {
       const volMap = new Map<number, Record<string, number>>();
       for (const r of volRows) {
         const t = typeof r['time'] === 'number' ? r['time'] : Number(r['time'] ?? 0);
-        const level = String(r['level'] ?? 'unknown').toLowerCase();
+        const level = String(r['level'] ?? 'unknown');
         const count = Number(r['count'] ?? 0);
         if (!volMap.has(t)) {
           volMap.set(t, {});
@@ -637,7 +644,7 @@ export function LogsExplorer() {
   };
 
   // Clicking a breakdown segment in the histogram pops up "filter for/out this value" (handled
-  // inside VolumeHistogram), Kibana-style, instead of the usual click-to-zoom. Wired for both
+  // inside VolumeHistogram) instead of the usual click-to-zoom. Wired for both
   // 'field' and 'severity' breakdowns — severity used to be excluded here (no field to filter by
   // was more true reasoning: this callback simply didn't handle it), which is why the severity
   // breakdown couldn't be filtered from the chart at all.
@@ -645,6 +652,8 @@ export function LogsExplorer() {
     if (breakdown.kind === 'field') {
       onAddFilter(makeFilter(breakdown.field.sqlExpr, value, op));
     } else if (breakdown.kind === 'severity' && config.columns.severity) {
+      // buildVolumeQuery's severity breakdown no longer lower()s server-side (see queryBuilder.ts)
+      // — `value` here is the real, as-stored casing, so a plain exact-match filter is correct.
       onAddFilter(makeFilter(config.columns.severity, value, op));
     }
   };
@@ -916,8 +925,7 @@ export function LogsExplorer() {
 
         {/* Two-pane: sidebar + results. The histogram now lives inside the results pane (below)
             instead of as a full-width row above it, so the sidebar spans the full height
-            alongside it — Kibana Discover's layout, rather than the sidebar only starting
-            beneath the histogram. */}
+            alongside it, rather than the sidebar only starting beneath the histogram. */}
         <div
           {...(sidebarCollapsed ? {} : bodySplitterProps)}
           className={cx(styles.body, !sidebarCollapsed && bodySplitterProps.className)}
@@ -1293,7 +1301,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     /* useSplitter sets an inline min-width: min-content on this pane, which floors it at
      * whatever its widest child (e.g. a long field name) needs — effectively locking the drag
      * handle in place well before the panel looks "small". Override with !important so dragging
-     * can actually shrink it down close to the collapsed rail, same as Kibana's sidebar. */
+     * can actually shrink it down close to the collapsed rail. */
     min-width: 60px !important;
     overflow: hidden;
   `,

@@ -1,10 +1,8 @@
 /**
  * KQL autocomplete suggestion engine.
  *
- * Mirrors elastic/kibana kql/public/autocomplete/providers/kql_query_suggestion/:
- *
  *   field       – matching field names, insert "fieldName " (trailing space)
- *   operator    – :  >=  <=  >  <  :*   with Kibana's exact insert-text + descriptions
+ *   operator    – :  >=  <=  >  <  :*   with exact insert-text + descriptions
  *   value       – top distinct values from ClickHouse, insert '"value" ' (quoted)
  *   conjunction – "and " / "or "
  *
@@ -22,7 +20,7 @@ export interface Suggestion {
   type: SuggestionType;
   text: string;          // display text
   description?: string;  // shown on the right
-  insertText: string;    // string to splice into the query (Kibana-exact)
+  insertText: string;    // string to splice into the query
   replaceStart: number;  // offset in the original query string
   replaceEnd: number;    // offset in the original query string (= cursor when inserting)
 }
@@ -41,7 +39,7 @@ export interface SuggestResult {
   valueContext?: ValueContext;
 }
 
-// ── Operator table (exact Kibana insert-text and descriptions) ─────────────
+// ── Operator table ───────────────────────────────────────────────────────
 
 const OPERATORS = [
   { text: ':',    description: 'equals some value',             insert: ': '   },
@@ -199,7 +197,7 @@ function fieldSuggestions(
   return fields
     .filter((f) => f.name.toLowerCase().includes(lp) || f.displayName.toLowerCase().includes(lp))
     .sort((a, b) => {
-      // Prefix-first (Kibana's sortPrefixFirst). Checked against both the bare key and the
+      // Prefix-first ranking. Checked against both the bare key and the
       // displayed (source-column-prefixed) name — a nested Map/JSON field's `name` is just the
       // leaf key ("k8s.namespace.name"), so typing the source column's prefix ("Resource…")
       // would otherwise never rank it as a prefix match even though that's what's on screen.
@@ -214,11 +212,16 @@ function fieldSuggestions(
       // never reads like a standalone top-level column that was made up.
       text: f.displayName,
       description: f.type,
-      // Kibana: insert name + space — always the bare key, never the display prefix. What you
+      // Insert name + space — always the bare key, never the display prefix. What you
       // type into a KQL field reference is the attribute key itself (resolved against the
       // FieldIndex); inserting the prefixed display form would produce a field name that doesn't
       // actually parse/resolve.
-      insertText: f.name + ' ',
+      // Map fields are the one exception: resolveField no longer resolves a bare/dotted Map key
+      // by name (removed — silent wrong-column guessing), so picking one from this list must
+      // insert its real bracket-accessor sqlExpr (e.g. LogAttributes['http.method']) instead —
+      // the KQL lexer treats [, ], ' as ordinary IDENT characters, so this still lexes as one
+      // field token, and resolveField's Map-accessor passthrough resolves it directly.
+      insertText: (f.source === 'map' ? f.sqlExpr : f.name) + ' ',
       replaceStart,
       replaceEnd,
     }));
@@ -258,7 +261,7 @@ function conjunctionSuggestions(cursor: number): Suggestion[] {
 }
 
 function valueToSuggestion(v: FieldValue, replaceStart: number, replaceEnd: number): Suggestion {
-  // Kibana: wrap in quotes + trailing space
+  // Wrap in quotes + trailing space
   const escaped = v.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return {
     type: 'value',

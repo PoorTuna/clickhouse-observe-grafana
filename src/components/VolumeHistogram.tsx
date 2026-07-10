@@ -79,7 +79,7 @@ export function estimateBucketCount(mode: IntervalMode, timeRange: TimeRange): n
 
 /**
  * Zero-fill missing buckets across the full time range so gaps (e.g. no logs for a stretch of a
- * day query) render as flat-zero bars instead of vanishing, matching Kibana's histogram behavior.
+ * day query) render as flat-zero bars instead of vanishing.
  * Only safe for fixed-width units (second/minute/hour/day) — ClickHouse's toStartOfInterval anchors
  * these to the Unix epoch, so `floor(t / stepMs) * stepMs` reproduces the same bucket boundaries.
  * week/month/year use calendar-relative anchors instead, so those are left sparse rather than risk
@@ -157,13 +157,13 @@ interface BreakdownClickPopover {
   clientY: number;
 }
 
-/** Compact large numbers (1,234,567 → "1.23 M") for the y-axis and tooltip, per Kibana's style. */
+/** Compact large numbers (1,234,567 → "1.23 M") for the y-axis and tooltip. */
 function formatCompact(n: number): string {
   return formattedValueToString(getValueFormat('short')(n));
 }
 
 /** Classic "nice number" rounding (Heckbert) — rounds to 1/2/5 × 10^n so axis ticks read like
- *  Kibana's (0/1/2, 0/5/10/15/20, …) instead of raw fractions of an arbitrary max. */
+ *  round numbers (0/1/2, 0/5/10/15/20, …) instead of raw fractions of an arbitrary max. */
 function niceNumber(value: number, round: boolean): number {
   const exponent = Math.floor(Math.log10(value));
   const fraction = value / 10 ** exponent;
@@ -206,7 +206,7 @@ export function VolumeHistogram({
 }: VolumeHistogramProps) {
   const styles = useStyles2(getStyles);
   const svgRef = useRef<SVGSVGElement>(null);
-  // Legend interaction (Kibana-style): click a series to isolate it (hide the rest); ctrl/cmd-
+  // Legend interaction: click a series to isolate it (hide the rest); ctrl/cmd-
   // click to toggle just that one series without touching the others. Purely a client-side view
   // filter — doesn't affect the underlying query or the "N events" total shown elsewhere.
   const [hiddenLevels, setHiddenLevels] = useState<Set<string>>(new Set());
@@ -235,10 +235,14 @@ export function VolumeHistogram({
     const bars = data.map((d) => {
       let bucketTotal = 0;
       for (const [level, count] of Object.entries(d.levels)) {
-        const key = level.toLowerCase();
-        levelSet.add(key);
+        // No case folding on the key itself — 'ERROR' and 'error' are kept as distinct series if
+        // that's genuinely what the data has. Lowercasing here used to silently rewrite the
+        // displayed/legend/filterable value, which is its own bug (see color/order lookups below
+        // for the one place lowercase is still legitimate — a cosmetic-only lookup key, never
+        // the stored/displayed value).
+        levelSet.add(level);
         bucketTotal += count;
-        levelTotals[key] = (levelTotals[key] ?? 0) + count;
+        levelTotals[level] = (levelTotals[level] ?? 0) + count;
       }
       maxTotal = Math.max(maxTotal, bucketTotal);
       return d;
@@ -248,7 +252,9 @@ export function VolumeHistogram({
     let colorMap: Record<string, string>;
 
     if (colorMode === 'breakdown') {
-      // Categorical coloring: sort by total count desc, 'other' always last.
+      // Categorical coloring: sort by total count desc, 'other' always last. 'other' is an
+      // app-generated catch-all label (top-N field breakdown), not user data, so an exact-case
+      // check against it is correct as-is.
       const otherKey = 'other';
       const seriesKeys = [...levelSet].filter((l) => l !== otherKey);
       seriesKeys.sort((a, b) => (levelTotals[b] ?? 0) - (levelTotals[a] ?? 0));
@@ -267,13 +273,20 @@ export function VolumeHistogram({
         }
       }
     } else if (colorMode === 'severity') {
-      // Severity stacking ordered by SEVERITY_ORDER.
+      // Severity stacking ordered by SEVERITY_ORDER. SEVERITY_ORDER/SEVERITY_COLORS are lowercase
+      // lookup tables for color/sort-position ONLY — .toLowerCase() here is a transient lookup
+      // key, never stored and never what's displayed or filtered. 'ERROR' and 'Error' both land
+      // in the same sort slot and get the same color (cosmetic convenience); the real casing is
+      // preserved in `allLevels`/`colorMap`'s actual keys.
+      // For each canonical order slot, keep every real-case value that matches it (case-
+      // insensitively) — if data has both 'ERROR' and 'Error', both appear, in order, at
+      // 'error''s position; the canonical lowercase string itself is never used as an entry.
       allLevels = [
-        ...SEVERITY_ORDER.filter((l) => levelSet.has(l)),
-        ...[...levelSet].filter((l) => !SEVERITY_ORDER.includes(l)),
+        ...SEVERITY_ORDER.flatMap((lower) => [...levelSet].filter((l) => l.toLowerCase() === lower)),
+        ...[...levelSet].filter((l) => !SEVERITY_ORDER.includes(l.toLowerCase())),
       ];
       colorMap = Object.fromEntries(
-        allLevels.map((l) => [l, SEVERITY_COLORS[l] ?? SEVERITY_COLORS['unknown']])
+        allLevels.map((l) => [l, SEVERITY_COLORS[l.toLowerCase()] ?? SEVERITY_COLORS['unknown']])
       );
     } else {
       // Single-stack ('none'): one accent color, no legend.
@@ -296,17 +309,14 @@ export function VolumeHistogram({
     for (const bar of bars) {
       let sum = 0;
       for (const level of visibleLevels) {
-        const rawLevel = Object.keys(bar.levels).find((k) => k.toLowerCase() === level);
-        if (rawLevel !== undefined) {
-          sum += bar.levels[rawLevel];
-        }
+        sum += bar.levels[level] ?? 0;
       }
       m = Math.max(m, sum);
     }
     return m;
   }, [bars, visibleLevels, hiddenLevels, maxTotal]);
 
-  // Round-number y-axis (Kibana-style: 0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
+  // Round-number y-axis (0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
   // niceMax (the last tick) is what bar heights actually scale against, so bars and gridlines
   // always agree. Tick *count* is capped by how much vertical room there actually is. A label's
   // own line-height needs ~20px of clearance, not just its font-size, or adjacent ticks collide —
@@ -430,8 +440,8 @@ export function VolumeHistogram({
     setHovered(null);
 
     // A drag that leaves the SVG's bounds (mouse dips below the chart, say) shouldn't cancel —
-    // Kibana keeps tracking as long as the button is held, wherever the pointer wanders. Window-
-    // level listeners (not the SVG's own onMouseMove/onMouseUp) are what make that possible.
+    // tracking should continue as long as the button is held, wherever the pointer wanders.
+    // Window-level listeners (not the SVG's own onMouseMove/onMouseUp) are what make that possible.
     const onWindowMouseMove = (ev: MouseEvent) => {
       updateSelectionRect(getXPctFromClientX(ev.clientX));
     };
@@ -473,8 +483,7 @@ export function VolumeHistogram({
     const relY = clientY - svg.getBoundingClientRect().top;
     let yOffset = height;
     for (const level of visibleLevels) {
-      const rawLevel = Object.keys(bar.levels).find((k) => k.toLowerCase() === level);
-      const count = rawLevel !== undefined ? bar.levels[rawLevel] : 0;
+      const count = bar.levels[level] ?? 0;
       if (!count) {
         continue;
       }
@@ -596,8 +605,7 @@ export function VolumeHistogram({
             return (
               <g key={d.time}>
                 {visibleLevels.map((level) => {
-                  const rawLevel = Object.keys(d.levels).find((k) => k.toLowerCase() === level);
-                  const count = rawLevel !== undefined ? d.levels[rawLevel] : 0;
+                  const count = d.levels[level] ?? 0;
                   if (!count) {
                     return null;
                   }
@@ -658,7 +666,7 @@ export function VolumeHistogram({
       {/* Legend — severity mode and field-breakdown mode both benefit from it; 'single' has
           only one color so a legend would add nothing (color-not-only is still satisfied via
           the numeric tooltip, which never depends on color alone). Click a series to isolate it,
-          ctrl/cmd-click to toggle just that one, Kibana-style. */}
+          ctrl/cmd-click to toggle just that one. */}
       {hasLegend && (
         <div className={styles.legend}>
           {allLevels.map((level) => {
@@ -715,30 +723,24 @@ export function VolumeHistogram({
           </div>
           {colorMode !== 'single' &&
             visibleLevels
-              .filter((level) => {
-                const rawLevel = Object.keys(hoveredBar.levels).find((k) => k.toLowerCase() === level);
-                return rawLevel !== undefined && hoveredBar.levels[rawLevel] > 0;
-              })
-              .map((level) => {
-                const rawLevel = Object.keys(hoveredBar.levels).find((k) => k.toLowerCase() === level)!;
-                return (
-                  <div key={level} className={styles.tooltipRow}>
-                    <span
-                      className={styles.tooltipSwatch}
-                      style={{ background: colorMap[level] ?? OTHER_COLOR }}
-                    />
-                    <span className={styles.tooltipLevel}>{level || '(empty)'}</span>
-                    <span className={styles.tooltipCount}>
-                      {formatCompact(hoveredBar.levels[rawLevel])}
-                    </span>
-                  </div>
-                );
-              })}
+              .filter((level) => (hoveredBar.levels[level] ?? 0) > 0)
+              .map((level) => (
+                <div key={level} className={styles.tooltipRow}>
+                  <span
+                    className={styles.tooltipSwatch}
+                    style={{ background: colorMap[level] ?? OTHER_COLOR }}
+                  />
+                  <span className={styles.tooltipLevel}>{level || '(empty)'}</span>
+                  <span className={styles.tooltipCount}>
+                    {formatCompact(hoveredBar.levels[level])}
+                  </span>
+                </div>
+              ))}
         </div>
       )}
 
-      {/* Breakdown-segment click popover — Kibana shows this instead of instantly applying a
-          filter, so the user picks "for"/"out" rather than guessing what a bare click will do. */}
+      {/* Breakdown-segment click popover — shown instead of instantly applying a filter, so the
+          user picks "for"/"out" rather than guessing what a bare click will do. */}
       {breakdownPopover && onBreakdownFilter && (
         <Portal>
           <div className={styles.popoverBackdrop} onClick={() => setBreakdownPopover(null)} />

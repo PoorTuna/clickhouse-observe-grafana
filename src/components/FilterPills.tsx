@@ -12,7 +12,7 @@ interface FilterPillsProps {
   onChange: (filters: FilterPill[]) => void;
 }
 
-/** Splits a pill's text into a leading "NOT" badge (Kibana's convention for negated exists/one_of
+/** Splits a pill's text into a leading "NOT" badge (the convention for negated exists/one_of
  *  filters — "NOT field is one of [...]" rather than filterLabel's "field is not one of [...]"),
  *  a bold field-name part, and the remaining plain text. filterLabel() itself stays unchanged
  *  (tests, tooltips, and AddFilterPopover's chip all depend on its exact wording) — this is a
@@ -100,9 +100,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.secondary};
     max-width: 300px;
   `,
-  /** Polarity accent — matches Kibana's vivid green (positive) / red (excluding) filter pills:
-   *  a 2px saturated border plus a matching low-opacity tint, rather than a flat gray chip with
-   *  only a subtle border-color hint. */
+  /** Polarity accent — vivid green (positive) / red (excluding) filter pills: a 2px saturated
+   *  border plus a matching low-opacity tint, rather than a flat gray chip with only a subtle
+   *  border-color hint. */
   pillPositive: css`
     border: 2px solid ${theme.colors.success.main};
     background: ${theme.colors.success.transparent};

@@ -16,6 +16,9 @@ const TRACE_ONLY_KEYS: ReadonlySet<keyof ColumnMapping> = new Set([
   'statusMessage',
   'spanKind',
   'spanAttributes',
+  // Logs auto-detects Map attribute columns via field discovery now (no config needed) — this
+  // mapping only still matters for the Traces span-resource-attrs select.
+  'resourceAttributes',
 ]);
 
 // `description` says what mapping the field actually turns on — the field name/label alone
@@ -90,17 +93,7 @@ export const COL_FIELDS: Array<{
   {
     key: 'resourceAttributes',
     label: 'Resource Attributes Map column',
-    description: 'Adds a "Resource Attributes" section to the log detail drawer and enables autocomplete for its keys.',
-  },
-  {
-    key: 'logAttributes',
-    label: 'Log Attributes Map column',
-    description: 'Adds a "Log Attributes" section to the log detail drawer and enables autocomplete for its keys.',
-  },
-  {
-    key: 'scopeAttributes',
-    label: 'Scope Attributes Map column',
-    description: 'Adds a "Scope Attributes" section to the log detail drawer and enables autocomplete for its keys.',
+    description: 'Traces page only — Logs auto-detects Map attribute columns, no mapping needed there.',
   },
   {
     key: 'spanAttributes',

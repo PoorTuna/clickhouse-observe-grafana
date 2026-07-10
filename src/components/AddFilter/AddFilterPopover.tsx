@@ -1,5 +1,5 @@
 /**
- * Kibana-style "Add filter" button + popup for the Logs Explorer toolbar.
+ * "Add filter" button + popup for the Logs Explorer toolbar.
  *
  * Opens a panel with:
  *   Field selector → Operator selector → Value input (with live autocomplete)
@@ -18,7 +18,7 @@ import { makeFilter } from '../../sql/filters';
 import { FieldValue } from '../../sql/kql/_values';
 import { useFields } from '../FieldsContext';
 
-// ── Operator definitions (Kibana ordering) ────────────────────────────────────
+// ── Operator definitions ────────────────────────────────────────────────────
 
 interface OpDef {
   label: string;
@@ -169,7 +169,7 @@ export function AddFilterPopover({ loadValues, onAddFilter }: AddFilterPopoverPr
               <span className={styles.panelTitle}>Add filter</span>
             </div>
 
-            {/* Field / Operator / Value — one row, Kibana-width, so none of the three obscures
+            {/* Field / Operator / Value — one row, wide enough that none of the three obscures
                 the others (they used to stack full-width in a much narrower panel). */}
             <div className={styles.fieldOpValueRow}>
               <div className={cx(styles.row, styles.rowInline)}>

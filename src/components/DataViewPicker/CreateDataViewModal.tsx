@@ -1,17 +1,19 @@
 /**
- * Kibana-style "Create data view" modal.
+ * "Create data view" modal.
  * Step 1: choose datasource → database → table.
  * Step 2: map timestamp + body columns, auto-detect OTel, configure name → save.
  */
-import React, { ChangeEvent, useCallback, useContext, useEffect, useState } from 'react';
+import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { dateTime, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, Checkbox, Field, Input, Modal, Select, Spinner } from '@grafana/ui';
+import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner } from '@grafana/ui';
 import { DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
 import { applyOtelPreset } from '../../sql/schema';
-import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
+import { useFieldDiscovery } from '../FieldsContext';
+import { fieldToColumn } from '../FieldSidebar/FieldSidebar';
+import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SelectedColumn, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
 
 interface CreateDataViewModalProps {
@@ -83,6 +85,16 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // "Pinned columns" — extra non-core columns this view loads with the grid by default (see
+  // SourceConfig.pinnedColumns). Stores selected FieldModel ids; order = selection order =
+  // display order. Field discovery below (same hook the sidebar/drawer use) supplies the options,
+  // including Map/JSON leaf paths like "LogAttributes.http.method" — not just top-level columns.
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [showPinned, setShowPinned] = useState(false);
+  // Stable TimeRange reference for schema-only field discovery below — created once so it doesn't
+  // change identity every render (schemaTimeRange() uses Date.now(), which would otherwise churn
+  // the discovery hook's coarse time bucket and re-fetch on every keystroke).
+  const [pinnedFieldsTimeRange] = useState<TimeRange>(() => schemaTimeRange());
 
   const resetAll = useCallback(() => {
     setStep('location');
@@ -99,7 +111,32 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setApplyOtel(false);
     setName('');
     setError('');
+    setPinnedIds([]);
+    setShowPinned(false);
   }, []);
+
+  // Field discovery for the "Pinned columns" picker — same hook FieldSidebar/LogsExplorer use,
+  // so a pinned selection is discovered exactly like a manually-added sidebar field (including
+  // Map-key and JSON-path leaves). Early-returns internally when datasourceUid is empty, so this
+  // is a no-op until step 1 is complete.
+  const pinnableFieldsConfig: SourceConfig = useMemo(
+    () => ({ ...DEFAULT_SOURCE_CONFIG, datasourceUid, database, logsTable, columns: mapping }),
+    [datasourceUid, database, logsTable, mapping]
+  );
+  const { fields: pinnableFields } = useFieldDiscovery(pinnableFieldsConfig, pinnedFieldsTimeRange);
+  // Core columns (Time/Level/Service/Message) are always shown and never removable — offering them
+  // here would be confusing (picking them would do nothing, per defaultColumns()'s de-dupe).
+  const coreExprs = useMemo(
+    () => new Set([mapping.timestamp, mapping.body, mapping.severity, mapping.serviceName].filter(Boolean)),
+    [mapping.timestamp, mapping.body, mapping.severity, mapping.serviceName]
+  );
+  const pinnableOptions: Array<SelectableValue<string>> = useMemo(
+    () =>
+      pinnableFields
+        .filter((f) => !coreExprs.has(f.sqlExpr))
+        .map((f) => ({ label: f.displayName, value: f.id })),
+    [pinnableFields, coreExprs]
+  );
 
   // Reset on open/close. isOpen is an external (parent-controlled) signal, so re-deriving
   // the modal's internal state from it here is the intended sync, not a render-time update.
@@ -118,6 +155,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       setBodyField(editingView.columns.body || NO_BODY_VALUE);
       setApplyOtel(editingView.isOtel);
       setName(editingView.name);
+      setPinnedIds((editingView.pinnedColumns ?? []).map((col) => col.id));
       goToColumnsStepFor(editingView.datasourceUid, editingView.database, editingView.logsTable, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -273,6 +311,17 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setSaving(true);
     setError('');
     try {
+      // Resolve selected pinned ids back to full SelectedColumn shapes via the same
+      // fieldToColumn() builder the sidebar uses — a pinned column is indistinguishable from one
+      // added by hand in the grid. `undefined` (not []) when nothing is picked, matching the
+      // shape of a view that never configured this. The key must still be *present* on `values`
+      // (not omitted) so editing an existing view can clear a previously-saved pinned set —
+      // updatePersonalView does a shallow `{...prev, ...updates}` merge, which only overwrites
+      // keys that appear in `updates`.
+      const pinnedColumns: SelectedColumn[] = pinnedIds
+        .map((id) => pinnableFields.find((f) => f.id === id))
+        .filter((f): f is NonNullable<typeof f> => Boolean(f))
+        .map(fieldToColumn);
       const values = {
         datasourceUid,
         database,
@@ -281,6 +330,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         isOtel: applyOtel,
         columns: mapping,
         name: name.trim() || `${database}.${logsTable}`,
+        pinnedColumns: pinnedColumns.length > 0 ? pinnedColumns : undefined,
       };
       if (editingView) {
         updatePersonalView(editingView.id, values);
@@ -467,6 +517,38 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                   // (which does configure a tracesTable) shows the full field set.
                   hideTraceFields
                 />
+              )}
+
+              <div style={{ marginBottom: 12 }}>
+                <button
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--color-text-secondary)',
+                    fontSize: '0.85em',
+                    padding: 0,
+                  }}
+                  onClick={() => setShowPinned((v) => !v)}
+                >
+                  {showPinned ? '▾' : '▸'} Pinned columns ({pinnedIds.length} selected)
+                </button>
+              </div>
+
+              {showPinned && (
+                <Field
+                  label="Pinned columns"
+                  description="Extra columns this view loads with the grid by default, in addition to Time/Level/Service/Message — which are always shown. Reorderable and removable in the grid afterward, just like any manually-added column."
+                >
+                  <MultiSelect
+                    width={36}
+                    value={pinnedIds}
+                    options={pinnableOptions}
+                    onChange={(opts) => setPinnedIds(opts.map((o) => o.value ?? '').filter(Boolean))}
+                    placeholder="Select fields to pin…"
+                    closeMenuOnSelect={false}
+                  />
+                </Field>
               )}
 
               <Field label="Data view name" required>

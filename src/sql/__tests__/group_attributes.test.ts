@@ -1,24 +1,22 @@
 /**
- * Unit tests for groupAttributes() — covers the Map-vs-JSON attribute column split added to fix
- * the Log Detail Drawer emitting invalid Map-accessor SQL (`col['key']`) for native JSON columns.
+ * Unit tests for groupAttributes() — flattens Map/JSON attribute-container columns into dotted-
+ * path rows for the detail drawer. Since the "auto-detect Map columns" change, `mapColumns` is a
+ * discovered-column Set (mirrors `jsonColumns`) rather than being driven by the 3 now-removed
+ * "Resource/Log/Scope Attributes" config fields — tests pass the Set explicitly per case.
  */
 
 import { groupAttributes } from '../schema';
 import { ColumnMapping, OTEL_COLUMN_MAPPING } from '../../types';
 
-const columns: ColumnMapping = {
-  ...OTEL_COLUMN_MAPPING,
-  resourceAttributes: 'ResourceAttributes',
-  logAttributes: 'LogAttributes',
-};
+const columns: ColumnMapping = { ...OTEL_COLUMN_MAPPING };
 
-describe('groupAttributes — Map columns (no jsonColumns arg, back-compat)', () => {
+describe('groupAttributes — Map columns', () => {
   it('flattens a Map column to one row per key with bracket-accessor sqlExpr', () => {
     const row = {
       LogAttributes: { 'http.method': 'GET', 'http.status': '200' },
     };
-    const groups = groupAttributes(row, columns);
-    const log = groups.find((g) => g.group === 'log')!;
+    const groups = groupAttributes(row, columns, new Set(['LogAttributes']));
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
     expect(log.rows).toEqual(
       expect.arrayContaining([
         { key: 'http.method', value: 'GET', sqlExpr: "LogAttributes['http.method']" },
@@ -27,19 +25,28 @@ describe('groupAttributes — Map columns (no jsonColumns arg, back-compat)', ()
     );
   });
 
-  it('treats every attribute column as Map when jsonColumns is omitted, even if the value is a nested object', () => {
+  it('treats a Map column as Map even if a value is a nested object', () => {
     const row = { LogAttributes: { user: { id: '42' } } };
-    const groups = groupAttributes(row, columns);
-    const log = groups.find((g) => g.group === 'log')!;
-    // Old behavior: top-level key only, nested object stringified — not exploded.
+    const groups = groupAttributes(row, columns, new Set(['LogAttributes']));
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
+    // Map values are stringified, not recursed into — that's JSON's job (see below).
     expect(log.rows).toEqual([
       { key: 'user', value: '{"id":"42"}', sqlExpr: "LogAttributes['user']" },
     ]);
   });
 
-  it('omits a group with no attributes', () => {
-    const groups = groupAttributes({ LogAttributes: {} }, columns);
-    expect(groups.find((g) => g.group === 'log')).toBeUndefined();
+  it('omits a column with no attributes', () => {
+    const groups = groupAttributes({ LogAttributes: {} }, columns, new Set(['LogAttributes']));
+    expect(groups.find((g) => g.col === 'LogAttributes')).toBeUndefined();
+  });
+
+  it('flattens multiple discovered Map columns independently, not just a fixed 3-slot list', () => {
+    const row = {
+      LogAttributes: { 'http.method': 'GET' },
+      SomeOtherMapCol: { foo: 'bar' },
+    };
+    const groups = groupAttributes(row, columns, new Set(['LogAttributes', 'SomeOtherMapCol']));
+    expect(groups.map((g) => g.col).sort()).toEqual(['LogAttributes', 'SomeOtherMapCol']);
   });
 });
 
@@ -50,8 +57,8 @@ describe('groupAttributes — JSON columns (jsonColumns provided)', () => {
     const row = {
       LogAttributes: { user: { id: '42', name: 'bob' }, http: { method: 'GET' } },
     };
-    const groups = groupAttributes(row, columns, jsonColumns);
-    const log = groups.find((g) => g.group === 'log')!;
+    const groups = groupAttributes(row, columns, new Set(), jsonColumns);
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
     expect(log.rows).toEqual(
       expect.arrayContaining([
         { key: 'user.id', value: '42', sqlExpr: 'LogAttributes.user.id' },
@@ -64,15 +71,15 @@ describe('groupAttributes — JSON columns (jsonColumns provided)', () => {
 
   it('parses a JSON column serialized as a string', () => {
     const row = { LogAttributes: JSON.stringify({ user: { id: '7' } }) };
-    const groups = groupAttributes(row, columns, jsonColumns);
-    const log = groups.find((g) => g.group === 'log')!;
+    const groups = groupAttributes(row, columns, new Set(), jsonColumns);
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
     expect(log.rows).toEqual([{ key: 'user.id', value: '7', sqlExpr: 'LogAttributes.user.id' }]);
   });
 
   it('treats an array leaf as a single stringified value, not recursing into it', () => {
     const row = { LogAttributes: { tags: ['a', 'b'] } };
-    const groups = groupAttributes(row, columns, jsonColumns);
-    const log = groups.find((g) => g.group === 'log')!;
+    const groups = groupAttributes(row, columns, new Set(), jsonColumns);
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
     expect(log.rows).toEqual([{ key: 'tags', value: '["a","b"]', sqlExpr: 'LogAttributes.tags' }]);
   });
 
@@ -81,15 +88,26 @@ describe('groupAttributes — JSON columns (jsonColumns provided)', () => {
       LogAttributes: { user: { id: '1' } }, // JSON
       ResourceAttributes: { 'service.name': 'api' }, // still Map
     };
-    const groups = groupAttributes(row, columns, jsonColumns);
-    const resource = groups.find((g) => g.group === 'resource')!;
+    const groups = groupAttributes(row, columns, new Set(['ResourceAttributes']), jsonColumns);
+    const resource = groups.find((g) => g.col === 'ResourceAttributes')!;
     expect(resource.rows).toEqual([
       { key: 'service.name', value: 'api', sqlExpr: "ResourceAttributes['service.name']" },
     ]);
   });
 
   it('returns no rows for an empty or absent JSON column', () => {
-    const groups = groupAttributes({}, columns, jsonColumns);
-    expect(groups.find((g) => g.group === 'log')).toBeUndefined();
+    const groups = groupAttributes({}, columns, new Set(), jsonColumns);
+    expect(groups.find((g) => g.col === 'LogAttributes')).toBeUndefined();
+  });
+});
+
+describe('groupAttributes — spanAttributes (still config-driven, shared with Traces)', () => {
+  it('folds in columns.spanAttributes when mapped, even outside mapColumns/jsonColumns', () => {
+    const row = { SpanAttributes: { 'db.system': 'postgres' } };
+    const groups = groupAttributes(row, columns, new Set(), new Set());
+    const span = groups.find((g) => g.col === columns.spanAttributes)!;
+    expect(span.rows).toEqual([
+      { key: 'db.system', value: 'postgres', sqlExpr: "SpanAttributes['db.system']" },
+    ]);
   });
 });

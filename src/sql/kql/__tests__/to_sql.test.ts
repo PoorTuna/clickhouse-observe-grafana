@@ -17,6 +17,21 @@ function sql(kql: string): string {
   return kqlToSql(parseKql(kql), config);
 }
 
+// A discovered Map field, as field discovery would produce it (auto-detected — no config mapping
+// needed since the Map-attribute config fields were removed). Map fields resolve ONLY via their
+// exact bracket-accessor sqlExpr now — resolveField no longer resolves a bare/dotted Map key by
+// name, even when it was discovered (index present). See sql/fields.ts's byName exclusion.
+const httpMethodMapField: FieldModel = {
+  id: 'map:LogAttributes:http.method',
+  name: 'http.method',
+  displayName: 'LogAttributes.http.method',
+  sqlExpr: "LogAttributes['http.method']",
+  type: 'string',
+  source: 'map',
+  mapColumn: 'LogAttributes',
+};
+const indexWithHttpMethod = buildFieldIndex([httpMethodMapField]);
+
 describe('kqlToSql', () => {
 
   // ── Body / bare-term search ───────────────────────────────────────────────
@@ -97,7 +112,7 @@ describe('kqlToSql', () => {
     expect(result).not.toContain("ILIKE '%foo%'");
   });
 
-  // ── Exact-kind field: Kibana-faithful (unquoted=exact, quoted=exact) ──────
+  // ── Exact-kind field (unquoted=exact, quoted=exact) ───────────────────────
 
   it('ServiceName:payment → exact = (unquoted exact field)', () => {
     const result = sql('ServiceName:payment');
@@ -199,17 +214,24 @@ describe('kqlToSql', () => {
   });
 
   // Phrase on a non-text (exact/map) field stays exact, NOT match()
-  it('ServiceName:"payment" uses = not match() (keyword field Kibana semantics)', () => {
+  it('ServiceName:"payment" uses = not match() (keyword-field semantics)', () => {
     const result = sql('ServiceName:"payment"');
     expect(result).not.toContain('match(');
     expect(result).toContain("= 'payment'");
   });
 
-  it('http.method:"GET" → map accessor = (not match())', () => {
-    const result = sql('http.method:"GET"');
+  it('explicit bracket syntax → map accessor = (not match())', () => {
+    const result = kqlToSql(parseKql(`LogAttributes['http.method']:"GET"`), config, indexWithHttpMethod);
     expect(result).toContain("LogAttributes['http.method']");
     expect(result).toContain("= 'GET'");
     expect(result).not.toContain('match(');
+  });
+
+  it('bare dotted shorthand ("http.method:GET") never resolves to a Map accessor, even when discovered', () => {
+    const withIndex = kqlToSql(parseKql('http.method:"GET"'), config, indexWithHttpMethod);
+    expect(withIndex).not.toContain('LogAttributes');
+    const withoutIndex = sql('http.method:"GET"');
+    expect(withoutIndex).not.toContain('LogAttributes');
   });
 
   // ── Named field via mapped column — no alias resolution, no level vocab ───
@@ -266,8 +288,8 @@ describe('kqlToSql', () => {
     expect(result).toContain('ServiceName');
   });
 
-  it('http.method:* → exists check via map accessor', () => {
-    const result = sql('http.method:*');
+  it('explicit bracket syntax with :* → exists check via map accessor', () => {
+    const result = kqlToSql(parseKql(`LogAttributes['http.method']:*`), config, indexWithHttpMethod);
     expect(result).toContain('notEmpty(toString(');
     expect(result).toContain("LogAttributes['http.method']");
   });
@@ -302,12 +324,10 @@ describe('kqlToSql', () => {
     expect(result).toContain('>=');
   });
 
-  it('unknown field range → direct column comparison (no no-op)', () => {
-    const noMapConfig: SourceConfig = {
-      ...config,
-      columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
-    };
-    const result = kqlToSql(parseKql('unknownRange >= 100'), noMapConfig);
+  it('unknown field range → direct column comparison (no no-op), even with resourceAttributes mapped', () => {
+    // `config` here has resourceAttributes mapped (OTEL_COLUMN_MAPPING) — this used to be exactly
+    // the condition that triggered the blind Map-guess fallback. Proving it's gone.
+    const result = sql('unknownRange >= 100');
     expect(result).toContain('"unknownRange"');
     expect(result).toContain('>= 100');
   });
@@ -374,45 +394,39 @@ describe('kqlToSql', () => {
     expect(result).toContain("= 'api'");
   });
 
-  // ── Dotted field name → Map attribute lookup ─────────────────────────────
+  // ── Dotted field name → never a Map attribute lookup, discovered or not ──
+  // No shorthand at all for Map fields: bare/dotted key never resolves to a Map accessor, even
+  // when the field was discovered. Only explicit bracket syntax (Col['key']) resolves Map fields
+  // — see the "explicit bracket syntax" tests above and sql/fields.ts's byName exclusion.
 
-  it('http.method:GET → LogAttributes map accessor', () => {
-    const result = sql('http.method:GET');
-    expect(result).toContain("= 'GET'");
-    expect(result).toContain("LogAttributes['http.method']");
+  it('http.method:GET never resolves to a Map accessor, discovered or not', () => {
+    const result = kqlToSql(parseKql('http.method:GET'), config, indexWithHttpMethod);
+    expect(result).not.toContain('LogAttributes');
   });
 
-  it('http.status_code:200 → LogAttributes map accessor', () => {
+  it('http.status_code:200 → direct column, not discovered so no Map guessing', () => {
     const result = sql('http.status_code:200');
-    expect(result).toContain("LogAttributes['http.status_code']");
+    expect(result).not.toContain('LogAttributes');
     expect(result).toContain("= '200'");
   });
 
-  it('http.path:api* → map accessor with wildcard', () => {
+  it('http.path:api* → direct column with wildcard, not discovered so no Map guessing', () => {
     const result = sql('http.path:api*');
-    expect(result).toContain("LogAttributes['http.path']");
+    expect(result).not.toContain('LogAttributes');
     expect(result).toContain("ILIKE 'api%'");
   });
 
   // ── Unknown field → direct column (not body fallback) ───────────────────
 
-  it('completely unknown field queries it as a direct column', () => {
-    const noMapConfig: SourceConfig = {
-      ...config,
-      columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
-    };
-    const result = kqlToSql(parseKql('unknownfield:value'), noMapConfig);
+  it('completely unknown field queries it as a direct column, even with resourceAttributes mapped', () => {
+    const result = sql('unknownfield:value');
     expect(result).toContain('"unknownfield"');
     expect(result).toContain("= 'value'");
     expect(result).not.toContain('Body');
   });
 
   it('unknown field with wildcard queries it as a direct column with ILIKE', () => {
-    const noMapConfig: SourceConfig = {
-      ...config,
-      columns: { ...config.columns, logAttributes: '', resourceAttributes: '' },
-    };
-    const result = kqlToSql(parseKql('unknownfield:val*'), noMapConfig);
+    const result = sql('unknownfield:val*');
     expect(result).toContain('"unknownfield"');
     expect(result).toContain("ILIKE 'val%'");
     expect(result).not.toContain('Body');
@@ -467,9 +481,10 @@ describe('kqlToSql', () => {
     expect(result).not.toContain('LogAttributes');
   });
 
-  it('without a matching discovered field, the same dotted name still falls back to Map lookup', () => {
+  it('without a matching discovered field, the same dotted name falls back to a direct column (no Map guessing)', () => {
     const result = kqlToSql(parseKql('user.id:5'), config);
-    expect(result).toContain("LogAttributes['user.id']");
+    expect(result).not.toContain('LogAttributes');
+    expect(result).toContain("= '5'");
   });
 
   it('an already-resolved JSON sqlExpr passed back in (e.g. from a FilterPill) is not re-wrapped', () => {

@@ -14,12 +14,13 @@ import {
   Pagination,
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
-import { FieldModel } from '../sql/fieldModel';
+import { FieldModel, FieldType } from '../sql/fieldModel';
 import { groupAttributes, flattenJson, parseJsonColumnValue } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp, severityColor } from './LogsTable';
 import { makeColumnKey, fieldToColumn } from './FieldSidebar/FieldSidebar';
+import { FIELD_TYPE_ICONS } from './FieldSidebar/fieldIcons';
 import { JsonTree, allContainerPaths } from './JsonTree';
 
 interface LogDetailDrawerProps {
@@ -44,7 +45,7 @@ interface LogDetailDrawerProps {
   /** Currently-selected table columns — drives the "selected only" toggle and the add/remove-column action. */
   columns: SelectedColumn[];
   onClose: () => void;
-  /** Elastic-style "expand" toggle — grows the detail pane to near-full width. Omit to hide the button. */
+  /** "Expand" toggle — grows the detail pane to near-full width. Omit to hide the button. */
   expanded?: boolean;
   onToggleExpanded?: () => void;
   onAddFilter: (filter: FilterPill) => void;
@@ -59,7 +60,7 @@ interface LogDetailDrawerProps {
 
 type DrawerTab = 'table' | 'json';
 
-/** Kibana shows 50 keys per page in the flat field list — mirrored here. */
+/** Flat field list is paginated 50 keys per page. */
 const FIELDS_PAGE_SIZE = 50;
 /** Attribute values longer than this render truncated, with a "Show more" toggle. */
 const VALUE_TRUNCATE_LEN = 300;
@@ -108,6 +109,7 @@ export function LogDetailDrawer({
   const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
   const effectiveRow = detailRow ?? row;
   const hydrating = Boolean(detailLoading) && !detailRow;
+  const c = config.columns;
   const jsonColumns = useMemo(
     () =>
       new Set(
@@ -115,26 +117,46 @@ export function LogDetailDrawer({
       ),
     [fields]
   );
+  // Auto-detected Map-typed columns (no config mapping required, same as jsonColumns above) —
+  // any of these gets flattened into dotted-path rows by groupAttributes below, instead of
+  // requiring the 3 "Resource/Log/Scope Attributes" fields the Logs data-view editor used to have.
+  const mapColumns = useMemo(
+    () =>
+      new Set(
+        (fields ?? []).filter((f) => f.source === 'column' && f.type === 'map').map((f) => f.name)
+      ),
+    [fields]
+  );
+  // sqlExpr -> discovered type, used to prefix each flat row with a type icon.
+  const typeByExpr = useMemo(
+    () => new Map((fields ?? []).map((f) => [f.sqlExpr, f.type] as const)),
+    [fields]
+  );
+  const resolveType = (sqlExpr: string): FieldType => {
+    if (sqlExpr === c.timestamp || sqlExpr === CORE_ALIAS.timestamp) {
+      return 'time';
+    }
+    return typeByExpr.get(sqlExpr) ?? 'string';
+  };
 
-  // Kibana's JSON tab renders fully expanded by default — every object/array node open, not
+  // The JSON tab renders fully expanded by default — every object/array node open, not
   // just the root.
   const jsonExpandedPaths = useMemo(() => allContainerPaths(effectiveRow), [effectiveRow]);
 
-  // Flat Field | Value table (Kibana's default) — no OTel category grouping. Map/JSON container
+  // Flat Field | Value table — no OTel category grouping. Map/JSON container
   // columns (ResourceAttributes, LogAttributes, …) are excluded in their raw blob form and
   // replaced by their already-flattened dotted-path children from groupAttributes, so
   // "LogAttributes.http.method" is its own row instead of one giant stringified-object row.
-  const c = config.columns;
   const containerCols = useMemo(
-    () => new Set([c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes].filter(Boolean)),
-    [c.resourceAttributes, c.logAttributes, c.scopeAttributes, c.spanAttributes]
+    () => new Set([...mapColumns, ...jsonColumns, ...(c.spanAttributes ? [c.spanAttributes] : [])]),
+    [mapColumns, jsonColumns, c.spanAttributes]
   );
   const attrGroups = useMemo(
-    () => groupAttributes(effectiveRow, config.columns, jsonColumns),
-    [effectiveRow, config.columns, jsonColumns]
+    () => groupAttributes(effectiveRow, config.columns, mapColumns, jsonColumns),
+    [effectiveRow, config.columns, mapColumns, jsonColumns]
   );
   const allRows = useMemo(() => {
-    const flat: Array<{ key: string; value: string; sqlExpr: string }> = [];
+    const flat: Array<{ key: string; value: string; sqlExpr: string; type: FieldType }> = [];
     for (const [k, v] of Object.entries(effectiveRow)) {
       if (!k || containerCols.has(k)) {
         continue;
@@ -151,7 +173,7 @@ export function LogDetailDrawer({
         const leaves = flattenJson(parseJsonColumnValue(v));
         if (leaves.length > 0) {
           for (const leaf of leaves) {
-            flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}` });
+            flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}`, type: 'string' });
           }
           continue;
         }
@@ -162,15 +184,17 @@ export function LogDetailDrawer({
           ? formatTimestamp(v)
           : v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
         sqlExpr: k,
+        type: resolveType(k),
       });
     }
     for (const g of attrGroups) {
       for (const r of g.rows) {
-        flat.push({ key: `${g.col}.${r.key}`, value: r.value, sqlExpr: r.sqlExpr });
+        flat.push({ key: `${g.col}.${r.key}`, value: r.value, sqlExpr: r.sqlExpr, type: resolveType(r.sqlExpr) });
       }
     }
     return flat.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  }, [effectiveRow, containerCols, attrGroups, c.timestamp, jsonColumns]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveRow, containerCols, attrGroups, c.timestamp, jsonColumns, typeByExpr]);
 
   // Reset per-log UI state (not the search/selected-only filters, which the user likely wants to
   // keep applied while stepping through prev/next) whenever a new log is opened.
@@ -220,7 +244,7 @@ export function LogDetailDrawer({
     return key.toLowerCase().includes(q) || String(value).toLowerCase().includes(q);
   };
 
-  const renderAttrRow = (field: string, value: string, sqlExpr: string = field) => {
+  const renderAttrRow = (field: string, value: string, sqlExpr: string = field, type: FieldType = 'string') => {
     const clickhouseField = sqlExpr;
     const isSelected = isColumnSelected(clickhouseField);
     if (selectedOnly && !isSelected) {
@@ -232,7 +256,10 @@ export function LogDetailDrawer({
     const displayValue = isLong && !isValueExpanded ? value.slice(0, VALUE_TRUNCATE_LEN) + '…' : value;
     return (
       <div key={field} className={styles.attrRow}>
-        <span className={styles.attrKey} title={field}>{field}</span>
+        <span className={styles.attrKey} title={field}>
+          <Icon className={styles.attrTypeIcon} name={FIELD_TYPE_ICONS[type] as any} size="sm" />
+          {field}
+        </span>
         <span className={styles.attrValue}>
           {displayValue}
           {isLong && (
@@ -289,8 +316,21 @@ export function LogDetailDrawer({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <div className={styles.panelTitleRow}>
-          <span className={styles.panelTitle}>Log detail</span>
+          {severity && (
+            <span className={styles.panelSeverity} style={{ color: severityColor(severity) }}>
+              {severity.toUpperCase()}
+            </span>
+          )}
+          <span className={styles.panelTitle} title={service ?? undefined}>{service ?? 'Log'}</span>
+          <span className={styles.summaryTime}>{timestamp}</span>
           <div className={styles.summarySpacer} />
+          {(onPrev || onNext) && (
+            <div className={styles.navGroup}>
+              <IconButton name="angle-up" size="sm" tooltip="Previous log" onClick={onPrev} disabled={!onPrev} />
+              {navLabel && <span className={styles.navLabel}>{navLabel}</span>}
+              <IconButton name="angle-down" size="sm" tooltip="Next log" onClick={onNext} disabled={!onNext} />
+            </div>
+          )}
           {onToggleExpanded && (
             <IconButton
               name={expanded ? 'angle-double-right' : 'angle-double-left'}
@@ -301,31 +341,6 @@ export function LogDetailDrawer({
             />
           )}
           <IconButton name="times" size="lg" tooltip="Close" aria-label="Close log detail" onClick={onClose} />
-        </div>
-        <div className={styles.summary}>
-          <span className={styles.summaryTime}>{timestamp}</span>
-          {severity && (
-            <span
-              className={styles.severityChip}
-              style={{ color: severityColor(severity), borderColor: severityColor(severity) }}
-            >
-              {severity.toUpperCase()}
-            </span>
-          )}
-          {service && (
-            <span className={styles.serviceChip}>
-              <Icon name="apps" size="xs" />
-              {service}
-            </span>
-          )}
-          <div className={styles.summarySpacer} />
-          {(onPrev || onNext) && (
-            <div className={styles.navGroup}>
-              <IconButton name="angle-up" size="sm" tooltip="Previous log" onClick={onPrev} disabled={!onPrev} />
-              {navLabel && <span className={styles.navLabel}>{navLabel}</span>}
-              <IconButton name="angle-down" size="sm" tooltip="Next log" onClick={onNext} disabled={!onNext} />
-            </div>
-          )}
         </div>
         <TabsBar>
           <Tab
@@ -370,7 +385,7 @@ export function LogDetailDrawer({
             {hydrating && <Spinner size="sm" />}
           </div>
 
-          {/* Flat Field | Value table — Kibana's default, no OTel category grouping. */}
+          {/* Flat Field | Value table — no OTel category grouping. */}
           {(() => {
             const visible = allRows
               .filter((r) => filterMatch(r.key, r.value))
@@ -385,7 +400,7 @@ export function LogDetailDrawer({
                   <span className={styles.attrValue}>Value</span>
                 </div>
                 <div className={styles.attrList}>
-                  {pageRows.map((r) => renderAttrRow(r.key, r.value, r.sqlExpr))}
+                  {pageRows.map((r) => renderAttrRow(r.key, r.value, r.sqlExpr, r.type))}
                 </div>
                 {numberOfPages > 1 && (
                   <div className={styles.fieldsPagination}>
@@ -420,18 +435,27 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   panelHeader: css`
     flex-shrink: 0;
-    padding: ${theme.spacing(1)} ${theme.spacing(1.5)} 0;
+    padding: ${theme.spacing(1.25)} ${theme.spacing(1.5)} 0;
     border-bottom: 1px solid ${theme.colors.border.weak};
   `,
   panelTitleRow: css`
     display: flex;
     align-items: center;
-    margin-bottom: ${theme.spacing(0.5)};
+    gap: ${theme.spacing(1)};
+    margin-bottom: ${theme.spacing(1)};
   `,
   panelTitle: css`
-    font-size: ${theme.typography.h6.fontSize};
+    font-size: ${theme.typography.body.fontSize};
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.primary};
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  `,
+  panelSeverity: css`
+    font-size: ${theme.typography.bodySmall.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
+    flex-shrink: 0;
   `,
   panelBody: css`
     flex: 1;
@@ -455,31 +479,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: ${theme.spacing(1)} 0;
   `,
   // ── Header summary ────────────────────────────────────────────────────────
-  summary: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    flex-wrap: wrap;
-  `,
   summaryTime: css`
     font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.body.fontSize};
+    font-size: ${theme.typography.bodySmall.fontSize};
     color: ${theme.colors.text.secondary};
     font-variant-numeric: tabular-nums;
-  `,
-  severityChip: css`
-    font-size: 13px;
-    font-weight: ${theme.typography.fontWeightMedium};
-    border: 1px solid;
-    border-radius: ${theme.shape.radius.default};
-    padding: 1px ${theme.spacing(0.75)};
-  `,
-  serviceChip: css`
-    display: inline-flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    font-size: ${theme.typography.body.fontSize};
-    color: ${theme.colors.text.secondary};
   `,
   summarySpacer: css`
     flex: 1;
@@ -538,28 +542,27 @@ const getStyles = (theme: GrafanaTheme2) => ({
   attrListHeader: css`
     display: flex;
     gap: ${theme.spacing(1.5)};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)};
-    font-size: ${theme.typography.body.fontSize};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
+    font-size: ${theme.typography.bodySmall.fontSize};
     font-weight: ${theme.typography.fontWeightMedium};
     color: ${theme.colors.text.secondary};
-    border-bottom: 1px solid ${theme.colors.border.weak};
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
     & > span:first-of-type {
-      width: 40%;
-      min-width: 100px;
+      width: 44%;
+      min-width: 110px;
       flex-shrink: 0;
     }
   `,
-  attrList: css`
-    padding: ${theme.spacing(0.5)};
-  `,
+  attrList: css``,
   attrRow: css`
     display: flex;
     align-items: flex-start;
     gap: ${theme.spacing(1.5)};
-    padding: ${theme.spacing(0.75)};
-    border-radius: ${theme.shape.radius.default};
+    padding: ${theme.spacing(1)};
     font-size: ${theme.typography.body.fontSize};
-    line-height: 1.6;
+    line-height: 1.7;
+    border-bottom: 1px solid ${theme.colors.border.weak};
     &:hover {
       background: ${theme.colors.action.hover};
     }
@@ -568,16 +571,24 @@ const getStyles = (theme: GrafanaTheme2) => ({
     }
   `,
   attrKey: css`
-    font-family: ${theme.typography.fontFamilyMonospace};
-    color: ${theme.colors.text.secondary};
-    width: 40%;
-    min-width: 100px;
+    display: flex;
+    align-items: flex-start;
+    gap: ${theme.spacing(0.75)};
+    color: ${theme.colors.text.primary};
+    width: 44%;
+    min-width: 110px;
     flex-shrink: 0;
     word-break: break-word;
     overflow-wrap: anywhere;
   `,
+  attrTypeIcon: css`
+    flex-shrink: 0;
+    margin-top: 3px;
+    color: ${theme.colors.text.secondary};
+  `,
   attrValue: css`
     font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
     color: ${theme.colors.text.primary};
     word-break: break-word;
     overflow-wrap: anywhere;

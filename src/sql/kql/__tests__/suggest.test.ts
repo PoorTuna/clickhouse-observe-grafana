@@ -55,8 +55,10 @@ describe('getSuggestions', () => {
     const { suggestions } = getSuggestions('k8s', 3, nestedFields);
     const s = suggestions.find((sug) => sug.type === 'field');
     expect(s?.text).toBe('ResourceAttributes.k8s.namespace.name');
-    // Inserted text into the query must stay the bare key — the prefixed form doesn't resolve.
-    expect(s?.insertText).toBe('k8s.namespace.name ');
+    // Map fields insert their real bracket-accessor sqlExpr, not the bare key — resolveField no
+    // longer resolves a bare/dotted Map key by name (removed blind guessing), so autocomplete has
+    // to spell out the explicit accessor for the picked field to actually resolve.
+    expect(s?.insertText).toBe("ResourceAttributes['k8s.namespace.name'] ");
   });
 
   // ── After field + space → operators ────────────────────────────────────────
@@ -67,7 +69,7 @@ describe('getSuggestions', () => {
     expect(suggestions.every((s) => s.type === 'operator')).toBe(true);
   });
 
-  it('operator ":" has Kibana insert-text ": "', () => {
+  it('operator ":" has insert-text ": "', () => {
     const q = 'Body ';
     const { suggestions } = getSuggestions(q, q.length, fields);
     const colon = suggestions.find((s) => s.text === ':');
@@ -102,7 +104,7 @@ describe('getSuggestions', () => {
     expect(suggestions[0].type).toBe('value');
   });
 
-  it('value insert-text is quoted with trailing space (Kibana-exact)', () => {
+  it('value insert-text is quoted with trailing space', () => {
     const values = [{ value: 'error', count: 10 }];
     const q = 'SeverityText:';
     const { suggestions } = getSuggestions(q, q.length, fields, values);
@@ -128,7 +130,7 @@ describe('getSuggestions', () => {
     expect(texts).toContain('or');
   });
 
-  it('conjunction insert-text has trailing space (Kibana-exact)', () => {
+  it('conjunction insert-text has trailing space', () => {
     const q = 'SeverityText:error ';
     const { suggestions } = getSuggestions(q, q.length, fields);
     const and = suggestions.find((s) => s.text === 'and');

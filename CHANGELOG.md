@@ -10,6 +10,51 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.4] — 2026-07-11
+
+### Added
+
+- **Pinned columns.** A data view can now save a set of extra (non-core) columns that load with
+  the grid by default — configured in the Create/Edit data view modal, reusing the same field
+  discovery the sidebar already uses (including Map/JSON leaf paths). Core columns (Time/Level/
+  Service/Message) stay fixed and non-removable, as before.
+
+### Changed
+
+- **Log detail drawer redesigned:** sans-serif field labels with a type icon per row, monospace
+  values, airier rows with hairline separators, and a minimal header (severity + service +
+  timestamp + nav, no redundant "Log detail" title).
+- **Map attribute columns (Resource/Log/Scope Attributes) are now auto-detected**, the same way
+  JSON columns already were — no config mapping required. The 3 corresponding fields in the Logs
+  data-view editor are gone; the log detail drawer auto-flattens any discovered Map column, not
+  just previously-configured ones.
+- **KQL search no longer guesses a Map column for an unrecognized field name.** Typing a bare/
+  dotted field that wasn't actually discovered (e.g. `http.method:GET` before/without discovery)
+  used to silently wrap it in `LogAttributes['...']` and return nothing if wrong — it now resolves
+  only via real field discovery or explicit `Col['key']` bracket syntax; an unresolved field
+  surfaces a real ClickHouse error instead of a silent empty result.
+- **Field-discovery scan queries (Map keys / JSON paths) are now execution-bounded**, matching
+  HyperDX's own limits: `max_execution_time=15`, `max_rows_to_read=3000000`, graceful partial
+  results on overflow instead of an unbounded scan. Discovery also caps concurrency at 4 scans in
+  flight at once instead of firing one per column unbounded.
+
+### Fixed
+
+- **Severity histogram breakdown filter matched nothing.** The breakdown query used to lowercase
+  severity server-side for display grouping (`lower(toString(...))`) but the filter-click action
+  compared the real column against that lowercased value — `SeverityText = 'error'` never matches
+  data stored as `'ERROR'`. Removed the lowercasing entirely — the histogram now displays, colors,
+  and filters using the real stored casing throughout.
+- **JSON fields couldn't be filtered from the log table at all.** A cell's raw value comes back as
+  a parsed object for JSON fields, and the filter button was unconditionally hidden for any
+  object-typed cell. Filtering now works for JSON leaf values (stringified the same way the cell
+  already displays them); filtering a whole raw Map/JSON *container* column (e.g. the entire
+  `ResourceAttributes` blob added directly, not a flattened leaf) is excluded on purpose — verified
+  against ClickHouse directly that comparing a Map column to a stringified blob is a hard query
+  error, not just a semantic no-op.
+
+---
+
 ## [0.3.3] — 2026-07-09
 
 ### Fixed
@@ -66,10 +111,10 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ### Fixed
 
-- **Filter pills didn't match Kibana's look.** Squared corners (was fully rounded), a thicker
+- **Filter pills looked flat and unclear.** Squared corners (was fully rounded), a thicker
   saturated polarity border with a matching tint instead of a flat gray chip, and negated
-  exists/one-of filters now show a "NOT" prefix (e.g. "NOT field is one of [...]") matching
-  Kibana's wording — display-only, `filterLabel()`'s underlying text is unchanged.
+  exists/one-of filters now show a "NOT" prefix (e.g. "NOT field is one of [...]") — display-only,
+  `filterLabel()`'s underlying text is unchanged.
 - **Compare modal collapsed multi-line messages (e.g. stack traces) onto one line.** The value
   cell had no `white-space: pre-wrap`, so embedded line breaks were silently collapsed by the
   default `white-space: normal`.
@@ -81,7 +126,7 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ### Added
 
-- **Kibana Discover-style Logs Explorer overhaul.** Resizable sidebar/table/detail panes, inline
+- **Logs Explorer overhaul.** Resizable sidebar/table/detail panes, inline
   log detail panel (replaces the old overlay drawer), flat searchable field sidebar, zebra-striped
   rows with uniform 2-line message clamping, drag-to-reorder table columns, drag a field from the
   sidebar onto the table to add it as a column at the exact position dropped, click-to-filter
@@ -138,8 +183,8 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
   dynamic) are now discovered alongside `Map` keys and surfaced as first-class fields — sidebar,
   KQL autocomplete, filters, and column selection all work the same way they already did for Map
   attributes.
-- **Collapsible JSON tree in the log detail drawer.** The JSON tab now renders a Kibana-style
-  per-node collapsible tree instead of a flat `JSON.stringify` dump.
+- **Collapsible JSON tree in the log detail drawer.** The JSON tab now renders a per-node
+  collapsible tree instead of a flat `JSON.stringify` dump.
 
 ### Fixed
 
@@ -221,7 +266,7 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ### Changed
 
-- **Log detail drawer overhaul** — rebuilt as an Elastic-Discover-style document view: sticky
+- **Log detail drawer overhaul** — rebuilt as a document view: sticky
   header summary (time, severity, service, prev/next navigation), `Table` / `JSON` tabs, a real
   two-column field/value layout (long field names now wrap cleanly instead of breaking
   mid-word), a "selected only" filter, and select-text-in-log-line → "line contains" filtering.
@@ -453,7 +498,7 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ### Added
 
-#### Histogram interval + breakdown controls (Kibana parity)
+#### Histogram interval + breakdown controls
 
 Two controls sit in a header bar above the volume histogram, framed as a panel card:
 
@@ -482,8 +527,8 @@ chart area at normal height.
 #### Bucket hover highlight
 
 Hovering a bucket shows a subtle full-height highlight band behind the bars at that
-column (`theme.colors.action.hover`), matching Kibana Discover's bucket hover UX.
-The band tracks the cursor, is hidden during drag-select, and clears on mouse leave.
+column (`theme.colors.action.hover`). The band tracks the cursor, is hidden during
+drag-select, and clears on mouse leave.
 
 #### New constants (`src/constants.ts`)
 - `SINGLE_STACK_COLOR` — accent color for no-breakdown bars.
@@ -515,7 +560,7 @@ Clicking it opens a popup panel (portal-positioned, click-outside to dismiss) wi
 
 - **Field dropdown** — searchable, populated from `useFields()` (same source as KQL autocomplete:
   `system.columns` introspection plus Map-key discovery via `buildMapKeysQuery`).
-- **Operator dropdown** — eight operators matching Kibana Discover's layout:
+- **Operator dropdown** — eight operators:
   `is`, `is not`, `is one of`, `is not one of`, `exists`, `does not exist`,
   `contains`, `does not contain`.
 - **Value input** — autocompletes live top values from ClickHouse via the existing

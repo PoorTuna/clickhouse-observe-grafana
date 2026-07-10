@@ -1,5 +1,21 @@
 import { SourceConfig } from '../types';
 
+/**
+ * Execution guardrails for field-discovery scans (Map keys / JSON paths) — these queries scan
+ * real data (bounded by time range, but the row cost to reach that many DISTINCT results isn't
+ * bounded by LIMIT alone; see buildJsonPathsQuery's doc comment). Matches the values HyperDX
+ * (github.com/hyperdxio/hyperdx, packages/common-utils/src/core/metadata.ts) uses for the same
+ * class of query: stop after 15s or 3M rows read and return whatever was found so far instead of
+ * hanging or erroring — 'break' overflow mode degrades to a partial result, which the caller
+ * (FieldsContext.tsx) already tolerates (a column found 0/fewer keys this pass, not a crash).
+ */
+const DISCOVERY_SETTINGS =
+  `SETTINGS max_execution_time = 15, timeout_overflow_mode = 'break', ` +
+  `max_rows_to_read = 3000000, read_overflow_mode = 'break'`;
+
+/** Matches HyperDX's DEFAULT_MAX_KEYS. */
+const DEFAULT_DISCOVERY_LIMIT = 1000;
+
 /** All databases available on this ClickHouse server. */
 export function buildDatabasesQuery(): string {
   return `SELECT name FROM system.databases ORDER BY name`;
@@ -27,7 +43,7 @@ export function buildColumnsQuery(database: string, table: string): string {
 export function buildMapKeysQuery(
   config: SourceConfig,
   mapColumn: string,
-  limit = 500,
+  limit = DEFAULT_DISCOVERY_LIMIT,
   table: string = config.logsTable
 ): string {
   const tbl = `"${config.database}"."${table}"`;
@@ -37,6 +53,7 @@ export function buildMapKeysQuery(
     `FROM ${tbl}`,
     ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
     `LIMIT ${limit}`,
+    DISCOVERY_SETTINGS,
   ].filter(Boolean).join('\n');
 }
 
@@ -54,7 +71,7 @@ export function buildMapKeysQuery(
 export function buildJsonPathsQuery(
   config: SourceConfig,
   jsonColumn: string,
-  limit = 500,
+  limit = DEFAULT_DISCOVERY_LIMIT,
   table: string = config.logsTable
 ): string {
   const tbl = `"${config.database}"."${table}"`;
@@ -72,5 +89,6 @@ export function buildJsonPathsQuery(
     `)`,
     `ARRAY JOIN arrayZip(mapKeys(m), mapValues(m)) AS pt`,
     `LIMIT ${limit}`,
+    DISCOVERY_SETTINGS,
   ].filter(Boolean).join('\n');
 }

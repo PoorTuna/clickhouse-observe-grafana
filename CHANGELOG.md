@@ -10,6 +10,31 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.5] — 2026-07-12
+
+### Fixed
+
+- **Log detail drawer didn't fill its pane width**, leaving dead space to the right that grew
+  larger when the drawer was expanded — the panel's root element had no `width: 100%`, so it sat
+  at its intrinsic content width instead of stretching to fill the splitter pane.
+- **Top toolbar (Data view / filters / Saved / time range / refresh) could clip/overflow** at
+  narrower viewport widths instead of wrapping to a second line.
+- **Row expand/detail icon gave no feedback.** The button's hover style targeted a CSS class that
+  was never actually applied (a typo'd selector), so hovering never highlighted it; the icon also
+  never reflected whether that row's detail was open. It now highlights and swaps to a "collapse"
+  glyph when the row's drawer is open.
+
+### Changed
+
+- **Fields sidebar auto-minimizes when the log detail drawer opens** (frees width for the drawer)
+  and restores on close — unless it was already manually collapsed before opening.
+- Sidebar collapse/expand icons switched to the double-chevron (`«`/`»`) style.
+- Log detail drawer's field/value table now has zebra-striped rows.
+- Minor container CSS hardening (`width: 100%` / `box-sizing: border-box`) to prevent similar
+  width-collapse issues elsewhere in the Logs Explorer layout.
+
+---
+
 ## [0.3.4] — 2026-07-11
 
 ### Added

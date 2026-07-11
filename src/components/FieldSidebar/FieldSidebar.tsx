@@ -84,7 +84,7 @@ export function FieldSidebar({
           <Icon name="sync" size="xs" />
         </button>
         <button className={styles.refreshBtn} onClick={onCollapse} title="Collapse sidebar">
-          <Icon name="angle-left" size="xs" />
+          <Icon name="angle-double-left" size="xs" />
         </button>
       </div>
 

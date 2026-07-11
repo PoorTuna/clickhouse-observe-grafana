@@ -267,6 +267,23 @@ export function LogsExplorer() {
 
   // Sidebar collapse + resizable width, persisted across sessions
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Auto-minimize the fields sidebar while the log detail drawer is open — it's competing for the
+  // same horizontal space the drawer needs. Restores on close, but only if the user hadn't already
+  // collapsed it manually before opening (so a manual collapse isn't clobbered by the drawer closing).
+  const wasOpenRef = useRef(false);
+  const collapsedBeforeOpenRef = useRef(false);
+  useEffect(() => {
+    const isOpen = selectedRow !== null;
+    if (isOpen && !wasOpenRef.current) {
+      setSidebarCollapsed((prev) => {
+        collapsedBeforeOpenRef.current = prev;
+        return true;
+      });
+    } else if (!isOpen && wasOpenRef.current && !collapsedBeforeOpenRef.current) {
+      setSidebarCollapsed(false);
+    }
+    wasOpenRef.current = isOpen;
+  }, [selectedRow]);
   const { containerProps: bodySplitterProps, primaryProps: sidebarPaneProps, secondaryProps: resultsPaneProps, splitterProps } =
     useSplitter({
       direction: 'row',
@@ -937,7 +954,7 @@ export function LogsExplorer() {
                 title="Show fields"
                 onClick={() => setSidebarCollapsed(false)}
               >
-                <Icon name="angle-right" size="sm" />
+                <Icon name="angle-double-right" size="sm" />
               </button>
             </div>
           ) : (
@@ -1160,6 +1177,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
   container: css`
     display: flex;
     flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     height: 100%;
     padding: ${theme.spacing(2)};
     gap: ${theme.spacing(1)};
@@ -1168,7 +1188,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
   header: css`
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: ${theme.spacing(1)};
+    row-gap: ${theme.spacing(0.5)};
   `,
   headerSpacer: css`
     flex: 1;

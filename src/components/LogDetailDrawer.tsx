@@ -18,7 +18,7 @@ import { FieldModel, FieldType } from '../sql/fieldModel';
 import { groupAttributes, flattenJson, parseJsonColumnValue } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
-import { formatTimestamp, severityColor } from './LogsTable';
+import { formatTimestamp } from './LogsTable';
 import { makeColumnKey, fieldToColumn } from './FieldSidebar/FieldSidebar';
 import { FIELD_TYPE_ICONS } from './FieldSidebar/fieldIcons';
 import { JsonTree, allContainerPaths } from './JsonTree';
@@ -105,8 +105,6 @@ export function LogDetailDrawer({
   // the full row ever arriving. The flat field/value table below reads `effectiveRow`, which is
   // the hydrated full row once available, falling back to the narrow row (never blank).
   const timestamp = formatTimestamp(row[CORE_ALIAS.timestamp]);
-  const severity = row[CORE_ALIAS.severity] ? String(row[CORE_ALIAS.severity]) : null;
-  const service = row[CORE_ALIAS.serviceName] ? String(row[CORE_ALIAS.serviceName]) : null;
   const effectiveRow = detailRow ?? row;
   const hydrating = Boolean(detailLoading) && !detailRow;
   const c = config.columns;
@@ -316,12 +314,6 @@ export function LogDetailDrawer({
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
         <div className={styles.panelTitleRow}>
-          {severity && (
-            <span className={styles.panelSeverity} style={{ color: severityColor(severity) }}>
-              {severity.toUpperCase()}
-            </span>
-          )}
-          <span className={styles.panelTitle} title={service ?? undefined}>{service ?? 'Log'}</span>
           <span className={styles.summaryTime}>{timestamp}</span>
           <div className={styles.summarySpacer} />
           {(onPrev || onNext) && (
@@ -427,11 +419,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
   panel: css`
     display: flex;
     flex-direction: column;
+    width: 100%;
     height: 100%;
     background: ${theme.colors.background.primary};
     border: 1px solid ${theme.colors.border.weak};
     border-radius: ${theme.shape.radius.default};
     overflow: hidden;
+    box-sizing: border-box;
   `,
   panelHeader: css`
     flex-shrink: 0;
@@ -443,19 +437,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: center;
     gap: ${theme.spacing(1)};
     margin-bottom: ${theme.spacing(1)};
-  `,
-  panelTitle: css`
-    font-size: ${theme.typography.body.fontSize};
-    font-weight: ${theme.typography.fontWeightMedium};
-    color: ${theme.colors.text.primary};
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  `,
-  panelSeverity: css`
-    font-size: ${theme.typography.bodySmall.fontSize};
-    font-weight: ${theme.typography.fontWeightMedium};
-    flex-shrink: 0;
   `,
   panelBody: css`
     flex: 1;
@@ -563,6 +544,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     font-size: ${theme.typography.body.fontSize};
     line-height: 1.7;
     border-bottom: 1px solid ${theme.colors.border.weak};
+    &:nth-of-type(even) {
+      background: ${theme.colors.background.secondary};
+    }
     &:hover {
       background: ${theme.colors.action.hover};
     }

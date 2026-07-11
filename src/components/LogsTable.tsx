@@ -366,13 +366,18 @@ export function LogsTable({
                   <td className={cx(styles.td, styles.expandTd)}>
                     <button
                       className={styles.expandBtn}
-                      title="Open detail"
+                      title={isSelected ? 'Close detail' : 'Open detail'}
+                      aria-pressed={isSelected}
                       onClick={() => {
                         setFocusIndex(i);
                         onRowClick(row);
                       }}
                     >
-                      <Icon name="expand-arrows" size="xs" className={styles.expandIcon} />
+                      <Icon
+                        name={isSelected ? 'compress-arrows' : 'expand-arrows'}
+                        size="xs"
+                        className={cx('expand-icon', styles.expandIcon, isSelected && styles.expandIconActive)}
+                      />
                     </button>
                   </td>
                   {columns.map((col) => {
@@ -564,6 +569,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   expandIcon: css`
     color: ${theme.colors.text.disabled};
+  `,
+  expandIconActive: css`
+    color: ${theme.colors.primary.text};
   `,
   expandBtn: css`
     background: transparent;

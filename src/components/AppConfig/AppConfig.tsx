@@ -9,9 +9,10 @@ import { lastValueFrom } from 'rxjs';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, Field, Input, Select, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Field, FieldSet, Input, Select, Switch, useStyles2 } from '@grafana/ui';
 import { applyOtelPreset } from '../../sql/schema';
 import {
+  AiProviderConfig,
   AppJsonData,
   DataView,
   DEFAULT_SOURCE_CONFIG,
@@ -31,6 +32,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
+
+  const [ai, setAi] = useState<AiProviderConfig>(
+    () => jsonData?.ai ?? { enabled: false, baseUrl: '', model: '', token: '' }
+  );
+  function patchAi(patch: Partial<AiProviderConfig>) {
+    setAi((prev) => ({ ...prev, ...patch }));
+  }
 
   // Datasource list is read synchronously from getDataSourceSrv() (no fetch), so it's
   // lazy-initialized here instead of populated from an effect.
@@ -74,7 +82,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       await updatePlugin(plugin.meta.id, {
         enabled,
         pinned,
-        jsonData: { dataViews: views },
+        jsonData: { ...jsonData, dataViews: views, ai },
       });
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
@@ -198,6 +206,43 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
           </div>
         ))}
       </div>
+
+      <FieldSet label="AI Assistant">
+        <div className={styles.empty} style={{ marginBottom: 12 }}>
+          Optional &ldquo;Guess with AI&rdquo; assist for column mapping. Points at any OpenAI-compatible
+          `/chat/completions` endpoint — hosted or self-hosted (e.g. Ollama). The token below is
+          stored in plain settings (not encrypted secret storage) and is readable by any browser
+          user of this plugin — fine for local/self-hosted models, not for a sensitive API key.
+        </div>
+        <Field label="Enable AI column guessing">
+          <Switch value={ai.enabled} onChange={(e) => patchAi({ enabled: e.currentTarget.checked })} />
+        </Field>
+        <Field label="API base URL" description="OpenAI-compatible base URL, e.g. http://localhost:11434/v1">
+          <Input
+            width={40}
+            value={ai.baseUrl}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => patchAi({ baseUrl: e.target.value.trim() })}
+            placeholder="http://localhost:11434/v1"
+          />
+        </Field>
+        <Field label="Model" description="Model name as understood by that endpoint, e.g. qwen2.5:1.5b">
+          <Input
+            width={40}
+            value={ai.model}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => patchAi({ model: e.target.value.trim() })}
+            placeholder="qwen2.5:1.5b"
+          />
+        </Field>
+        <Field label="API token (optional)" description="Leave blank for endpoints with no auth (e.g. local Ollama).">
+          <Input
+            width={40}
+            type="password"
+            value={ai.token ?? ''}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => patchAi({ token: e.target.value })}
+            placeholder="sk-…"
+          />
+        </Field>
+      </FieldSet>
 
       {saveStatus === 'error' && (
         <Alert title="Save failed" severity="error">

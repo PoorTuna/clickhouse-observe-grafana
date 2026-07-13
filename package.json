@@ -10,6 +10,7 @@
     "lint": "eslint --cache .",
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
     "demo": "ts-node --transpile-only scripts/record-demo.ts",
+    "eval:ai": "ts-node --transpile-only src/ai/columnGuess.eval.ts",
     "e2e": "playwright test",
     "server": "docker compose up --build",
     "sign": "sign-plugin"

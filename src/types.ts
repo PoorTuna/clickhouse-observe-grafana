@@ -248,6 +248,20 @@ export interface DataView extends SourceConfig {
   createdAt: string;
 }
 
+/**
+ * AI provider config for the "Guess with AI" column-mapping assist. Points at any
+ * OpenAI-compatible `/chat/completions` endpoint (hosted or self-hosted, e.g. Ollama).
+ * NOTE: `token` is stored in plain jsonData (not secureJsonData), so it is readable by any
+ * browser user of this plugin — acceptable for local/self-hosted use, NOT a secret store.
+ * Do not put a production API key with broad billing access here.
+ */
+export interface AiProviderConfig {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  token?: string;
+}
+
 // Plugin jsonData shape
 export interface AppJsonData {
   /** Admin-managed shared data views (v1+). */
@@ -256,6 +270,8 @@ export interface AppJsonData {
   defaultDataViewId?: string;
   /** LEGACY single-source config — migrated to a shared DataView on load. */
   sourceConfig?: SourceConfig;
+  /** AI column-mapping assist settings, admin-configured. */
+  ai?: AiProviderConfig;
 }
 
 export interface SavedSearch {

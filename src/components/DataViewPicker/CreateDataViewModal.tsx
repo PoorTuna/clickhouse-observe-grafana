@@ -7,7 +7,7 @@ import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useSta
 import { dateTime, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner } from '@grafana/ui';
-import { DataViewContext } from '../App/App';
+import { AiConfigContext, DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
 import { applyOtelPreset } from '../../sql/schema';
@@ -15,6 +15,8 @@ import { useFieldDiscovery } from '../FieldsContext';
 import { fieldToColumn } from '../FieldSidebar/FieldSidebar';
 import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SelectedColumn, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
+import { COL_FIELDS, TRACE_ONLY_KEYS } from '../../columnFields';
+import { guessColumnMapping, TableColumn } from '../../ai/columnGuess';
 
 interface CreateDataViewModalProps {
   isOpen: boolean;
@@ -50,6 +52,8 @@ type Step = 'location' | 'columns';
 
 export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDataViewModalProps) {
   const { createPersonalView, updatePersonalView, setActiveViewId } = useContext(DataViewContext);
+  const aiCfg = useContext(AiConfigContext);
+  const aiOn = Boolean(aiCfg?.enabled && aiCfg?.baseUrl && aiCfg?.model);
 
   // Step tracking
   const [step, setStep] = useState<Step>('location');
@@ -76,7 +80,11 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // Step 2 state
   const [columnOptions, setColumnOptions] = useState<Array<SelectableValue<string>>>([]);
   const [allColumnOptions, setAllColumnOptions] = useState<Array<SelectableValue<string>>>([]);
+  // Raw name+type pairs for the current table — the input the AI guesser needs (allColumnOptions
+  // only carries names). Populated alongside columnOptions/allColumnOptions in goToColumnsStepFor.
+  const [tableColumns, setTableColumns] = useState<TableColumn[]>([]);
   const [loadingCols, setLoadingCols] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [timestampField, setTimestampField] = useState<string | undefined>(undefined);
   const [bodyField, setBodyField] = useState<string | undefined>(undefined);
   const [mapping, setMapping] = useState<ColumnMapping>({ ...EMPTY_COLUMN_MAPPING });
@@ -104,6 +112,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setDbOptions([]);
     setTableOptions([]);
     setColumnOptions([]);
+    setTableColumns([]);
     setTimestampField(undefined);
     setBodyField(undefined);
     setMapping({ ...EMPTY_COLUMN_MAPPING });
@@ -239,6 +248,12 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         .map((r) => String(r['name'] ?? ''))
         .filter(Boolean);
 
+      setTableColumns(
+        typedRows
+          .map((r) => ({ name: String(r['name'] ?? ''), type: String(r['type'] ?? '') }))
+          .filter((c) => c.name)
+      );
+
       // Timestamp picker: only columns with an actual date/time type.
       const dateTimeCols = typedRows
         .filter((r) => isTimeColumnType(String(r['type'] ?? '')))
@@ -285,6 +300,31 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       ...prev,
       body: v === NO_BODY_VALUE ? '' : v,
     }));
+  }
+
+  // Shared by the basic (timestamp+body) and advanced (full non-trace set) "Guess with AI"
+  // buttons — only the target field list and how the result is applied differ.
+  async function runAiGuess(targets: Array<keyof ColumnMapping>, applyBasicFields: boolean) {
+    if (!aiCfg || aiBusy || tableColumns.length === 0) {
+      return;
+    }
+    setAiBusy(true);
+    setError('');
+    try {
+      const guessed = await guessColumnMapping(aiCfg, { table: logsTable, columns: tableColumns, targets });
+      setMapping((prev) => {
+        const next = { ...prev, ...guessed };
+        if (applyBasicFields) {
+          setTimestampField(next.timestamp || NO_TIME_VALUE);
+          setBodyField(next.body || NO_BODY_VALUE);
+        }
+        return next;
+      });
+    } catch (e) {
+      setError(`AI guess failed: ${(e as Error)?.message ?? e}`);
+    } finally {
+      setAiBusy(false);
+    }
   }
 
   function onApplyOtelChange(checked: boolean) {
@@ -462,6 +502,26 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                 />
               </div>
 
+              {aiOn && (
+                <div style={{ marginBottom: 12 }}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={aiBusy ? undefined : 'ai'}
+                    disabled={aiBusy}
+                    onClick={() => runAiGuess(['timestamp', 'body'], true)}
+                  >
+                    {aiBusy ? (
+                      <>
+                        <Spinner inline size="sm" /> Guessing…
+                      </>
+                    ) : (
+                      'Guess with AI'
+                    )}
+                  </Button>
+                </div>
+              )}
+
               <Field
                 label="Timestamp field"
                 description='Pick the column that holds the event time, or choose "No time field" for timeless tables.'
@@ -516,6 +576,16 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                   // effect on anything this view can do. Only AppConfig's traces-aware mapping
                   // (which does configure a tracesTable) shows the full field set.
                   hideTraceFields
+                  onAiGuess={
+                    aiOn
+                      ? () =>
+                          runAiGuess(
+                            COL_FIELDS.map((f) => f.key).filter((k) => !TRACE_ONLY_KEYS.has(k)),
+                            true
+                          )
+                      : undefined
+                  }
+                  aiBusy={aiBusy}
                 />
               )}
 

@@ -4,6 +4,7 @@ import { AppRootProps } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
 import { ROUTES } from '../../constants';
 import {
+  AiProviderConfig,
   AppJsonData,
   DataView,
   DEFAULT_SOURCE_CONFIG,
@@ -29,6 +30,9 @@ const TraceExplorer = React.lazy(() =>
 
 /** Shared context so all pages can access the current SourceConfig (= active DataView). */
 export const SourceConfigContext = createContext<SourceConfig>(DEFAULT_SOURCE_CONFIG);
+
+/** AI column-mapping assist settings (admin-configured) — null when never configured. */
+export const AiConfigContext = createContext<AiProviderConfig | null>(null);
 
 export interface DataViewContextValue {
   views: DataView[];
@@ -122,16 +126,18 @@ function App(props: AppRootProps<AppJsonData>) {
     <DataViewContext.Provider
       value={{ views: allViews, activeView, setActiveViewId, createPersonalView, updatePersonalView, deletePersonalView }}
     >
-      <SourceConfigContext.Provider value={sourceConfig}>
-        <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>
-          <Routes>
-            <Route path={`${ROUTES.Traces}/:traceId`} element={<TraceExplorer />} />
-            <Route path={ROUTES.Traces} element={<TraceExplorer />} />
-            {/* Default: Logs Explorer */}
-            <Route path="*" element={<LogsExplorer />} />
-          </Routes>
-        </Suspense>
-      </SourceConfigContext.Provider>
+      <AiConfigContext.Provider value={jsonData.ai ?? null}>
+        <SourceConfigContext.Provider value={sourceConfig}>
+          <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>
+            <Routes>
+              <Route path={`${ROUTES.Traces}/:traceId`} element={<TraceExplorer />} />
+              <Route path={ROUTES.Traces} element={<TraceExplorer />} />
+              {/* Default: Logs Explorer */}
+              <Route path="*" element={<LogsExplorer />} />
+            </Routes>
+          </Suspense>
+        </SourceConfigContext.Provider>
+      </AiConfigContext.Provider>
     </DataViewContext.Provider>
   );
 }

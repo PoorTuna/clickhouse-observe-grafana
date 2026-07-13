@@ -38,6 +38,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # Ollama — local OpenAI-compatible LLM server, used to test the "Guess with AI" column-mapping
+  # assist against a weak/self-hosted model. OLLAMA_ORIGINS=* is required so the Grafana browser
+  # frontend (a different origin) can call it directly (frontend-direct calls, no backend proxy).
+  # After first `docker compose up`, pull a small model once:
+  #   docker compose exec ollama ollama pull qwen2.5:1.5b
+  # Then in the plugin's Configuration page → AI Assistant, set:
+  #   API base URL: http://localhost:11434/v1   Model: qwen2.5:1.5b   Token: (blank)
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_ORIGINS: "*"
+    volumes:
+      - ollama_data:/root/.ollama
+
   # OTel collector — receives OTLP and ships to ClickHouse
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.114.0
@@ -53,3 +69,4 @@ services:
 
 volumes:
   clickhouse_data:
+  ollama_data:

@@ -10,14 +10,40 @@ function nextId(): string {
   return `f${Date.now()}_${_idCounter++}`;
 }
 
+/**
+ * True when two pills are functionally identical — same field, op, and value(s). Used to dedupe a
+ * true re-add of the exact same pill (a no-op), NOT to decide whether a *different* value on the
+ * same field+op should replace the existing pill. Two `!=` (or `contains`/`not_contains`) pills on
+ * one field with different values are meant to coexist (AND semantics: `x != 'a' AND x != 'b'`) —
+ * comparing field+op alone (the previous behavior) silently dropped the first one whenever a
+ * second "Filter out"/"Filter contains" action targeted the same field with a new value.
+ * `values` (one_of/not_one_of) compared order-insensitively — the same set typed/clicked in a
+ * different order is still the same filter.
+ */
+function samePill(
+  a: Pick<FilterPill, 'field' | 'op' | 'value' | 'values'>,
+  b: Pick<FilterPill, 'field' | 'op' | 'value' | 'values'>
+): boolean {
+  if (a.field !== b.field || a.op !== b.op) {
+    return false;
+  }
+  if (a.values || b.values) {
+    const av = [...(a.values ?? [])].sort();
+    const bv = [...(b.values ?? [])].sort();
+    return av.length === bv.length && av.every((v, i) => v === bv[i]);
+  }
+  return a.value === b.value;
+}
+
 export function addFilter(
   filters: FilterPill[],
   field: string,
   value: string,
   op: FilterOp = '='
 ): FilterPill[] {
-  // Replace any existing pill with the same field+op
-  const deduplicated = filters.filter((f) => !(f.field === field && f.op === op));
+  // Dedupe an exact re-add of the same field+op+value only — see samePill's doc comment for why
+  // field+op alone is wrong here.
+  const deduplicated = filters.filter((f) => !samePill(f, { field, op, value }));
   return [...deduplicated, { id: nextId(), field, value, op }];
 }
 
@@ -72,12 +98,14 @@ export function makeFilter(
 }
 
 /**
- * Add a fully-constructed pill to the filter list, deduping by field+op.
+ * Add a fully-constructed pill to the filter list, deduping an exact re-add (same field+op+value,
+ * or same field+op+values set for one_of/not_one_of) — see samePill's doc comment. A different
+ * value on the same field+op appends as a second pill rather than replacing the first.
  * Preserves `values` and `label` on the incoming pill — use this instead of
  * `addFilter` when the pill may carry multi-value or custom-label data.
  */
 export function addFilterPill(filters: FilterPill[], pill: FilterPill): FilterPill[] {
-  const deduplicated = filters.filter((f) => !(f.field === pill.field && f.op === pill.op));
+  const deduplicated = filters.filter((f) => !samePill(f, pill));
   return [...deduplicated, pill];
 }
 

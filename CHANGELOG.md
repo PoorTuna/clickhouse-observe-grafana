@@ -10,6 +10,50 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.3.6] — 2026-07-14
+
+### Added
+
+- **Shareable Logs Explorer URLs.** Search, filters, columns, sort, time range, and active data
+  view now encode into the URL as you work — copy the link (new "Copy link" button) and a
+  colleague opens the identical view. Relative time ranges (`now-24h`) stay relative, not frozen
+  to an absolute instant, matching Kibana/HyperDX convention. Columns are only encoded when
+  actually customized (not the view's untouched defaults), keeping links short.
+- **"Field has any value" filter button** in the field sidebar, alongside the existing
+  filter-empty action — one click for `notEmpty(toString(field))`.
+- **ClickHouse `Tuple`/`Nested`/`Array` column support.** Tuple columns (including nested
+  tuple-in-a-tuple, flattened to dotted names like `a.x`) are now discovered as individual
+  filterable/selectable fields, the same way Map keys and JSON paths already are — no extra query
+  needed, parsed straight from the column's type string. `Nested(...)` and plain `Array(...)`
+  columns are now typed correctly instead of falling through to `unknown`.
+
+### Fixed
+
+- **Log detail drawer was slow to open**, regressed by an earlier perf change that narrowed the
+  list query but left the drawer re-running a whole-page `SELECT *` on every row click. Replaced
+  with a single-row point lookup (millisecond-window + core-field match, `LIMIT 1`); the old
+  whole-page fetch is kept only as a fallback for the rare timestamp-precision miss.
+- **Logs Explorer ran its main queries twice on a cold load**, doubling the histogram's cost and
+  chaining the second run behind field discovery finishing (~15s on large datasets). The queries
+  no longer depend on the (async) field index directly; a guarded one-shot reconcile still re-runs
+  them if a URL/saved-search filter references a not-yet-discovered field.
+- **"Filter out" (and `contains`/multi-value filters) replaced an existing pill on the same field
+  instead of appending.** Clicking "Filter out" on two different values for the same field used
+  to silently drop the first — filters now only dedupe an exact re-add of the same field+op+value,
+  so different values on the same field correctly stack as AND.
+- **Log table header could visually overlap the first row** after adding a column — `position:
+  sticky` on a `<th>` inside a `border-collapse: collapse` table is a known cross-browser
+  fragility around reflow. Switched to `border-collapse: separate`.
+
+### Changed
+
+- **Toolbar condensed to one line** (Kibana Discover style): the search bar moved into the header
+  row instead of its own line below, and the "Search" button shrank to icon-only (Enter still
+  submits) — reclaims vertical space for the log table. Time range + refresh now wrap together as
+  one unit on narrow viewports instead of separating.
+
+---
+
 ## [0.3.5] — 2026-07-12
 
 ### Fixed

@@ -11,5 +11,7 @@ export const FIELD_TYPE_ICONS: Record<FieldType, string> = {
   boolean: 'toggle-on',
   map: 'list-ul',
   json: 'brackets-curly',
+  tuple: 'layer-group',
+  array: 'list-ol',
   unknown: 'question-circle',
 };

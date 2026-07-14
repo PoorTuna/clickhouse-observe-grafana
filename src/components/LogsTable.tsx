@@ -507,7 +507,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   table: css`
     width: 100%;
-    border-collapse: collapse;
+    // 'separate' (not 'collapse') — position:sticky on a <th> inside a collapsed-border table is
+    // a well-documented cross-browser fragility: table layout's box generation doesn't reliably
+    // reserve the sticky header's height in the normal flow with border-collapse:collapse, so a
+    // reflow (e.g. adding a column pushes the table past the container's width, toggling
+    // horizontal scroll) could make the header render stacked on top of row 1 instead of above
+    // it. border-spacing:0 keeps the visual result identical to collapsed borders since every
+    // cell already draws its own border-bottom (th below, tr below) rather than relying on
+    // adjacent cells' borders merging.
+    border-collapse: separate;
+    border-spacing: 0;
     font-size: 14px;
   `,
   th: css`
@@ -523,7 +532,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     position: sticky;
     top: 0;
-    z-index: 1;
+    // Above row content (rows have no explicit z-index / are auto-stacked) and above dataTd's
+    // hover box-shadow, but below cellToolbar's z-index:5 and FieldSidebar's Portal popovers —
+    // just needs to reliably win against the table body, not the whole page's stacking order.
+    z-index: 3;
   `,
   /** Hover feedback only for real data-column headers — the leading checkbox/expand-chevron
    *  header cells aren't interactive and shouldn't visually react on hover. */

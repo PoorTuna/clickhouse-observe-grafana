@@ -71,6 +71,13 @@ export function FieldItem({
         <div className={`${styles.actions} field-item-actions`}>
           <button
             className={styles.actionBtn}
+            title="Filter to rows where this field has any value"
+            onClick={(e) => { e.stopPropagation(); onAddFilter(makeFilter(field.sqlExpr, '', 'exists')); }}
+          >
+            <Icon name="filter-plus" size="xs" />
+          </button>
+          <button
+            className={styles.actionBtn}
             title="Filter out rows that have this field"
             onClick={(e) => { e.stopPropagation(); onAddFilter(makeFilter(field.sqlExpr, '', '=')); }}
           >

@@ -17,7 +17,7 @@ import React, {
 } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Button, Icon, useStyles2 } from '@grafana/ui';
+import { Icon, IconButton, useStyles2 } from '@grafana/ui';
 import { useFields } from './FieldsContext';
 import { getSuggestions, resolveValueContext, Suggestion } from '../sql/kql/suggest';
 import { FieldValue } from '../sql/kql/_values';
@@ -263,9 +263,10 @@ export function SearchBar({
         )}
       </div>
 
-      <Button variant="primary" onClick={commit} size="md">
-        Search
-      </Button>
+      {/* Icon-only — condensed to fit the merged single-line toolbar (see LogsExplorer.tsx's
+          header row). Enter already commits the search (onKeyDown above); this is a visible
+          affordance for that, not the only way to trigger it. */}
+      <IconButton name="search" tooltip="Search (Enter)" aria-label="Search" onClick={commit} />
     </div>
   );
 }

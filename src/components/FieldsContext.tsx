@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
-import { FieldModel, inferFieldType, selectMapColumns } from '../sql/fieldModel';
+import { FieldModel, inferFieldType, parseTupleElements, selectMapColumns } from '../sql/fieldModel';
 import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
@@ -161,6 +161,7 @@ export function useFieldDiscovery(
               sqlExpr: name,
               type,
               source: 'column' as const,
+              rawType: chType,
             };
           });
         columnCache.set(cKey, columns);
@@ -281,8 +282,30 @@ export function useFieldDiscovery(
       }
     }
 
+    // Phase D: Tuple elements — unlike Map keys / JSON paths, no query is needed: a Tuple's
+    // element list is fully determined by the type string Phase A already fetched
+    // (system.columns), so this is a synchronous parse, not another concurrent scan.
+    // See parseTupleElements' doc comment (sql/fieldModel.ts) for the one-level-flatten boundary.
+    const tupleFields: FieldModel[] = [];
+    for (const col of columns) {
+      if (col.type !== 'tuple' || !col.rawType) {
+        continue;
+      }
+      for (const el of parseTupleElements(col.rawType)) {
+        tupleFields.push({
+          id: `tuple:${col.name}:${el.name}`,
+          name: el.name,
+          displayName: `${col.name}.${el.name}`,
+          sqlExpr: `${col.name}.${el.name}`,
+          type: inferFieldType(el.type),
+          source: 'tuple',
+          tupleColumn: col.name,
+        });
+      }
+    }
+
     if (runRef.current === runId) {
-      setFields([...columns, ...mapFields, ...jsonFields]);
+      setFields([...columns, ...mapFields, ...jsonFields, ...tupleFields]);
       setLoading(false);
       setError(null);
     }

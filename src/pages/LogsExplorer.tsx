@@ -3,6 +3,7 @@ import { css, cx } from '@emotion/css';
 import { dateTime, GrafanaTheme2, PageLayoutType, rangeUtil, TimeRange } from '@grafana/data';
 import { PluginPage } from '@grafana/runtime';
 import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker, RefreshPicker, useSplitter } from '@grafana/ui';
+import { useSearchParams } from 'react-router-dom';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
@@ -19,7 +20,7 @@ import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
-import { buildLogsQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
+import { buildLogsQuery, buildLogDetailQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
 import { buildFieldIndex } from '../sql/fields';
 import { loadFieldValues } from '../sql/kql/_values';
 import { addFilterPill, makeFilter } from '../sql/filters';
@@ -40,6 +41,7 @@ import {
   VolumeDataPoint,
 } from '../types';
 import { PLUGIN_BASE_URL } from '../constants';
+import { decodeLogsState, encodeLogsState } from '../data/urlState';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 import { useAvailableHeight } from '../utils/useAvailableHeight';
 
@@ -187,11 +189,30 @@ function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
 export function LogsExplorer() {
   const styles = useStyles2(getStyles);
   const config = useContext(SourceConfigContext);
-  const { activeView } = useContext(DataViewContext);
+  const { activeView, setActiveViewId } = useContext(DataViewContext);
   const caps = viewCapabilities(config);
 
-  const [queryState, dispatch] = useReducer(queryReducer, DEFAULT_LOGS_QUERY_STATE);
-  const [timeRange, setTimeRange] = useState<TimeRange>(defaultTimeRange);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Decoded exactly once, at mount — a lazy useState initializer ignores any later change to
+  // `searchParams`'s identity, which matters because the serialize-to-URL effect below rewrites
+  // `searchParams` on every state change; re-decoding on every one of those writes would just be
+  // reading back what was just written (harmless but pointless), and reacting to a *user* editing
+  // the URL bar directly isn't a goal here (unlike TraceExplorer's route param, this state has no
+  // canonical non-URL source of truth to resync from).
+  const [initialUrlState] = useState(() => decodeLogsState(searchParams));
+
+  const [queryState, dispatch] = useReducer(
+    queryReducer,
+    DEFAULT_LOGS_QUERY_STATE,
+    (init) => ({
+      ...init,
+      ...(initialUrlState.search !== undefined ? { search: initialUrlState.search } : {}),
+      ...(initialUrlState.filters ? { filters: initialUrlState.filters } : {}),
+      ...(initialUrlState.columns ? { columns: initialUrlState.columns } : {}),
+      ...(initialUrlState.sort ? { sort: initialUrlState.sort } : {}),
+    })
+  );
+  const [timeRange, setTimeRange] = useState<TimeRange>(() => initialUrlState.timeRange ?? defaultTimeRange());
 
   // Discovered once here (not just via <FieldsProvider> in descendants) so executeQuery below can
   // resolve JSON-path/Map-key field references to the right SQL — see useFieldDiscovery's doc
@@ -199,6 +220,16 @@ export function LogsExplorer() {
   // SearchBar/etc. get the exact same discovery run rather than a second independent one.
   const fieldsState = useFieldDiscovery(config, timeRange);
   const fieldIndex = useMemo(() => buildFieldIndex(fieldsState.fields), [fieldsState.fields]);
+  // Mount-query queries (fetchLogs/fetchVolume) read the field index through this ref instead of
+  // closing over `fieldIndex` directly — see the comment on their useCallback deps below for why:
+  // depending on `fieldIndex` there made both queries re-fire the moment async field discovery
+  // completed (identity change → callback recreated → the effects that call them re-run), doubling
+  // every cold-mount query and chaining the second run behind however long discovery took (~15s on
+  // a large dataset). Kept in sync every render so callers always read the latest value.
+  const fieldIndexRef = useRef(fieldIndex);
+  useEffect(() => {
+    fieldIndexRef.current = fieldIndex;
+  }, [fieldIndex]);
 
   // Grafana's PageLayoutType.Custom chrome doesn't clamp to the viewport (see useAvailableHeight's
   // doc comment) — height:100% resolves against nothing, so without this the whole page scrolls
@@ -228,11 +259,21 @@ export function LogsExplorer() {
   // State (not a ref) because detailRow below reads it during render — a ref's `.current` can
   // only be read in effects/handlers, not render.
   const [hydratedRows, setHydratedRows] = useState<Map<string, LogRow>>(new Map());
+  // Mirrors hydratedRows for hydrateRow's "already fetched" check below — read from a callback,
+  // not render, so it can't be a useCallback dep (that would recreate hydrateRow, and therefore
+  // retrigger the effect that calls it, on every unrelated hydration commit).
+  const hydratedRowsRef = useRef(hydratedRows);
+  useEffect(() => {
+    hydratedRowsRef.current = hydratedRows;
+  }, [hydratedRows]);
   // Pages whose full rows are already cached (success only — a failed fetch is retryable).
   const hydratedPagesRef = useRef<Set<number>>(new Set());
   // Pages with a hydrate fetch in flight, so re-opening the drawer on the same page while the
   // first fetch is still running doesn't fire a second identical query.
   const hydratingPagesRef = useRef<Set<number>>(new Set());
+  // Row keys with a single-row hydrate fetch in flight — same guard as hydratingPagesRef, for
+  // hydrateRow below.
+  const hydratingRowKeysRef = useRef<Set<string>>(new Set());
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Histogram controls.
@@ -255,11 +296,37 @@ export function LogsExplorer() {
 
   // Reset query state when the active data view changes so stale field refs don't carry over.
   const prevViewId = useRef<string | undefined>(undefined);
+  // Guards the one-shot post-discovery reconcile fetch (declared with fetchLogs/fetchVolume
+  // below) — reset on view change too, since a new view means a new table and a fresh discovery
+  // cycle to reconcile against.
+  const didReconcileForDiscoveryRef = useRef(false);
+
+  // One-shot: a shared URL (`?ds=...`) selects a data view other than whatever App.tsx picked as
+  // the default. Applying it here — instead of expecting the link recipient to pick it manually —
+  // is what makes items like column/filter restoration below actually line up with the right
+  // table. Pre-seeds `prevViewId` to the URL's target *before* calling setActiveViewId, so the
+  // reset effect right below (which fires when activeView.id changes) sees a no-op transition
+  // instead of treating this URL-driven switch as a user action and wiping the query state that
+  // was just hydrated from that same URL (see initialUrlState above).
+  const appliedUrlViewRef = useRef(false);
+  useEffect(() => {
+    if (appliedUrlViewRef.current) {
+      return;
+    }
+    appliedUrlViewRef.current = true;
+    if (initialUrlState.viewId && initialUrlState.viewId !== activeView?.id) {
+      prevViewId.current = initialUrlState.viewId;
+      setActiveViewId(initialUrlState.viewId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const viewId = activeView?.id;
     if (prevViewId.current !== undefined && prevViewId.current !== viewId) {
       dispatch({ type: 'LOAD_SAVED', state: DEFAULT_LOGS_QUERY_STATE });
       setBreakdown(null);
+      didReconcileForDiscoveryRef.current = false;
     }
     prevViewId.current = viewId;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -345,6 +412,36 @@ export function LogsExplorer() {
     return queryState.columns.length > 0 ? queryState.columns : defaultColumns(config);
   }, [queryState.columns, config]);
 
+  // Keeps the URL in sync with the current shareable state, so the address bar is always a valid
+  // "copy this link" snapshot (the Copy-link button just reads window.location.href) — same field
+  // set as Saved Searches (search/filters/columns/sort/timeRange), plus the active view. `replace:
+  // true` so typing in the search box or dragging the time picker doesn't spam browser history
+  // with one entry per keystroke.
+  // On mount, this can fire once before the "apply URL view" effect above's setActiveViewId has
+  // committed, briefly writing the pre-switch view/state — harmless (replace: true, and this
+  // effect's own activeView?.id dependency makes it re-fire and correct itself once that lands).
+  useEffect(() => {
+    const next = encodeLogsState({
+      search: queryState.search,
+      filters: queryState.filters,
+      // Only encode columns when the user actually customized them (queryState.columns is
+      // non-empty) — effectiveColumns itself is NEVER empty (it falls back to defaultColumns()
+      // below), so passing it through unconditionally would bake the view's full default column
+      // set into every link even when nothing was touched. That was the bulk of a shared link's
+      // length in practice: every default-layout link carried 4+ full column objects for no
+      // reason. queryState.columns.length === 0 already means "use view defaults" everywhere else
+      // in this file — encodeLogsState's own `columns.length > 0` guard (urlState.ts) then omits
+      // the param entirely, and decodeLogsState leaves it unset on the receiving end, which
+      // correctly falls back to that view's own defaultColumns() too.
+      columns: queryState.columns.length > 0 ? effectiveColumns : [],
+      sort: queryState.sort,
+      timeRange,
+      viewId: activeView?.id,
+    });
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryState.search, queryState.filters, queryState.sort, queryState.columns, effectiveColumns, timeRange, activeView?.id]);
+
   const resolvedInterval = useMemo<ResolvedInterval>(
     () => resolveInterval(intervalMode, timeRange),
     [intervalMode, timeRange]
@@ -384,8 +481,8 @@ export function LogsExplorer() {
       // full row per page instead (see hydratePage below). Raw-SQL mode is untouched: whatever
       // the user wrote runs as-is, and the drawer reads straight off those rows, same as before.
       const sql = queryState.useRawSql
-        ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, undefined, fieldIndex)
-        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' }, fieldIndex);
+        ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, undefined, fieldIndexRef.current)
+        : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' }, fieldIndexRef.current);
 
       const logRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' });
 
@@ -418,7 +515,9 @@ export function LogsExplorer() {
         setLoading(false);
       }
     }
-  }, [config, queryState, timeRange, effectiveColumns, fieldIndex]);
+    // fieldIndex intentionally excluded — read via fieldIndexRef instead (see its declaration
+    // above): this query must run once immediately on mount, not wait for async field discovery.
+  }, [config, queryState, timeRange, effectiveColumns]);
 
   // Volume/histogram query only. Deps deliberately narrower than fetchLogs: buildVolumeQuery
   // never reads state.columns, state.sort, or raw-SQL mode (see queryBuilder.ts), so a column
@@ -436,7 +535,7 @@ export function LogsExplorer() {
       const volSql = buildVolumeQuery(config, queryState, {
         interval: { unit: resolved.unit, value: resolved.value },
         breakdown: resolveVolumeBreakdown(breakdown, config),
-      }, fieldIndex);
+      }, fieldIndexRef.current);
 
       const volRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' });
 
@@ -471,8 +570,10 @@ export function LogsExplorer() {
     // uses .search/.filters (via buildWhereConditions) — never .columns/.sort/.rawSql/.useRawSql
     // (see queryBuilder.ts). Depending on the full object would re-run this on every column/sort
     // mutation, exactly the redundant volume re-query this split was meant to eliminate.
+    // fieldIndex is also excluded — read via fieldIndexRef (see its declaration above) so this
+    // doesn't re-fire the moment field discovery completes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, queryState.search, queryState.filters, timeRange, intervalMode, breakdown, caps.hasTime, fieldIndex]);
+  }, [config, queryState.search, queryState.filters, timeRange, intervalMode, breakdown, caps.hasTime]);
 
   // Combined re-run for call sites that mean "run the whole thing again" (manual refresh button,
   // auto-refresh interval, loading a saved search) — as opposed to the narrower per-effect fetches
@@ -481,6 +582,26 @@ export function LogsExplorer() {
     fetchLogs();
     fetchVolume();
   }, [fetchLogs, fetchVolume]);
+
+  // One-shot reconcile: fetchLogs/fetchVolume no longer depend on fieldIndex (see fieldIndexRef
+  // above), so a cold mount runs each exactly once instead of waiting on/re-running after field
+  // discovery. That's correct for the common case (no filters yet), but a search/filter already
+  // active at mount (e.g. restored from a shared URL or a saved search) may reference a Map key
+  // or JSON path that hadn't been discovered when that first query built its WHERE clause. Once
+  // discovery finishes, re-run — but only once, and only if there's something to reconcile —
+  // rather than on every fields update, or this reintroduces the doubling this change removes.
+  useEffect(() => {
+    if (fieldsState.loading || didReconcileForDiscoveryRef.current) {
+      return;
+    }
+    didReconcileForDiscoveryRef.current = true;
+    if (queryState.filters.length > 0 || queryState.search.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchLogs();
+      fetchVolume();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldsState.loading]);
 
   // Fetches the full ('full' projection) rows for one grid page, so the detail drawer can show
   // Map attribute columns / "All fields" / JSON without the live list query paying SELECT *'s
@@ -542,6 +663,63 @@ export function LogsExplorer() {
       }
     },
     [config, queryState, effectiveColumns, timeRange, pageSize, fieldIndex]
+  );
+
+  // Fetches just the single row the detail drawer is open for (see buildLogDetailQuery's doc
+  // comment) — replaces hydratePage as the drawer-open fetch. hydratePage stays in use for the
+  // "Compare" action (genuinely needs several arbitrary rows) and as this function's own
+  // fallback when the point lookup can't find/build a match.
+  const hydrateRow = useCallback(
+    async (targetRow: LogRow) => {
+      if (queryState.useRawSql || !config.datasourceUid) {
+        return;
+      }
+      const key = logRowKey(targetRow);
+      if (hydratedRowsRef.current.has(key) || hydratingRowKeysRef.current.has(key)) {
+        return;
+      }
+      hydratingRowKeysRef.current.add(key);
+      const runId = runRef.current;
+      setDetailLoading(true);
+      try {
+        const sql = buildLogDetailQuery(config, targetRow, fieldIndexRef.current);
+        if (!sql) {
+          // No timestamp mapped, or the row's timestamp couldn't be parsed — fall back to the
+          // whole-page fetch rather than leaving the drawer permanently unhydrated.
+          await hydratePage(currentPage);
+          return;
+        }
+        const fullRows = await runQueryRows({
+          datasourceUid: config.datasourceUid,
+          sql,
+          timeRange,
+          refId: 'detail-row',
+        });
+        if (runRef.current !== runId) {
+          return;
+        }
+        if (fullRows.length === 0) {
+          // Point lookup missed (millisecond-window/core-field mismatch, or the row aged out of
+          // the mapped range between list-fetch and click) — fall back so the drawer isn't stuck
+          // showing only the narrow grid columns.
+          await hydratePage(currentPage);
+          return;
+        }
+        setHydratedRows((prev) => {
+          const next = new Map(prev);
+          next.set(logRowKey(fullRows[0]), fullRows[0]);
+          return next;
+        });
+      } catch {
+        // Leave unhydrated — re-opening the same row (selectedRow change) retries.
+      } finally {
+        hydratingRowKeysRef.current.delete(key);
+        if (runRef.current === runId) {
+          setDetailLoading(false);
+        }
+      }
+    },
+    [config, timeRange, queryState.useRawSql, hydratePage, currentPage]
   );
 
   useLayoutEffect(() => {
@@ -779,14 +957,16 @@ export function LogsExplorer() {
     setCompareSelection(new Set());
   }, [pageRows]);
 
-  // Ensure the current page's full rows are hydrated whenever the drawer is open (covers both
-  // opening a row and paging prev/next across a page boundary while it's open).
+  // Hydrate just the open row (see hydrateRow's doc comment) whenever the drawer opens or the
+  // selection moves — covers both clicking a row and paging prev/next inside the drawer, since
+  // both change `selectedRow`. No `currentPage` dependency: unlike the old whole-page hydrate,
+  // a single-row lookup doesn't care which grid page the row happens to be on.
   useEffect(() => {
     if (selectedRow) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      hydratePage(currentPage);
+      hydrateRow(selectedRow);
     }
-  }, [selectedRow, currentPage, hydratePage]);
+  }, [selectedRow, hydrateRow]);
 
   // Looks up the lazily-hydrated full row by content key. Undefined here covers two cases the
   // drawer treats identically (falls back to the narrow `row` prop): "not hydrated yet" in
@@ -807,11 +987,36 @@ export function LogsExplorer() {
     <FieldsContext.Provider value={fieldsState}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
-        {/* Row 1: view picker + add filter (left) + saved/dashboard/time/refresh (right) */}
+        {/* Row 1: view picker + add filter + search (left/center) + saved/dashboard/time/refresh
+            (right) — condensed onto one line (Kibana Discover style) so the table below gets the
+            vertical space the search bar's own row used to take. SearchBar itself is the
+            flex-growing element (replaces the old plain headerSpacer div) so it absorbs whatever
+            width the fixed-size controls around it don't need. `.header`'s existing flex-wrap
+            still applies on narrow viewports — DOM order means TimeRangePicker/RefreshPicker (the
+            last items) wrap to a second line first, not SearchBar. */}
         <div className={styles.header}>
           <DataViewPicker />
           <AddFilterPopover loadValues={logsLoadValues} onAddFilter={onAddFilter} />
-          <div className={styles.headerSpacer} />
+          {/* SearchBar's own root has width:100% (right for its old standalone row), which alone
+              wouldn't grow to fill the remaining space in this shared flex row — wrap it so it
+              does, independent of SearchBar's internal styling. */}
+          <div className={styles.headerSearchWrap}>
+            <SearchBar
+              value={queryState.search}
+              onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
+              onSearch={() => {}}
+              loadValues={logsLoadValues}
+            />
+          </div>
+          <ClipboardButton
+            size="sm"
+            variant="secondary"
+            icon="link"
+            getText={() => window.location.href}
+            tooltip="Copy a link to this exact view — search, filters, columns, sort, time range, and data view"
+          >
+            Copy link
+          </ClipboardButton>
           <SavedSearchMenu
             queryState={{ ...queryState, columns: effectiveColumns }}
             timeRange={timeRange}
@@ -828,37 +1033,33 @@ export function LogsExplorer() {
           >
             Add to dashboard
           </Button>
-          {caps.hasTime && (
-            <TimeRangePicker
-              value={timeRange}
-              onChange={(range) => setTimeRange(range)}
-              onChangeTimeZone={() => {}}
-              onChangeFiscalYearStartMonth={() => {}}
-              onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
-              onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
-              onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
-              timeZone="browser"
-              fiscalYearStartMonth={0}
+          {/* Grouped so they wrap together as one atomic unit when the row runs out of width —
+              without this, flex-wrap can strand RefreshPicker alone on its own line while
+              TimeRangePicker (which fit) stays on line 1, separating a control from the time
+              range it refreshes. */}
+          <div className={styles.headerTimeGroup}>
+            {caps.hasTime && (
+              <TimeRangePicker
+                value={timeRange}
+                onChange={(range) => setTimeRange(range)}
+                onChangeTimeZone={() => {}}
+                onChangeFiscalYearStartMonth={() => {}}
+                onMoveBackward={() => setTimeRange(shiftTimeRange(timeRange, -1))}
+                onMoveForward={() => setTimeRange(shiftTimeRange(timeRange, 1))}
+                onZoom={() => setTimeRange(zoomOutTimeRange(timeRange))}
+                timeZone="browser"
+                fiscalYearStartMonth={0}
+              />
+            )}
+            <RefreshPicker
+              onRefresh={executeQuery}
+              onIntervalChanged={setRefreshInterval}
+              value={refreshInterval}
+              isLoading={loading}
+              tooltip="Refresh"
+              isOnCanvas
             />
-          )}
-          <RefreshPicker
-            onRefresh={executeQuery}
-            onIntervalChanged={setRefreshInterval}
-            value={refreshInterval}
-            isLoading={loading}
-            tooltip="Refresh"
-            isOnCanvas
-          />
-        </div>
-
-        {/* Row 2: search */}
-        <div className={styles.toolbar}>
-          <SearchBar
-            value={queryState.search}
-            onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
-            onSearch={() => {}}
-            loadValues={logsLoadValues}
-          />
+          </div>
         </div>
 
         {/* Filter pills */}
@@ -1195,10 +1396,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
   headerSpacer: css`
     flex: 1;
   `,
-  toolbar: css`
+  headerSearchWrap: css`
+    flex: 1 1 260px;
+    min-width: 200px;
+  `,
+  headerTimeGroup: css`
     display: flex;
-    gap: ${theme.spacing(1)};
     align-items: center;
+    gap: ${theme.spacing(1)};
+    flex-shrink: 0;
   `,
   pills: css`
     min-height: 0;

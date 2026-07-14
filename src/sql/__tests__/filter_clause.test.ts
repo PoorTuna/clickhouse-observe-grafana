@@ -205,12 +205,67 @@ describe('addFilterPill', () => {
     expect(result).toHaveLength(2);
   });
 
-  it('dedupes by field+op (replaces existing same field+op)', () => {
+  it('dedupes an exact re-add (same field+op+value) instead of appending a duplicate', () => {
+    const sameAgain: FilterPill = { id: 'c', field: 'ServiceName', op: '=', value: 'api' };
+    const result = addFilterPill([existing], sameAgain);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('c');
+  });
+
+  it('appends (does not replace) a different value on the same field+op', () => {
+    // Regression: "Filter out" on field X value 'a', then 'b', used to silently replace the
+    // first pill instead of both applying as an AND (x != 'a' AND x != 'b').
+    const excludeA: FilterPill = { id: 'a', field: 'ServiceName', op: '!=', value: 'a' };
+    const excludeB: FilterPill = { id: 'b', field: 'ServiceName', op: '!=', value: 'b' };
+    const result = addFilterPill([excludeA], excludeB);
+    expect(result).toHaveLength(2);
+    expect(result.map((f) => f.value)).toEqual(['a', 'b']);
+  });
+
+  it('a different value on the same field+op="=" also appends, not replaces', () => {
+    // No special-casing '=' differently from '!='/'contains' — see samePill's doc comment.
     const replacement: FilterPill = { id: 'c', field: 'ServiceName', op: '=', value: 'worker' };
     const result = addFilterPill([existing], replacement);
+    expect(result).toHaveLength(2);
+  });
+
+  it('dedupes one_of/not_one_of by field+op+values set, order-insensitively', () => {
+    const original: FilterPill = {
+      id: 'x',
+      field: 'SeverityText',
+      op: 'one_of',
+      value: '',
+      values: ['error', 'critical'],
+    };
+    const reordered: FilterPill = {
+      id: 'y',
+      field: 'SeverityText',
+      op: 'one_of',
+      value: '',
+      values: ['critical', 'error'],
+    };
+    const result = addFilterPill([original], reordered);
     expect(result).toHaveLength(1);
-    expect(result[0].value).toBe('worker');
-    expect(result[0].id).toBe('c');
+    expect(result[0].id).toBe('y');
+  });
+
+  it('a different values set on one_of appends, not replaces', () => {
+    const original: FilterPill = {
+      id: 'x',
+      field: 'SeverityText',
+      op: 'one_of',
+      value: '',
+      values: ['error'],
+    };
+    const different: FilterPill = {
+      id: 'y',
+      field: 'SeverityText',
+      op: 'one_of',
+      value: '',
+      values: ['critical'],
+    };
+    const result = addFilterPill([original], different);
+    expect(result).toHaveLength(2);
   });
 
   it('preserves values and label on the incoming pill', () => {

@@ -247,6 +247,109 @@ export function buildLogsQuery(
   ].filter(Boolean).join('\n');
 }
 
+/**
+ * Execution guardrail for buildLogDetailQuery — a narrow point lookup should be near-instant;
+ * 'break' (rather than 'throw') means a timeout degrades to "0 rows", which the caller already
+ * treats as "point lookup missed, fall back to hydratePage" — one code path handles both.
+ */
+const DETAIL_QUERY_SETTINGS =
+  `SETTINGS max_execution_time = 10, timeout_overflow_mode = 'break', ` +
+  `max_rows_to_read = 5000000, read_overflow_mode = 'break'`;
+
+/**
+ * Best-effort coercion of a log row's timestamp cell (DateTime-like object, epoch-ms number, or
+ * a raw ClickHouse DateTime64 string such as "2026-06-29 06:00:00.123456789") to epoch
+ * milliseconds. Mirrors formatTimestamp's (components/LogsTable.tsx) branching, but self-
+ * contained here since queryBuilder.ts has no dependency on @grafana/data's time helpers.
+ * Deliberately lossy below millisecond precision — buildLogDetailQuery only needs a millisecond-
+ * wide WHERE window, not an exact instant (see its doc comment for why exact equality is unsafe).
+ */
+function coerceEpochMs(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'object' && 'valueOf' in (value as object)) {
+    const v = (value as { valueOf(): unknown }).valueOf();
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }
+  const str = String(value).trim();
+  const match = str.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(\.\d+)?/);
+  if (!match) {
+    return null;
+  }
+  const fracMs = match[2] ? Math.round(Number(`0${match[2].slice(0, 4)}`) * 1000) : 0;
+  const baseMs = Date.parse(`${match[1].replace(' ', 'T')}Z`);
+  return Number.isFinite(baseMs) ? baseMs + fracMs : null;
+}
+
+/**
+ * Fetches just the single row the log detail drawer was opened for, instead of hydratePage's
+ * whole-page `SELECT *` (see hydratePage's doc comment in LogsExplorer.tsx for the cost that
+ * replaces). WHERE narrows to a one-millisecond window around the clicked row's timestamp rather
+ * than an exact-equality match — the client only ever has the timestamp at millisecond precision
+ * or as a string it can't losslessly round-trip against a DateTime64(9) column, so an exact match
+ * can miss the very row it's looking for. Combined with equality on whichever other core fields
+ * are mapped (body/severity/serviceName) — the same fields logRowKey() already uses to treat two
+ * rows as identical throughout this codebase — a match found this way is exactly as "correct" as
+ * what hydratePage's whole-page fetch would have matched by content key. Returns '' (no query) if
+ * no timestamp is mapped or the row's timestamp can't be parsed — caller falls back to hydratePage.
+ */
+export function buildLogDetailQuery(
+  config: SourceConfig,
+  row: Record<string, unknown>,
+  index?: FieldIndex
+): string {
+  const c = config.columns;
+  if (!c.timestamp) {
+    return '';
+  }
+  const tsMs = coerceEpochMs(row[CORE_ALIAS.timestamp]);
+  if (tsMs === null) {
+    return '';
+  }
+  const tbl = tableRef(config, config.logsTable);
+
+  // Same core aliasing as buildLogsQuery's coreSelect — the fetched row must produce the same
+  // logRowKey() as the narrow grid row it's replacing in `hydratedRows`.
+  const coreSelect = [
+    `${c.timestamp} AS ${CORE_ALIAS.timestamp}`,
+    c.body ? `${c.body} AS ${CORE_ALIAS.body}` : null,
+    c.severity ? `${c.severity} AS ${CORE_ALIAS.severity}` : null,
+    c.traceId ? `${c.traceId} AS ${CORE_ALIAS.traceId}` : null,
+    c.spanId ? `${c.spanId} AS ${CORE_ALIAS.spanId}` : null,
+    c.serviceName ? `${c.serviceName} AS ${CORE_ALIAS.serviceName}` : null,
+  ].filter(Boolean) as string[];
+
+  const conditions = [
+    `${c.timestamp} >= fromUnixTimestamp64Milli(${tsMs})`,
+    `${c.timestamp} < fromUnixTimestamp64Milli(${tsMs + 1})`,
+  ];
+  if (c.body && row[CORE_ALIAS.body] !== undefined) {
+    conditions.push(`${c.body} = ${quoteString(String(row[CORE_ALIAS.body] ?? ''))}`);
+  }
+  if (c.severity && row[CORE_ALIAS.severity] !== undefined) {
+    conditions.push(`${c.severity} = ${quoteString(String(row[CORE_ALIAS.severity] ?? ''))}`);
+  }
+  if (c.serviceName && row[CORE_ALIAS.serviceName] !== undefined) {
+    conditions.push(`${c.serviceName} = ${quoteString(String(row[CORE_ALIAS.serviceName] ?? ''))}`);
+  }
+  // index is accepted (not used) to keep this builder's signature interchangeable with
+  // buildLogsQuery at call sites — point-match conditions above are raw core columns, never
+  // Map-key/JSON-path field references that would need index resolution.
+  void index;
+
+  return [
+    `SELECT *, ${coreSelect.join(', ')}`,
+    `FROM ${tbl}`,
+    `WHERE ${conditions.join(' AND ')}`,
+    `LIMIT 1`,
+    DETAIL_QUERY_SETTINGS,
+  ].join('\n');
+}
+
 export type CHIntervalUnit = 'SECOND' | 'MINUTE' | 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR';
 
 export type VolumeBreakdown =
@@ -256,6 +359,18 @@ export type VolumeBreakdown =
   | { kind: 'severity'; expr: string }
   /** Top-N breakdown by a chosen field expression + 'Other' catch-all via CTE. */
   | { kind: 'field'; expr: string; limit?: number };
+
+/**
+ * Execution guardrail for the volume/histogram query — unlike the grid query (bounded by a
+ * `LIMIT` on the ordering key) and field discovery (see introspection.ts's DISCOVERY_SETTINGS),
+ * buildVolumeQuery's GROUP BY has no LIMIT and scans the full time range, so on a large dataset
+ * it's the single most expensive query this page fires on every mount. 'break' degrades to
+ * whatever was aggregated within the budget instead of failing outright — a slightly-incomplete
+ * histogram beats a hung request.
+ */
+const VOLUME_QUERY_SETTINGS =
+  `SETTINGS max_execution_time = 20, timeout_overflow_mode = 'break', ` +
+  `max_rows_to_read = 5000000, read_overflow_mode = 'break'`;
 
 export interface VolumeQueryOpts {
   /**
@@ -298,6 +413,7 @@ export function buildVolumeQuery(
       whereSql || null,
       `GROUP BY time, level`,
       `ORDER BY time ASC`,
+      VOLUME_QUERY_SETTINGS,
     ].filter(Boolean).join('\n');
   }
 
@@ -315,6 +431,7 @@ export function buildVolumeQuery(
       whereSql || null,
       `GROUP BY time, level`,
       `ORDER BY time ASC`,
+      VOLUME_QUERY_SETTINGS,
     ].filter(Boolean).join('\n');
   }
 
@@ -335,6 +452,7 @@ export function buildVolumeQuery(
     whereSql || null,
     `GROUP BY time, level`,
     `ORDER BY time ASC`,
+    VOLUME_QUERY_SETTINGS,
   ].filter(Boolean).join('\n');
 }
 

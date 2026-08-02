@@ -10,6 +10,14 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.3] — 2026-08-02
+
+### Fixed
+
+- "Guess with AI" (and the manual column-mapping dropdowns next to it) couldn't see inside Tuple or JSON columns — a `trace Tuple(id String, span_id String)` column could only ever be offered/guessed as the whole `trace` struct, never `trace.id`. Guessing `trace` for Trace ID or `service` for Service Name then rendered the raw struct (e.g. `{"name": "my-service"}`) instead of the string. Tuple/JSON columns are now expanded into their dotted leaf fields (`trace.id`, `service.name`, JSON paths) before being offered, matching how the rest of the app already addresses them.
+
+---
+
 ## [0.4.2] — 2026-08-02
 
 ### Fixed

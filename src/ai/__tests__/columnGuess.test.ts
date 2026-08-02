@@ -38,6 +38,18 @@ describe('parseMapping', () => {
     expect(parseMapping(raw, VALID_COLUMNS, TARGETS)).toEqual({ timestamp: 'Timestamp' });
   });
 
+  it('accepts a dotted leaf name (e.g. a Tuple column expanded by expandColumnCandidates)', () => {
+    const raw = '{"traceId": "trace.id"}';
+    expect(parseMapping(raw, ['trace.id', 'trace.span_id'], ['traceId'])).toEqual({
+      traceId: 'trace.id',
+    });
+  });
+
+  it('still rejects the whole-tuple container name when only its leaves were offered', () => {
+    const raw = '{"traceId": "trace"}';
+    expect(parseMapping(raw, ['trace.id', 'trace.span_id'], ['traceId'])).toEqual({});
+  });
+
   it('treats empty-string values as "no guess" rather than clearing the field', () => {
     const raw = '{"timestamp": "Timestamp", "traceId": ""}';
     expect(parseMapping(raw, VALID_COLUMNS, TARGETS)).toEqual({ timestamp: 'Timestamp' });

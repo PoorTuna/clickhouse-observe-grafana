@@ -3,20 +3,22 @@
  * Step 1: choose datasource → database → table.
  * Step 2: map timestamp + body columns, auto-detect OTel, configure name → save.
  */
-import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { dateTime, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner } from '@grafana/ui';
 import { AiConfigContext, DataViewContext } from '../App/App';
-import { buildColumnsQuery, buildDatabasesQuery, buildTablesQuery } from '../../sql/introspection';
+import { buildColumnsQuery, buildDatabasesQuery, buildJsonPathsQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
 import { applyOtelPreset } from '../../sql/schema';
-import { useFieldDiscovery } from '../FieldsContext';
+import { useFieldDiscovery, runWithConcurrencyLimit } from '../FieldsContext';
 import { fieldToColumn } from '../FieldSidebar/FieldSidebar';
 import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SelectedColumn, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
 import { COL_FIELDS } from '../../columnFields';
 import { guessColumnMapping, TableColumn } from '../../ai/columnGuess';
+import { expandColumnCandidates, JsonPathsByColumn } from '../../ai/columnCandidates';
+import { inferFieldType } from '../../sql/fieldModel';
 
 interface CreateDataViewModalProps {
   isOpen: boolean;
@@ -103,6 +105,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // change identity every render (schemaTimeRange() uses Date.now(), which would otherwise churn
   // the discovery hook's coarse time bucket and re-fetch on every keystroke).
   const [pinnedFieldsTimeRange] = useState<TimeRange>(() => schemaTimeRange());
+  // Guards the async JSON-path scan in goToColumnsStepFor against a stale response landing after
+  // the user has already switched tables — same pattern as FieldsContext's runRef.
+  const columnsRunRef = useRef(0);
 
   const resetAll = useCallback(() => {
     setStep('location');
@@ -237,6 +242,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setError('');
     setLoadingCols(true);
     setStep('columns');
+    const runId = ++columnsRunRef.current;
     try {
       const rows = await runQueryRows({
         datasourceUid: uid,
@@ -244,28 +250,14 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         timeRange: schemaTimeRange(),
       });
       const typedRows = rows as Array<Record<string, unknown>>;
-      const cols = typedRows
-        .map((r) => String(r['name'] ?? ''))
-        .filter(Boolean);
+      const rawCols: TableColumn[] = typedRows
+        .map((r) => ({ name: String(r['name'] ?? ''), type: String(r['type'] ?? '') }))
+        .filter((c) => c.name);
 
-      setTableColumns(
-        typedRows
-          .map((r) => ({ name: String(r['name'] ?? ''), type: String(r['type'] ?? '') }))
-          .filter((c) => c.name)
-      );
-
-      // Timestamp picker: only columns with an actual date/time type.
-      const dateTimeCols = typedRows
-        .filter((r) => isTimeColumnType(String(r['type'] ?? '')))
-        .map((r) => String(r['name'] ?? ''));
-
-      const timestampOpts: Array<SelectableValue<string>> = [
-        { label: '— No time field', value: NO_TIME_VALUE },
-        ...dateTimeCols.map((c) => ({ label: c, value: c, description: 'date/time type' })),
-      ];
-
-      setColumnOptions(timestampOpts);
-      setAllColumnOptions(cols.map((c) => ({ label: c, value: c })));
+      // Tuple expansion is a synchronous type-string parse (no query) — apply immediately so the
+      // step renders with tuple leaves (e.g. "trace.id") already in place instead of the whole
+      // Tuple container column. JSON leaves fill in a moment later once the scan below resolves.
+      applyCandidates(expandColumnCandidates(rawCols));
 
       if (resetMapping) {
         // No auto-inference — leave mapping blank. User maps columns by hand or ticks the OTel checkbox.
@@ -275,11 +267,66 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         setBodyField(undefined);
         setName(`${db}.${table}`);
       }
+
+      // JSON path discovery — non-blocking: fires after the step has already rendered with the
+      // tuple-expanded (but still JSON-container) candidate list, and doesn't hold up loadingCols.
+      // Worst case on a slow/huge JSON column is DISCOVERY_SETTINGS' own 15s cap, not a modal freeze.
+      const jsonCols = rawCols.filter((c) => inferFieldType(c.type) === 'json').map((c) => c.name);
+      if (jsonCols.length > 0) {
+        const scanCfg: SourceConfig = {
+          ...DEFAULT_SOURCE_CONFIG,
+          datasourceUid: uid,
+          database: db,
+          logsTable: table,
+        };
+        runWithConcurrencyLimit(jsonCols, 4, async (jsonCol) => {
+          try {
+            const pathRows = await runQueryRows({
+              datasourceUid: uid,
+              sql: buildJsonPathsQuery(scanCfg, jsonCol, undefined, table),
+              timeRange: schemaTimeRange(),
+            });
+            const paths = pathRows
+              .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
+              .filter((p) => p.path);
+            return { jsonCol, paths };
+          } catch {
+            return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };
+          }
+        })
+          .then((perColPaths) => {
+            if (columnsRunRef.current !== runId) {
+              return; // table switched away before the scan finished — drop the stale result
+            }
+            const jsonPaths: JsonPathsByColumn = {};
+            for (const { jsonCol, paths } of perColPaths) {
+              jsonPaths[jsonCol] = paths;
+            }
+            applyCandidates(expandColumnCandidates(rawCols, jsonPaths));
+          })
+          .catch(() => {
+            // Best-effort — JSON containers simply stay unexpanded on total failure.
+          });
+      }
     } catch (e) {
       setError(`Failed to load columns: ${(e as Error)?.message ?? e}`);
     } finally {
       setLoadingCols(false);
     }
+  }
+
+  // Applies an (expanded) candidate list to tableColumns + both derived option lists — shared by
+  // the initial tuple-only pass and the later JSON-path-filled pass in goToColumnsStepFor.
+  function applyCandidates(candidates: TableColumn[]) {
+    setTableColumns(candidates);
+
+    const dateTimeCols = candidates.filter((c) => isTimeColumnType(c.type)).map((c) => c.name);
+    const timestampOpts: Array<SelectableValue<string>> = [
+      { label: '— No time field', value: NO_TIME_VALUE },
+      ...dateTimeCols.map((c) => ({ label: c, value: c, description: 'date/time type' })),
+    ];
+    setColumnOptions(timestampOpts);
+    setAllColumnOptions(candidates.map((c) => ({ label: c.name, value: c.name })));
   }
 
   function goToColumnsStep() {

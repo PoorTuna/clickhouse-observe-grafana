@@ -8,6 +8,13 @@ import { SourceConfig } from '../types';
  * class of query: stop after 15s or 3M rows read and return whatever was found so far instead of
  * hanging or erroring — 'break' overflow mode degrades to a partial result, which the caller
  * (FieldsContext.tsx) already tolerates (a column found 0/fewer keys this pass, not a crash).
+ *
+ * 'break' is safe here specifically because the output is a *set of field names*, not a count —
+ * a truncated scan just finds fewer names, which reads to the user as "fewer autocomplete
+ * suggestions this pass," not as a wrong number. Do not copy this pattern onto an aggregation
+ * query (COUNT/GROUP BY): there, a rows-read cap doesn't bound truncated results to "fewer of the
+ * right thing," it produces confidently-wrong numbers with no indication anything was cut short —
+ * see VOLUME_QUERY_SETTINGS in queryBuilder.ts for the bug this caused and why it uses 'throw'.
  */
 const DISCOVERY_SETTINGS =
   `SETTINGS max_execution_time = 15, timeout_overflow_mode = 'break', ` +

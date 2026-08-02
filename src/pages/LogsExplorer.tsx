@@ -558,7 +558,18 @@ export function LogsExplorer() {
       setVolumeData(fillEmptyBuckets(volPoints, resolved, timeRange));
     } catch (err) {
       if (volRunRef.current === runId) {
-        setError(String((err as Error)?.message ?? err));
+        // Also clear volumeData: a failed refetch must not leave the previous time range's bars
+        // on screen under a new range/filter — that reads as a (wrong) real answer, not an error.
+        setVolumeData([]);
+        const rawMsg = String((err as Error)?.message ?? err);
+        // ClickHouse's timeout_overflow_mode = 'throw' (see VOLUME_QUERY_SETTINGS) surfaces as
+        // this substring — reword it into something the user can act on instead of a raw
+        // ClickHouse error string.
+        setError(
+          /timeout exceeded|TIMEOUT_EXCEEDED/i.test(rawMsg)
+            ? 'Histogram query exceeded its 60s budget — narrow the time range or choose a coarser interval.'
+            : rawMsg
+        );
       }
     } finally {
       if (volRunRef.current === runId) {

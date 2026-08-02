@@ -249,6 +249,11 @@ export function buildLogsQuery(
  * Execution guardrail for buildLogDetailQuery — a narrow point lookup should be near-instant;
  * 'break' (rather than 'throw') means a timeout degrades to "0 rows", which the caller already
  * treats as "point lookup missed, fall back to hydratePage" — one code path handles both.
+ * Unlike VOLUME_QUERY_SETTINGS, 'break' here is safe: this query is bounded to a 1ms WHERE
+ * window (see buildLogDetailQuery's doc comment) so it never has enough rows in scope for a
+ * rows-read cap to bite before the real match is found, and a truncated result is treated by the
+ * caller as "not found" — never displayed as a trustworthy answer the way a partial histogram
+ * bucket was.
  */
 const DETAIL_QUERY_SETTINGS =
   `SETTINGS max_execution_time = 10, timeout_overflow_mode = 'break', ` +
@@ -361,13 +366,21 @@ export type VolumeBreakdown =
  * Execution guardrail for the volume/histogram query — unlike the grid query (bounded by a
  * `LIMIT` on the ordering key) and field discovery (see introspection.ts's DISCOVERY_SETTINGS),
  * buildVolumeQuery's GROUP BY has no LIMIT and scans the full time range, so on a large dataset
- * it's the single most expensive query this page fires on every mount. 'break' degrades to
- * whatever was aggregated within the budget instead of failing outright — a slightly-incomplete
- * histogram beats a hung request.
+ * it's the single most expensive query this page fires on every mount.
+ *
+ * Deliberately no `max_rows_to_read` / `read_overflow_mode = 'break'` here, unlike the other
+ * guardrails in this file — counting rows is this query's entire job, so a rows-read cap doesn't
+ * bound cost, it just truncates the count. Which granules get read before the cap fires follows
+ * part/primary-key order across parallel reading threads, not chronological order, so 'break'
+ * silently zeroes out whole time buckets rather than shaving a bit off every bucket. Those zeroed
+ * buckets are then indistinguishable from genuine no-data gaps once fillEmptyBuckets
+ * (VolumeHistogram.tsx) runs, so the chart (and the summed document count above it) reports a
+ * confidently wrong answer instead of a visibly incomplete one — worse than the hung request this
+ * was meant to avoid. `throw` on timeout instead: a real error the user can act on (narrow the
+ * range, pick a coarser interval) beats a histogram that lies.
  */
 const VOLUME_QUERY_SETTINGS =
-  `SETTINGS max_execution_time = 20, timeout_overflow_mode = 'break', ` +
-  `max_rows_to_read = 5000000, read_overflow_mode = 'break'`;
+  `SETTINGS max_execution_time = 60, timeout_overflow_mode = 'throw'`;
 
 export interface VolumeQueryOpts {
   /**

@@ -10,6 +10,14 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.2] — 2026-08-02
+
+### Fixed
+
+- Histogram bars could render as empty when they actually held data, and the "N documents" count could be lower than a sub-range of the same view — caused by the volume query's execution guardrail silently truncating the aggregation (`timeout_overflow_mode = 'break'` + a rows-read cap) instead of erroring. Now throws on timeout so an over-budget query fails visibly rather than drawing a wrong chart.
+
+---
+
 ## [0.4.1] — 2026-08-02
 
 ### Changed

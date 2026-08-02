@@ -104,7 +104,7 @@ export function SavedSearchMenu({ queryState, timeRange, onLoad, activeDataViewI
       <Button
         variant="primary"
         size="sm"
-        icon="save"
+        icon="search"
         onClick={() => setOpen((v) => !v)}
         tooltip="Saved searches"
       >

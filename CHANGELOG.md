@@ -10,6 +10,16 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.1] — 2026-08-02
+
+### Changed
+
+- Removed the redundant "Copy link" toolbar button — the address bar already stays in sync with the full shareable view state, so it was copy-pasting the same thing the browser already shows.
+- Moved "Saved" and "Add to dashboard" from the top toolbar row down to the Edit-as-SQL / Inspect-SQL row, right-aligned.
+- Swapped the "Saved" button's icon from a save/disk icon to a search icon, so it reads as "saved searches" rather than "save this."
+
+---
+
 ## [0.4.0] — 2026-08-02
 
 ### Removed

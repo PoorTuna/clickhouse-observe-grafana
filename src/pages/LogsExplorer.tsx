@@ -412,7 +412,7 @@ export function LogsExplorer() {
   }, [queryState.columns, config]);
 
   // Keeps the URL in sync with the current shareable state, so the address bar is always a valid
-  // "copy this link" snapshot (the Copy-link button just reads window.location.href) — same field
+  // "copy this link" snapshot (users copy it straight from the browser's address bar) — same field
   // set as Saved Searches (search/filters/columns/sort/timeRange), plus the active view. `replace:
   // true` so typing in the search box or dragging the time picker doesn't spam browser history
   // with one entry per keystroke.
@@ -1007,31 +1007,6 @@ export function LogsExplorer() {
               loadValues={logsLoadValues}
             />
           </div>
-          <ClipboardButton
-            size="sm"
-            variant="secondary"
-            icon="link"
-            getText={() => window.location.href}
-            tooltip="Copy a link to this exact view — search, filters, columns, sort, time range, and data view"
-          >
-            Copy link
-          </ClipboardButton>
-          <SavedSearchMenu
-            queryState={{ ...queryState, columns: effectiveColumns }}
-            timeRange={timeRange}
-            onLoad={onLoadSaved}
-            activeDataViewId={activeView?.id}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="apps"
-            onClick={() => setAddToDashboardOpen(true)}
-            disabled={!canAddToDashboard}
-            tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
-          >
-            Add to dashboard
-          </Button>
           {/* Grouped so they wrap together as one atomic unit when the row runs out of width —
               without this, flex-wrap can strand RefreshPicker alone on its own line while
               TimeRangePicker (which fit) stays on line 1, separating a control from the time
@@ -1074,26 +1049,46 @@ export function LogsExplorer() {
         {/* SQL preview / edit */}
         <div className={styles.sqlRow}>
           <div className={styles.sqlActions}>
-            <button
-              className={styles.sqlToggle}
-              onClick={onToggleRawSql}
-              title={
-                queryState.useRawSql
-                  ? 'Discard raw SQL and go back to the visual query builder'
-                  : 'For regex, ClickHouse functions, and other advanced queries, switch to raw SQL'
-              }
-            >
-              <Icon name={queryState.useRawSql ? 'angle-down' : 'angle-right'} size="xs" />
-              {queryState.useRawSql ? 'Back to query builder' : 'Edit as SQL'}
-            </button>
-            <button
-              className={styles.sqlToggle}
-              onClick={() => setShowSqlInspect((v) => !v)}
-              title="Inspect the SQL query that will be sent to ClickHouse"
-            >
-              <Icon name={showSqlInspect ? 'angle-down' : 'angle-right'} size="xs" />
-              {showSqlInspect ? 'Hide SQL' : 'Inspect SQL'}
-            </button>
+            <div className={styles.sqlActionsLeft}>
+              <button
+                className={styles.sqlToggle}
+                onClick={onToggleRawSql}
+                title={
+                  queryState.useRawSql
+                    ? 'Discard raw SQL and go back to the visual query builder'
+                    : 'For regex, ClickHouse functions, and other advanced queries, switch to raw SQL'
+                }
+              >
+                <Icon name={queryState.useRawSql ? 'angle-down' : 'angle-right'} size="xs" />
+                {queryState.useRawSql ? 'Back to query builder' : 'Edit as SQL'}
+              </button>
+              <button
+                className={styles.sqlToggle}
+                onClick={() => setShowSqlInspect((v) => !v)}
+                title="Inspect the SQL query that will be sent to ClickHouse"
+              >
+                <Icon name={showSqlInspect ? 'angle-down' : 'angle-right'} size="xs" />
+                {showSqlInspect ? 'Hide SQL' : 'Inspect SQL'}
+              </button>
+            </div>
+            <div className={styles.sqlActionsRight}>
+              <SavedSearchMenu
+                queryState={{ ...queryState, columns: effectiveColumns }}
+                timeRange={timeRange}
+                onLoad={onLoadSaved}
+                activeDataViewId={activeView?.id}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="apps"
+                onClick={() => setAddToDashboardOpen(true)}
+                disabled={!canAddToDashboard}
+                tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
+              >
+                Add to dashboard
+              </Button>
+            </div>
           </div>
           {queryState.useRawSql && (
             <>
@@ -1415,7 +1410,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   sqlActions: css`
     display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    row-gap: ${theme.spacing(0.5)};
+  `,
+  sqlActionsLeft: css`
+    display: flex;
     gap: ${theme.spacing(2)};
+    align-items: center;
+  `,
+  sqlActionsRight: css`
+    display: flex;
+    gap: ${theme.spacing(1)};
     align-items: center;
   `,
   sqlToggle: css`

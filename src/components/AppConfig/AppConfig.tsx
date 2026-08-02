@@ -174,17 +174,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                   />
                 </Field>
 
-                <Field label="Traces table (optional — enables trace-jump links)">
-                  <Input
-                    width={30}
-                    value={v.tracesTable}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      patchView(v.id, { tracesTable: e.target.value.trim() })
-                    }
-                    placeholder="otel_traces"
-                  />
-                </Field>
-
                 <ColumnMappingForm
                   value={v.columns}
                   onChange={(updated) => patchView(v.id, { columns: updated })}
@@ -192,7 +181,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                     const preset = applyOtelPreset(v);
                     patchView(v.id, {
                       logsTable: preset.logsTable,
-                      tracesTable: preset.tracesTable,
                       isOtel: true,
                       columns: preset.columns,
                     });

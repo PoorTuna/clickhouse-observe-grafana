@@ -1,6 +1,6 @@
 # ClickHouse Observe
 
-HyperDX-style log and trace explorer for ClickHouse, packaged as a Grafana app plugin.
+HyperDX-style log explorer for ClickHouse, packaged as a Grafana app plugin.
 
 ![Logs Explorer](src/img/screenshot-logs.png)
 
@@ -25,7 +25,7 @@ A full-page log search view backed directly by ClickHouse SQL.
 - **Volume histogram** — log volume over time with configurable bucket interval (auto, second → month). Breakdown picker stacks bars by severity (when the column exists in the schema), any arbitrary field (top-10 + "Other" computed server-side), or shows a single series. Click and drag to zoom into a time range.
 - **Field sidebar** — auto-discovered from `system.columns` plus Map-key introspection. Click a field to add it as a table column or filter. Per-field value distribution popover available on hover.
 - **Sortable, reorderable columns** — add columns from the sidebar, remove them from the header, drag to reorder.
-- **Row detail drawer** — click any row to see every column in the table (all fields, not just mapped ones). One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a link opens the corresponding trace in the Traces Explorer.
+- **Row detail drawer** — click any row to see every column in the table (all fields, not just mapped ones). One-click "filter for" / "filter out" on any value. If the row carries a trace ID, a button filters the log list down to every log with that trace ID.
 - **Structured filter builder** — `+ Add filter` button in the toolbar opens a Kibana-style popup: pick a field, choose an operator (`is`, `is not`, `is one of`, `is not one of`, `exists`, `does not exist`, `contains`, `does not contain`), and select a value from a live autocomplete dropdown. Supports multi-value lists and optional custom pill labels.
 - **Filter pills** — active structured filters displayed as dismissable chips below the search bar. Supports all eight operators. Click × to remove; "Clear all" removes every pill at once.
 - **Hybrid pagination** — initial 200-row buffer with lazy fetch as you page past it. Page size is configurable (10 – 500 rows per page).
@@ -35,16 +35,6 @@ A full-page log search view backed directly by ClickHouse SQL.
 
 ![Logs Explorer](src/img/screenshot-logs.png)
 
-### Trace Explorer
-
-![Trace Explorer](src/img/screenshot-traces.png)
-
-Search traces by service name and inspect individual traces as a span waterfall.
-
-- **Trace list** — table of recent traces showing trace ID, root service, start time, duration, span count, and error count.
-- **Span waterfall** — click any trace to open a timeline view of all spans, with hierarchy, duration bars, and status codes.
-- **Deep links** — traces are addressable by URL (`/a/poortuna-clickhouse-observe-app/traces/<traceId>`). The Logs Explorer links here directly when a log row carries a trace ID.
-
 ### Configuration
 
 ![Configuration](src/img/screenshot-config.png)
@@ -52,9 +42,9 @@ Search traces by service name and inspect individual traces as a span waterfall.
 The configuration page is at **Administration > Plugins > ClickHouse Observe > Configuration**.
 
 - Pick the ClickHouse datasource to query through.
-- Set the database name and the logs/traces table names.
-- Map columns to their roles (timestamp, body, severity, trace/span IDs, service name, duration, attribute Maps).
-- **Apply OTel preset** fills in all column names for the standard OpenTelemetry Collector schema (`otel_logs` / `otel_traces`). Override individual fields below the preset button for custom schemas.
+- Set the database name and the logs table name.
+- Map columns to their roles (timestamp, body, severity, trace ID, service name, attribute Map).
+- **Apply OTel preset** fills in all column names for the standard OpenTelemetry Collector schema (`otel_logs`). Override individual fields below the preset button for custom schemas.
 
 ---
 
@@ -86,8 +76,8 @@ Bare terms without a field (`payment failed`) search the log body. Autocomplete 
 3. In Grafana, go to **Administration > Plugins**, find **ClickHouse Observe**, and click **Enable**.
 4. Open **Administration > Plugins > ClickHouse Observe > Configuration**.
 5. Select the ClickHouse datasource from the dropdown.
-6. Enter the database name (default: `default`), logs table, and traces table.
-7. Click **Apply OTel preset** if your tables follow the OpenTelemetry Collector schema. Otherwise fill in the column mapping fields manually.
+6. Enter the database name (default: `default`) and logs table.
+7. Click **Apply OTel preset** if your table follows the OpenTelemetry Collector schema. Otherwise fill in the column mapping fields manually.
 8. Click **Save configuration**. The page reloads to apply the new settings.
 9. Navigate to **More apps > ClickHouse Observe > Logs** to start querying.
 
@@ -129,9 +119,8 @@ The Docker dev environment (`npm run server`) runs Grafana with unsigned plugin 
 
 | Path | Contents |
 |------|----------|
-| `src/pages/` | Top-level page components: `LogsExplorer.tsx`, `TraceExplorer.tsx` |
+| `src/pages/` | Top-level page components: `LogsExplorer.tsx` |
 | `src/components/` | Shared UI: `SearchBar`, `LogsTable`, `LogDetailDrawer`, `VolumeHistogram`, `FilterPills`, `PaginationBar` |
-| `src/components/trace/` | Trace UI: `TraceWaterfall`, `TraceMinimap`, `TraceHeaderStats`, `ServiceMap`, `SpanDetailDrawer` |
 | `src/components/AddFilter/` | Structured filter builder popup (`AddFilterPopover`) |
 | `src/components/FieldSidebar/` | Field discovery sidebar, per-field stats popover |
 | `src/components/AppConfig/` | Plugin configuration page |

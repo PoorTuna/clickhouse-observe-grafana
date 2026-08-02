@@ -2,11 +2,6 @@ import pluginJson from './plugin.json';
 
 export const PLUGIN_BASE_URL = `/a/${pluginJson.id}`;
 
-export enum ROUTES {
-  Logs = 'logs',
-  Traces = 'traces',
-}
-
 // Colorblind-safe viz palette — calmer than pure RGB
 export const SEVERITY_COLORS: Record<string, string> = {
   critical:    '#BD271E',
@@ -53,17 +48,3 @@ export const OTHER_COLOR = '#98A2B3';
 /** Drag-and-drop MIME type for dragging a field out of FieldSidebar into LogsTable to add it as
  *  a column — shared so the drag source and drop target can't drift out of sync on the string. */
 export const FIELD_DRAG_MIME = 'application/x-clickhouse-observe-field';
-
-/**
- * Deterministic service → color mapping, shared by the trace list, waterfall, and service map so
- * the same service always renders the same color everywhere. Uses the same BREAKDOWN_PALETTE as
- * the logs histogram for visual consistency across the plugin.
- */
-export function serviceColor(serviceName: string): string {
-  let hash = 0;
-  for (let i = 0; i < serviceName.length; i++) {
-    hash = (hash * 31 + serviceName.charCodeAt(i)) | 0;
-  }
-  const idx = Math.abs(hash) % BREAKDOWN_PALETTE.length;
-  return BREAKDOWN_PALETTE[idx];
-}

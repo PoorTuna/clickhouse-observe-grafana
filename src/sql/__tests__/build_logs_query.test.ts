@@ -1,6 +1,6 @@
 /**
  * Unit tests for buildLogsQuery's core SELECT list:
- * - unmapped optional columns (severity/traceId/spanId/serviceName) are omitted entirely rather
+ * - unmapped optional columns (severity/traceId/serviceName) are omitted entirely rather
  *   than emitted as a constant '' AS x fallback.
  * - mapped core columns are aliased under CORE_ALIAS's __-prefixed names, not their plain field
  *   name, so they can't collide with an arbitrary table's own same-named real column.
@@ -13,7 +13,6 @@ const otelConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'otel_logs',
-  tracesTable: 'otel_traces',
   isOtel: true,
   columns: OTEL_COLUMN_MAPPING,
 };
@@ -22,13 +21,12 @@ const arbitraryConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'my_table',
-  tracesTable: '',
   isOtel: false,
   columns: {
     ...EMPTY_COLUMN_MAPPING,
     timestamp: 'ts',
     body: 'msg',
-    // severity/traceId/spanId/serviceName left unmapped on purpose
+    // severity/traceId/serviceName left unmapped on purpose
   },
 };
 
@@ -37,7 +35,6 @@ describe('buildLogsQuery core SELECT list', () => {
     const sql = buildLogsQuery(otelConfig, DEFAULT_LOGS_QUERY_STATE);
     expect(sql).toContain(`AS ${CORE_ALIAS.severity}`);
     expect(sql).toContain(`AS ${CORE_ALIAS.traceId}`);
-    expect(sql).toContain(`AS ${CORE_ALIAS.spanId}`);
     expect(sql).toContain(`AS ${CORE_ALIAS.serviceName}`);
     // Never aliases to the field's own plain name.
     expect(sql).not.toContain('AS severity');
@@ -48,7 +45,6 @@ describe('buildLogsQuery core SELECT list', () => {
     const sql = buildLogsQuery(arbitraryConfig, DEFAULT_LOGS_QUERY_STATE);
     expect(sql).not.toContain(CORE_ALIAS.severity);
     expect(sql).not.toContain(CORE_ALIAS.traceId);
-    expect(sql).not.toContain(CORE_ALIAS.spanId);
     expect(sql).not.toContain(CORE_ALIAS.serviceName);
     expect(sql).not.toContain("''");
     // Mapped columns are still present, aliased under their __-prefixed name.
@@ -107,7 +103,6 @@ describe('buildLogsQuery core SELECT list', () => {
       datasourceUid: 'test',
       database: 'default',
       logsTable: 'my_table',
-      tracesTable: '',
       isOtel: false,
       columns: { ...EMPTY_COLUMN_MAPPING },
     };

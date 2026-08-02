@@ -6,14 +6,12 @@
 import { ColumnMapping, SourceConfig, OTEL_COLUMN_MAPPING } from '../types';
 
 export const OTEL_LOGS_TABLE = 'otel_logs';
-export const OTEL_TRACES_TABLE = 'otel_traces';
 
 /** Auto-fill OTel column preset onto a SourceConfig. */
 export function applyOtelPreset(config: SourceConfig): SourceConfig {
   return {
     ...config,
     logsTable: OTEL_LOGS_TABLE,
-    tracesTable: OTEL_TRACES_TABLE,
     isOtel: true,
     columns: { ...OTEL_COLUMN_MAPPING },
   };
@@ -120,7 +118,7 @@ export function parseJsonColumnValue(raw: unknown): Record<string, unknown> {
  * both types now, no config mapping required) rather than a fixed OTel-category list: Resource/
  * Log/Scope Attributes used to be 3 explicitly-mapped fields, but any Map-typed column is treated
  * the same way now, matching how JSON columns already worked. `columns.spanAttributes` stays
- * config-driven (shared with Traces, untouched by this) and is folded in alongside if mapped.
+ * config-driven and is folded in alongside if mapped.
  */
 export function groupAttributes(
   row: Record<string, unknown>,

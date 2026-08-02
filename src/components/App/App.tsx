@@ -1,8 +1,6 @@
 import React, { createContext, Suspense, useCallback, useMemo, useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
 import { AppRootProps } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
-import { ROUTES } from '../../constants';
 import {
   AiProviderConfig,
   AppJsonData,
@@ -23,9 +21,6 @@ import {
 
 const LogsExplorer = React.lazy(() =>
   import('../../pages/LogsExplorer').then((m) => ({ default: m.LogsExplorer }))
-);
-const TraceExplorer = React.lazy(() =>
-  import('../../pages/TraceExplorer').then((m) => ({ default: m.TraceExplorer }))
 );
 
 /** Shared context so all pages can access the current SourceConfig (= active DataView). */
@@ -129,12 +124,7 @@ function App(props: AppRootProps<AppJsonData>) {
       <AiConfigContext.Provider value={jsonData.ai ?? null}>
         <SourceConfigContext.Provider value={sourceConfig}>
           <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>
-            <Routes>
-              <Route path={`${ROUTES.Traces}/:traceId`} element={<TraceExplorer />} />
-              <Route path={ROUTES.Traces} element={<TraceExplorer />} />
-              {/* Default: Logs Explorer */}
-              <Route path="*" element={<LogsExplorer />} />
-            </Routes>
+            <LogsExplorer />
           </Suspense>
         </SourceConfigContext.Provider>
       </AiConfigContext.Provider>

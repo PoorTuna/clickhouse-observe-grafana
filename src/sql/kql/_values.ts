@@ -5,9 +5,9 @@
  * by datasourceUid:sqlExpr:coarseTimeBucket:cacheKey — same scheme as
  * FieldStatsPopover so hot entries are often already warm.
  *
- * Table-agnostic: callers (Logs, Traces) supply their own table + pre-built WHERE
- * conditions + a cacheKey representing their current filter state, so this module
- * has no knowledge of LogsQueryState/TraceListFilters.
+ * Table-agnostic: callers supply their own table + pre-built WHERE conditions + a
+ * cacheKey representing their current filter state, so this module has no knowledge
+ * of LogsQueryState.
  */
 
 import { TimeRange } from '@grafana/data';
@@ -22,9 +22,9 @@ export interface FieldValue {
 }
 
 export interface LoadFieldValuesOpts {
-  /** Table to sample from (e.g. config.logsTable or config.tracesTable). */
+  /** Table to sample from (e.g. config.logsTable). */
   table: string;
-  /** Pre-built WHERE conditions (from buildWhereConditions / buildTraceWhereConditions). */
+  /** Pre-built WHERE conditions (from buildWhereConditions). */
   conditions: string[];
   timeRange: TimeRange;
   /** Caller-supplied hash of current filter state, so the cache key stays scoped per-page. */

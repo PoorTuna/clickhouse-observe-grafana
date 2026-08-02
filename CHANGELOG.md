@@ -10,6 +10,18 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.0] — 2026-08-02
+
+### Removed
+
+- Traces page (span waterfall, service map, trace list) and everything that only existed to serve it: `TraceExplorer`, `src/components/trace/`, `src/sql/trace/`, trace query builders, trace-only `ColumnMapping` fields (span ID/parent span ID/duration/span name/status code/status message/span kind/resource attributes), `SourceConfig.tracesTable`, and the corresponding capability flags.
+
+### Changed
+
+- The "View trace" button in the log detail drawer no longer navigates to the Traces page (which no longer exists) — it now filters the log list down to every log carrying that trace ID.
+
+---
+
 ## [0.3.6] — 2026-07-14
 
 ### Added

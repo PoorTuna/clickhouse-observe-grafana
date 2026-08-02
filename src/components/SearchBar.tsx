@@ -26,7 +26,7 @@ interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
   onSearch: () => void;
-  /** Page-supplied value lookup (Logs and Traces each bind their own table/filters). */
+  /** Page-supplied value lookup (bound to the page's own table/filters). */
   loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
   placeholder?: string;
 }

@@ -10,7 +10,6 @@ const otelConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'otel_logs',
-  tracesTable: 'otel_traces',
   isOtel: true,
   columns: OTEL_COLUMN_MAPPING,
 };
@@ -19,7 +18,6 @@ const noTimestampConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'my_table',
-  tracesTable: '',
   isOtel: false,
   columns: {
     ...EMPTY_COLUMN_MAPPING,

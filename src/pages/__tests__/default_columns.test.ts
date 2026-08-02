@@ -12,7 +12,6 @@ const otelConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'otel_logs',
-  tracesTable: '',
   isOtel: true,
   columns: {
     ...EMPTY_COLUMN_MAPPING,

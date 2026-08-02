@@ -1,6 +1,6 @@
 # Clickhouse-Observe
 
-A Grafana App plugin for exploring logs and traces stored in ClickHouse.
+A Grafana App plugin for exploring logs stored in ClickHouse.
 
 ## Requirements
 
@@ -28,19 +28,12 @@ Browse and search log data from ClickHouse:
 - **Edit as SQL** — drop into raw SQL mode for ClickHouse-specific functions, regex, or complex expressions
 - **Inspect SQL** — view the exact SQL query sent to ClickHouse without entering edit mode; copy to clipboard with one click
 
-### Trace Explorer
-
-Browse distributed traces stored in ClickHouse using the OpenTelemetry schema:
-
-- Search by service name, trace ID, duration, and status
-- Drill into individual traces to view span waterfall
-
 ## Getting Started
 
 1. Install the plugin in Grafana
 2. Go to **Configuration → ClickHouse Observe** and select your ClickHouse datasource
 3. Map your table columns (timestamp, severity, body, service name, trace ID, etc.)
-4. Open **Logs** or **Traces** from the navigation menu
+4. Open **Logs** from the navigation menu
 
 ## SQL Inspect
 

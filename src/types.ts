@@ -6,22 +6,10 @@ export interface ColumnMapping {
   timestamp: string;
   body: string;
   severity: string;
+  // Trace ID column — powers the log→trace filter action in the log detail drawer.
   traceId: string;
-  spanId: string;
-  parentSpanId: string;
   serviceName: string;
-  duration: string;
-  // Span name / operation name column — empty means absent.
-  spanName: string;
-  // Span status code column (e.g. OTel StatusCode) — empty means absent.
-  statusCode: string;
-  // Span status message column (e.g. OTel StatusMessage) — empty means absent.
-  statusMessage: string;
-  // Span kind column (e.g. OTel SpanKind: CLIENT/SERVER/INTERNAL/PRODUCER/CONSUMER) — empty means absent.
-  spanKind: string;
-  // Map column — empty string means column absent. Shared with Traces (span resource-attrs
-  // select); Logs auto-detects Map attribute columns via field discovery, no longer reads this.
-  resourceAttributes: string;
+  // Map column — empty string means column absent.
   spanAttributes: string;
 }
 
@@ -30,15 +18,7 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   body: 'Body',
   severity: 'SeverityText',
   traceId: 'TraceId',
-  spanId: 'SpanId',
-  parentSpanId: 'ParentSpanId',
   serviceName: 'ServiceName',
-  duration: 'Duration',
-  spanName: 'SpanName',
-  statusCode: 'StatusCode',
-  statusMessage: 'StatusMessage',
-  spanKind: 'SpanKind',
-  resourceAttributes: 'ResourceAttributes',
   spanAttributes: 'SpanAttributes',
 };
 
@@ -47,15 +27,7 @@ export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
   body: '',
   severity: '',
   traceId: '',
-  spanId: '',
-  parentSpanId: '',
   serviceName: '',
-  duration: '',
-  spanName: '',
-  statusCode: '',
-  statusMessage: '',
-  spanKind: '',
-  resourceAttributes: '',
   spanAttributes: '',
 };
 
@@ -63,7 +35,6 @@ export interface SourceConfig {
   datasourceUid: string;
   database: string;
   logsTable: string;
-  tracesTable: string;
   // Legacy flag, no longer read by SQL generation — all paths use columns.* mapping.
   // Kept for backwards-compat with persisted jsonData; new views leave it false.
   isOtel: boolean;
@@ -83,7 +54,6 @@ export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
   datasourceUid: '',
   database: 'default',
   logsTable: '',
-  tracesTable: '',
   isOtel: false,
   columns: EMPTY_COLUMN_MAPPING,
 };
@@ -158,86 +128,6 @@ export interface VolumeDataPoint {
   time: number;
   levels: Record<string, number>;
 }
-
-export interface TraceRow {
-  traceId: string;
-  /** epoch ms */
-  startTime: number;
-  /** epoch ms */
-  endTime: number;
-  /** Root span's service name (service of the span with parentSpanId === ''), falls back to any service. */
-  rootServiceName: string;
-  /** Root span's operation name, falls back to ''. */
-  rootOperationName: string;
-  spanCount: number;
-  errorCount: number;
-  /** Distinct service count across all spans in the trace. */
-  serviceCount: number;
-  /** Nanoseconds — max(Timestamp+Duration) - min(Timestamp) across spans in the trace. */
-  duration: number;
-}
-
-/** One event attached to a span (OTel `Events.*` nested arrays) — e.g. an exception. */
-export interface SpanEvent {
-  /** epoch ms */
-  timestamp: number;
-  name: string;
-  attributes: Record<string, string>;
-}
-
-/** One cross-trace reference attached to a span (OTel `Links.*` nested arrays). */
-export interface SpanLink {
-  traceId: string;
-  spanId: string;
-  attributes: Record<string, string>;
-}
-
-export interface SpanRow {
-  traceId: string;
-  spanId: string;
-  /** '' for a real root span. */
-  parentSpanId: string;
-  serviceName: string;
-  operationName: string;
-  /** OTel SpanKind: CLIENT/SERVER/INTERNAL/PRODUCER/CONSUMER, or '' if unmapped. */
-  spanKind: string;
-  /** epoch ms — never nanoseconds. Convert at the query/row-mapping boundary, nowhere else. */
-  startTime: number;
-  /** nanoseconds — never milliseconds. Convert at render time only, nowhere else. */
-  durationNs: number;
-  statusCode: string;
-  statusMessage: string;
-  /** Raw Map(String,String) source string — parsed lazily via schema.parseMapValue. */
-  attributes: string;
-  /** Raw Map(String,String) source string for resource-level attributes. */
-  resourceAttributes: string;
-  events: SpanEvent[];
-  links: SpanLink[];
-}
-
-export interface TraceListFilters {
-  service: string;
-  spanName: string;
-  spanKind: string;
-  /** 'any' | 'ok' | 'error' */
-  status: 'any' | 'ok' | 'error';
-  /** nanoseconds, undefined = unbounded */
-  minDurationNs?: number;
-  maxDurationNs?: number;
-  /** free-text KQL, parsed the same way as logs search */
-  search: string;
-  /** structured chip filters, same shape/semantics as logs FilterPill[] */
-  pills: FilterPill[];
-}
-
-export const DEFAULT_TRACE_LIST_FILTERS: TraceListFilters = {
-  service: '',
-  spanName: '',
-  spanKind: '',
-  status: 'any',
-  search: '',
-  pills: [],
-};
 
 /** A named, storable view over a single logs table — superset of SourceConfig. */
 export interface DataView extends SourceConfig {

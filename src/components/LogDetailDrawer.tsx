@@ -50,6 +50,8 @@ interface LogDetailDrawerProps {
   onToggleExpanded?: () => void;
   onAddFilter: (filter: FilterPill) => void;
   onToggleColumn?: (col: SelectedColumn) => void;
+  /** Filters the log list down to this trace ID. Named for a future waterfall-view jump —
+   *  today it just adds a traceId filter pill and closes the drawer. */
   onViewTrace?: (traceId: string) => void;
   /** Step to the previous/next row on the current page. Omit to hide the nav control. */
   onPrev?: () => void;
@@ -252,20 +254,31 @@ export function LogDetailDrawer({
     const isLong = value.length > VALUE_TRUNCATE_LEN;
     const isValueExpanded = expandedValues.has(valueKey);
     const displayValue = isLong && !isValueExpanded ? value.slice(0, VALUE_TRUNCATE_LEN) + '…' : value;
+    const isTraceId = Boolean(onViewTrace && clickhouseField === config.columns.traceId);
     return (
       <div key={field} className={styles.attrRow}>
         <span className={styles.attrKey} title={field}>
           <Icon className={styles.attrTypeIcon} name={FIELD_TYPE_ICONS[type] as any} size="sm" />
           {field}
         </span>
-        <span className={styles.attrValue}>
-          {displayValue}
-          {isLong && (
-            <button className={styles.showMoreBtn} onClick={() => toggleValueExpanded(valueKey)}>
-              {isValueExpanded ? 'Show less' : 'Show more'}
-            </button>
-          )}
-        </span>
+        {isTraceId ? (
+          <button
+            className={styles.traceIdButton}
+            title="Show all logs for this trace"
+            onClick={() => onViewTrace!(value)}
+          >
+            {displayValue}
+          </button>
+        ) : (
+          <span className={styles.attrValue}>
+            {displayValue}
+            {isLong && (
+              <button className={styles.showMoreBtn} onClick={() => toggleValueExpanded(valueKey)}>
+                {isValueExpanded ? 'Show less' : 'Show more'}
+              </button>
+            )}
+          </span>
+        )}
         <div className={styles.attrActions}>
           <IconButton
             name="filter-plus"
@@ -295,14 +308,6 @@ export function LogDetailDrawer({
               variant={isSelected ? 'primary' : undefined}
               tooltip={isSelected ? 'Remove column' : 'Add as column'}
               onClick={() => toggleAsColumn(field, clickhouseField)}
-            />
-          )}
-          {onViewTrace && clickhouseField === config.columns.traceId && (
-            <IconButton
-              name="link"
-              size="sm"
-              tooltip="View trace"
-              onClick={() => onViewTrace(value)}
             />
           )}
         </div>
@@ -577,6 +582,24 @@ const getStyles = (theme: GrafanaTheme2) => ({
     word-break: break-word;
     overflow-wrap: anywhere;
     flex: 1;
+  `,
+  traceIdButton: css`
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.link};
+    background: transparent;
+    border: none;
+    padding: 0;
+    text-align: left;
+    text-decoration: underline;
+    cursor: pointer;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    flex: 1;
+
+    &:hover {
+      color: ${theme.colors.text.maxContrast};
+    }
   `,
   attrActions: cx(
     'attr-actions',

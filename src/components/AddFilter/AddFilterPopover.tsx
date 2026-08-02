@@ -50,7 +50,7 @@ function opDef(op: FilterOp): OpDef {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface AddFilterPopoverProps {
-  /** Page-supplied value lookup (Logs and Traces each bind their own table/filters). */
+  /** Page-supplied value lookup (bound to the page's own table/filters). */
   loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
   onAddFilter: (pill: FilterPill) => void;
 }

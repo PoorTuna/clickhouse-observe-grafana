@@ -40,7 +40,6 @@ import {
   SourceConfig,
   VolumeDataPoint,
 } from '../types';
-import { PLUGIN_BASE_URL } from '../constants';
 import { decodeLogsState, encodeLogsState } from '../data/urlState';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 import { useAvailableHeight } from '../utils/useAvailableHeight';
@@ -197,8 +196,8 @@ export function LogsExplorer() {
   // `searchParams`'s identity, which matters because the serialize-to-URL effect below rewrites
   // `searchParams` on every state change; re-decoding on every one of those writes would just be
   // reading back what was just written (harmless but pointless), and reacting to a *user* editing
-  // the URL bar directly isn't a goal here (unlike TraceExplorer's route param, this state has no
-  // canonical non-URL source of truth to resync from).
+  // the URL bar directly isn't a goal here — this state has no canonical non-URL source of truth
+  // to resync from.
   const [initialUrlState] = useState(() => decodeLogsState(searchParams));
 
   const [queryState, dispatch] = useReducer(
@@ -233,7 +232,7 @@ export function LogsExplorer() {
 
   // Grafana's PageLayoutType.Custom chrome doesn't clamp to the viewport (see useAvailableHeight's
   // doc comment) — height:100% resolves against nothing, so without this the whole page scrolls
-  // instead of just the log table. Same fix as TraceExplorer.tsx.
+  // instead of just the log table.
   const containerRef = useRef<HTMLDivElement>(null);
   const availableHeight = useAvailableHeight(containerRef);
 
@@ -1329,9 +1328,9 @@ export function LogsExplorer() {
                       onAddFilter={onAddFilter}
                       onToggleColumn={onToggleColumn}
                       onViewTrace={
-                        caps.hasTraces && selectedRow[CORE_ALIAS.traceId]
+                        config.columns.traceId && selectedRow[CORE_ALIAS.traceId]
                           ? (traceId) => {
-                              window.location.href = `${PLUGIN_BASE_URL}/traces/${traceId}`;
+                              onAddFilter(makeFilter(config.columns.traceId, traceId, '='));
                             }
                           : undefined
                       }

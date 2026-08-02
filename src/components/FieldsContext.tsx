@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
-import { FieldModel, inferFieldType, parseTupleElements, selectMapColumns } from '../sql/fieldModel';
+import { FieldModel, inferFieldType, parseTupleElements } from '../sql/fieldModel';
 import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
@@ -78,8 +78,7 @@ const EMPTY_FIELDS_CONTEXT: FieldsContextValue = {
 
 // Exported (not just useFields()) so pages that need the same discovered fields for query
 // building — not just for descendant consumers like FieldSidebar/SearchBar — can call
-// useFieldDiscovery() once and hand the value to <FieldsContext.Provider> directly, rather than
-// nesting <FieldsProvider> (which would run discovery a second time, independently).
+// useFieldDiscovery() once and hand the value to <FieldsContext.Provider> directly.
 export const FieldsContext = createContext<FieldsContextValue>(EMPTY_FIELDS_CONTEXT);
 
 export function useFields(): FieldsContextValue {
@@ -89,27 +88,18 @@ export function useFields(): FieldsContextValue {
 export interface FieldDiscoveryOpts {
   /** Table to introspect. Defaults to config.logsTable (existing Logs behavior). */
   table?: string;
-  /** Map(String,String) columns to expand into individual key fields. Omit to auto-detect every
-   *  Map-typed column found in phase A (the Logs default) — only pass this to narrow discovery to
-   *  a specific list, e.g. TraceExplorer's Resource/Span attribute columns. */
-  mapColumns?: string[];
 }
 
 /**
  * Discovers fields for a table in three phases: top-level columns, then (concurrently) Map keys
  * for any Map-typed columns and JSON paths for any JSON-typed columns found in phase A.
- *
- * Extracted from FieldsProvider so pages that both provide field context to descendants AND need
- * the same field list for building queries (LogsExplorer, TraceExplorer) can call this once and
- * share the result both ways, instead of the page and <FieldsProvider> each discovering
- * independently.
  */
 export function useFieldDiscovery(
   config: SourceConfig,
   timeRange: TimeRange,
   opts: FieldDiscoveryOpts = {}
 ): FieldsContextValue {
-  const { table, mapColumns } = opts;
+  const { table } = opts;
   const resolvedTable = table ?? config.logsTable;
   const [fields, setFields] = useState<FieldModel[]>([]);
   // Starts true (not false): discovery always kicks off on mount once datasourceUid is known, so
@@ -179,16 +169,10 @@ export function useFieldDiscovery(
     }
 
     // Phase B: Map keys (time-bounded, cached per table + coarse bucket). Fired concurrently —
-    // each column writes its own cache key, so there's no cross-column dependency.
-    // With an explicit `mapColumns` opt (TraceExplorer's own attribute-column list), narrow to
-    // just those, still filtered down to ones actually typed Map in phase A — mapKeys() throws
-    // ILLEGAL_TYPE_OF_ARGUMENT (CH error 43) against JSON/String columns. Without an explicit opt
-    // (the Logs default), auto-detect every Map-typed column found in phase A — same treatment
-    // JSON columns already get; no config field is required to enable discovery/autocomplete for
-    // a Map attribute column anymore.
-    const mapCols = mapColumns
-      ? selectMapColumns(mapColumns, columns)
-      : columns.filter((f) => f.type === 'map').map((f) => f.name);
+    // each column writes its own cache key, so there's no cross-column dependency. Auto-detect
+    // every Map-typed column found in phase A — same treatment JSON columns already get; no
+    // config field is required to enable discovery/autocomplete for a Map attribute column.
+    const mapCols = columns.filter((f) => f.type === 'map').map((f) => f.name);
 
     const mapKeysPromise = runWithConcurrencyLimit(mapCols, DISCOVERY_CONCURRENCY, async (mapCol) => {
       const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
@@ -322,21 +306,4 @@ export function useFieldDiscovery(
   }, [config.datasourceUid, config.database, resolvedTable, bucket]);
 
   return { fields, loading, error, refresh };
-}
-
-interface FieldsProviderProps extends FieldDiscoveryOpts {
-  config: SourceConfig;
-  timeRange: TimeRange;
-  children: React.ReactNode;
-}
-
-/**
- * Convenience wrapper for consumers that only need field data via useFields() in descendants
- * (no local query-building use) — e.g. anywhere lighter-weight than LogsExplorer/TraceExplorer.
- * Those two pages use useFieldDiscovery() directly instead so they can also read the fields for
- * building their own queries; see that hook's doc comment.
- */
-export function FieldsProvider({ config, timeRange, table, mapColumns, children }: FieldsProviderProps) {
-  const value = useFieldDiscovery(config, timeRange, { table, mapColumns });
-  return <FieldsContext.Provider value={value}>{children}</FieldsContext.Provider>;
 }

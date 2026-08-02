@@ -9,7 +9,6 @@ const config: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'otel_logs',
-  tracesTable: 'otel_traces',
   isOtel: true,
   columns: OTEL_COLUMN_MAPPING,
 };

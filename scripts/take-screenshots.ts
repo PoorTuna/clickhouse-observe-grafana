@@ -1,5 +1,5 @@
 /**
- * Retake the three README screenshots against a live docker-compose stack.
+ * Retake the README screenshots against a live docker-compose stack.
  * Prereqs: npm run server (or docker compose up -d), a ClickHouse datasource
  * already added in Grafana, seed data loaded.
  *
@@ -41,7 +41,6 @@ async function run() {
 
     await page.getByPlaceholder('default').fill('default');
     await page.getByPlaceholder('otel_logs').fill('otel_logs');
-    await page.getByPlaceholder('otel_traces').fill('otel_traces');
     await beat(200);
 
     await page.getByRole('button', { name: /Apply OTel preset/i }).click();
@@ -82,31 +81,6 @@ async function run() {
   } catch (e) {
     await page.screenshot({ path: path.join(IMG_DIR, 'DEBUG-logs.png'), fullPage: true });
     console.error('LOGS PAGE BODY TEXT:', (await page.textContent('body'))?.slice(0, 2000));
-    throw e;
-  }
-
-  // ── Trace Explorer ───────────────────────────────────────────────────────
-  await page.goto(`${GRAFANA_URL}/a/${PLUGIN_ID}/traces?from=now-6h&to=now`, {
-    waitUntil: 'networkidle',
-    timeout: 25_000,
-  });
-  try {
-    const traceClearBtn = page.getByTitle('Clear search');
-    if (await traceClearBtn.count()) {
-      await traceClearBtn.click();
-    } else {
-      const traceSearch = page.getByPlaceholder(/Search traces with KQL/);
-      await traceSearch.click();
-      await traceSearch.fill('');
-      await page.keyboard.press('Enter');
-    }
-    await beat(500);
-    await page.waitForSelector('table tbody tr', { timeout: 20_000 });
-    await beat(1_500);
-    await page.screenshot({ path: path.join(IMG_DIR, 'screenshot-traces.png'), fullPage: false });
-  } catch (e) {
-    await page.screenshot({ path: path.join(IMG_DIR, 'DEBUG-traces.png'), fullPage: true });
-    console.error('TRACES PAGE BODY TEXT:', (await page.textContent('body'))?.slice(0, 2000));
     throw e;
   }
 

@@ -15,7 +15,7 @@ import { useFieldDiscovery } from '../FieldsContext';
 import { fieldToColumn } from '../FieldSidebar/FieldSidebar';
 import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SelectedColumn, SourceConfig } from '../../types';
 import { ColumnMappingForm } from '../ColumnMappingForm';
-import { COL_FIELDS, TRACE_ONLY_KEYS } from '../../columnFields';
+import { COL_FIELDS } from '../../columnFields';
 import { guessColumnMapping, TableColumn } from '../../ai/columnGuess';
 
 interface CreateDataViewModalProps {
@@ -366,7 +366,6 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         datasourceUid,
         database,
         logsTable,
-        tracesTable: '',
         isOtel: applyOtel,
         columns: mapping,
         name: name.trim() || `${database}.${logsTable}`,
@@ -571,18 +570,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                     setBodyField(updated.body || NO_BODY_VALUE);
                   }}
                   columnOptions={allColumnOptions}
-                  // This modal never sets tracesTable (always saved as '' — see handleSave), so
-                  // Span/Parent Span ID, Duration, Span name/status/kind, Span Attributes have no
-                  // effect on anything this view can do. Only AppConfig's traces-aware mapping
-                  // (which does configure a tracesTable) shows the full field set.
-                  hideTraceFields
                   onAiGuess={
                     aiOn
-                      ? () =>
-                          runAiGuess(
-                            COL_FIELDS.map((f) => f.key).filter((k) => !TRACE_ONLY_KEYS.has(k)),
-                            true
-                          )
+                      ? () => runAiGuess(COL_FIELDS.map((f) => f.key), true)
                       : undefined
                   }
                   aiBusy={aiBusy}

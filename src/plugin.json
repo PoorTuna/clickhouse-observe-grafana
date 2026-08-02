@@ -8,11 +8,10 @@
     "keywords": [
       "clickhouse",
       "logs",
-      "traces",
       "observability",
       "otel"
     ],
-    "description": "HyperDX-style log and trace explorer for ClickHouse. Companion app — requires the ClickHouse datasource plugin.",
+    "description": "HyperDX-style log explorer for ClickHouse. Companion app — requires the ClickHouse datasource plugin.",
     "author": {
       "name": "PoorTuna"
     },
@@ -21,7 +20,7 @@
       "large": "img/logo.svg"
     },
     "screenshots": [],
-    "version": "0.3.6",
+    "version": "0.4.0",
     "updated": "%TODAY%"
   },
   "includes": [
@@ -32,14 +31,6 @@
       "addToNav": true,
       "defaultNav": false,
       "icon": "document-info"
-    },
-    {
-      "type": "page",
-      "name": "Traces",
-      "path": "/a/poortuna-clickhouse-observe-app/traces",
-      "addToNav": true,
-      "defaultNav": false,
-      "icon": "distributed-tracing"
     },
     {
       "type": "page",

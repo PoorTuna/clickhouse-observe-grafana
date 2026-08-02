@@ -26,10 +26,10 @@ export interface GuessColumnMappingArgs {
 }
 
 // Short, role-focused hints for the AI prompt — deliberately NOT the same text as COL_FIELDS'
-// label/description (those are written for a human reading the settings form, e.g. "Traces page
-// only — no effect on Logs Explorer", which is irrelevant noise for the model and measurably hurt
-// guess quality in testing against a weak local model). Only the fields actually useful to guess
-// need an entry here; anything else falls back to COL_FIELDS' label.
+// label/description (those are written for a human reading the settings form, which is irrelevant
+// noise for the model and measurably hurt guess quality in testing against a weak local model).
+// Only the fields actually useful to guess need an entry here; anything else falls back to
+// COL_FIELDS' label.
 const AI_ROLE_HINTS: Partial<Record<keyof ColumnMapping, string>> = {
   timestamp: 'the column holding the event date/time (a Date, DateTime, or DateTime64 typed column)',
   body: 'the main free-text log message column',

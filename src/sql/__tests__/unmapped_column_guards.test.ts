@@ -7,7 +7,6 @@
  */
 
 import {
-  buildLogsByTraceIdQuery,
   buildSurroundingDocsQuery,
   buildVolumeQuery,
   resolveVolumeBreakdown,
@@ -20,13 +19,9 @@ const arbitraryConfig: SourceConfig = {
   datasourceUid: 'test',
   database: 'default',
   logsTable: 'my_table',
-  tracesTable: '',
   isOtel: false,
   columns: { ...EMPTY_COLUMN_MAPPING, timestamp: 'ts' },
 };
-
-// buildTraceListQuery / buildTraceDetailQuery / buildTraceVolumeQuery guard coverage now lives in
-// build_trace_queries.test.ts alongside their other behavior.
 
 describe('buildVolumeQuery', () => {
   it('returns empty string when timestamp is unmapped', () => {
@@ -101,33 +96,6 @@ describe('selectMapColumns', () => {
   it('drops undefined/empty configured names', () => {
     const columns = [col('LogAttributes', 'map')];
     expect(selectMapColumns([undefined, '', 'LogAttributes'], columns)).toEqual(['LogAttributes']);
-  });
-});
-
-describe('buildLogsByTraceIdQuery', () => {
-  it('returns empty string when traceId is unmapped', () => {
-    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, timestamp: 'ts', body: 'msg' } };
-    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
-  });
-
-  it('returns empty string when timestamp is unmapped', () => {
-    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', body: 'msg' } };
-    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
-  });
-
-  it('returns empty string when body is unmapped', () => {
-    const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', timestamp: 'ts' } };
-    expect(buildLogsByTraceIdQuery(cfg, 'abc123')).toBe('');
-  });
-
-  it('builds a query with no undefined tokens when all required columns are mapped', () => {
-    const cfg: SourceConfig = {
-      ...arbitraryConfig,
-      columns: { ...EMPTY_COLUMN_MAPPING, traceId: 'trace_id', timestamp: 'ts', body: 'msg' },
-    };
-    const sql = buildLogsByTraceIdQuery(cfg, 'abc123');
-    expect(sql).not.toContain('undefined');
-    expect(sql).toContain('SELECT ts AS timestamp, msg AS body');
   });
 });
 

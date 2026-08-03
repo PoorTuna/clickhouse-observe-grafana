@@ -177,6 +177,9 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
     conditions.push(buildSearchClause(state.search, config, index));
   }
   for (const f of state.filters) {
+    if (f.disabled) {
+      continue;
+    }
     conditions.push(buildFilterClause(f, config, index));
   }
   return conditions;

@@ -10,6 +10,14 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.6] — 2026-08-03
+
+### Changed
+
+- Filter pills in the Logs Explorer toolbar now match Kibana Discover's filter bar visually and functionally: click a pill to open a context menu (Edit filter, Exclude/Include results, Temporarily disable/Re-enable, Delete) instead of only being able to add or remove them. Editing reuses the existing Add-filter field/operator/value form, prefilled. Disabled pills are excluded from the query but kept in the pill list, URL, and saved searches.
+
+---
+
 ## [0.4.5] — 2026-08-03
 
 ### Added

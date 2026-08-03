@@ -1,15 +1,18 @@
-import React from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { useStyles2, Icon } from '@grafana/ui';
+import { useStyles2, Icon, Portal } from '@grafana/ui';
 import { FilterOp, FilterPill } from '../types';
-import { filterLabel, removeFilter } from '../sql/filters';
+import { filterLabel, negateFilter, removeFilter, toggleDisabled, updateFilter } from '../sql/filters';
+import { FieldValue } from '../sql/kql/_values';
+import { FilterEditForm } from './AddFilter/FilterEditForm';
 
 const NEGATED_OPS: ReadonlySet<FilterOp> = new Set(['!=', 'not_contains', 'not_one_of', 'not_exists']);
 
 interface FilterPillsProps {
   filters: FilterPill[];
   onChange: (filters: FilterPill[]) => void;
+  loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
 }
 
 /** Splits a pill's text into a leading "NOT" badge (the convention for negated exists/one_of
@@ -37,8 +40,11 @@ function pillText(f: FilterPill): { notPrefix: boolean; fieldPart: string | null
   };
 }
 
-export function FilterPills({ filters, onChange }: FilterPillsProps) {
+export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps) {
   const styles = useStyles2(getStyles);
+  const [menuForId, setMenuForId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const pillRefs = useRef<Record<string, HTMLElement | null>>({});
 
   if (filters.length === 0) {
     return null;
@@ -56,14 +62,23 @@ export function FilterPills({ filters, onChange }: FilterPillsProps) {
         return (
           <span
             key={f.id}
-            className={cx(styles.pill, negated ? styles.pillNegative : styles.pillPositive)}
+            ref={(el) => {
+              pillRefs.current[f.id] = el;
+            }}
+            className={cx(
+              styles.pill,
+              negated && styles.pillNegated,
+              f.disabled && styles.pillDisabled
+            )}
             title={filterLabel(f)}
           >
-            <span className={styles.label}>
-              {notPrefix && <span className={styles.notPart}>NOT</span>}
-              {fieldPart && <span className={styles.fieldPart}>{fieldPart}</span>}
+            <button className={styles.pillBody} onClick={() => setMenuForId(f.id)}>
+              {notPrefix && <span className={styles.notPart}>NOT </span>}
+              {fieldPart && (
+                <span className={negated ? undefined : styles.fieldPart}>{fieldPart}</span>
+              )}
               {rest}
-            </span>
+            </button>
             <button
               className={styles.removeBtn}
               onClick={() => onRemove(f.id)}
@@ -71,6 +86,43 @@ export function FilterPills({ filters, onChange }: FilterPillsProps) {
             >
               <Icon name="times" size="xs" />
             </button>
+
+            {menuForId === f.id && (
+              <FilterPillMenu
+                anchorEl={pillRefs.current[f.id]}
+                pill={f}
+                onClose={() => setMenuForId(null)}
+                onEdit={() => {
+                  setMenuForId(null);
+                  setEditingId(f.id);
+                }}
+                onToggleNegate={() => {
+                  onChange(updateFilter(filters, f.id, negateFilter(f)));
+                  setMenuForId(null);
+                }}
+                onToggleDisabled={() => {
+                  onChange(toggleDisabled(filters, f.id));
+                  setMenuForId(null);
+                }}
+                onDelete={() => {
+                  onRemove(f.id);
+                  setMenuForId(null);
+                }}
+              />
+            )}
+
+            {editingId === f.id && (
+              <FilterPillEditPopover
+                anchorEl={pillRefs.current[f.id]}
+                pill={f}
+                loadValues={loadValues}
+                onCancel={() => setEditingId(null)}
+                onSubmit={(patched) => {
+                  onChange(updateFilter(filters, f.id, patched));
+                  setEditingId(null);
+                }}
+              />
+            )}
           </span>
         );
       })}
@@ -83,6 +135,84 @@ export function FilterPills({ filters, onChange }: FilterPillsProps) {
   );
 }
 
+// ── Context menu ─────────────────────────────────────────────────────────────
+
+interface FilterPillMenuProps {
+  anchorEl: HTMLElement | null;
+  pill: FilterPill;
+  onClose: () => void;
+  onEdit: () => void;
+  onToggleNegate: () => void;
+  onToggleDisabled: () => void;
+  onDelete: () => void;
+}
+
+function FilterPillMenu({ anchorEl, pill, onClose, onEdit, onToggleNegate, onToggleDisabled, onDelete }: FilterPillMenuProps) {
+  const styles = useStyles2(getStyles);
+  const negated = NEGATED_OPS.has(pill.op);
+  const rect = anchorEl?.getBoundingClientRect();
+  const top = (rect?.bottom ?? 0) + 6;
+  const left = rect?.left ?? 0;
+
+  return (
+    <Portal>
+      <div className={styles.backdrop} onClick={onClose} />
+      <div className={styles.menu} style={{ top, left }} onClick={(e) => e.stopPropagation()}>
+        <button className={styles.menuItem} onClick={onEdit}>
+          <Icon name="pen" size="sm" />
+          Edit filter
+        </button>
+        <button className={styles.menuItem} onClick={onToggleNegate}>
+          <Icon name="minus-circle" size="sm" />
+          {negated ? 'Include results' : 'Exclude results'}
+        </button>
+        <button className={styles.menuItem} onClick={onToggleDisabled}>
+          <Icon name="eye-slash" size="sm" />
+          {pill.disabled ? 'Re-enable' : 'Temporarily disable'}
+        </button>
+        <button className={styles.menuItem} onClick={onDelete}>
+          <Icon name="trash-alt" size="sm" />
+          Delete
+        </button>
+      </div>
+    </Portal>
+  );
+}
+
+// ── Edit popover ──────────────────────────────────────────────────────────────
+
+interface FilterPillEditPopoverProps {
+  anchorEl: HTMLElement | null;
+  pill: FilterPill;
+  loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
+  onCancel: () => void;
+  onSubmit: (pill: FilterPill) => void;
+}
+
+function FilterPillEditPopover({ anchorEl, pill, loadValues, onCancel, onSubmit }: FilterPillEditPopoverProps) {
+  const styles = useStyles2(getStyles);
+  const rect = anchorEl?.getBoundingClientRect();
+  const PANEL_W = 760;
+  const top = (rect?.bottom ?? 0) + 6;
+  const left = Math.max(8, Math.min(rect?.left ?? 0, window.innerWidth - PANEL_W - 8));
+
+  const stop = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
+
+  return (
+    <Portal>
+      <div className={styles.backdrop} onClick={onCancel} />
+      <div className={styles.editPanel} style={{ top, left }} onClick={stop}>
+        <div className={styles.panelHeader}>
+          <span className={styles.panelTitle}>Edit filter</span>
+        </div>
+        <FilterEditForm initial={pill} loadValues={loadValues} onSubmit={onSubmit} onCancel={onCancel} />
+      </div>
+    </Portal>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const getStyles = (theme: GrafanaTheme2) => ({
   container: css`
     display: flex;
@@ -90,42 +220,46 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(0.5)};
     align-items: center;
   `,
+  /** Kibana Discover filter-pill look: thin neutral border, subtle fill, no bold/color-coded
+   *  border — polarity/disabled state is conveyed by the label text, not the chip chrome. */
   pill: css`
     display: inline-flex;
     align-items: center;
-    gap: ${theme.spacing(0.75)};
-    border-radius: ${theme.shape.radius.default};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)} ${theme.spacing(0.5)} ${theme.spacing(1)};
+    gap: ${theme.spacing(0.5)};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: 4px;
+    background: ${theme.colors.background.secondary};
+    padding: ${theme.spacing(0.5)} ${theme.spacing(0.75)};
     font-size: ${theme.typography.bodySmall.fontSize};
-    color: ${theme.colors.text.secondary};
-    max-width: 300px;
+    color: ${theme.colors.text.primary};
+    max-width: 320px;
+    &:hover { background: ${theme.colors.action.hover}; }
   `,
-  /** Polarity accent — vivid green (positive) / red (excluding) filter pills: a 2px saturated
-   *  border plus a matching low-opacity tint, rather than a flat gray chip with only a subtle
-   *  border-color hint. */
-  pillPositive: css`
-    border: 2px solid ${theme.colors.success.main};
-    background: ${theme.colors.success.transparent};
-    &:hover { background: ${theme.colors.success.transparent}; filter: brightness(1.3); }
+  pillNegated: css`
+    color: ${theme.colors.error.text};
   `,
-  pillNegative: css`
-    border: 2px solid ${theme.colors.error.main};
-    background: ${theme.colors.error.transparent};
-    &:hover { background: ${theme.colors.error.transparent}; filter: brightness(1.3); }
+  pillDisabled: css`
+    opacity: 0.6;
+    text-decoration: line-through;
   `,
-  label: css`
+  pillBody: css`
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: inherit;
+    text-decoration: inherit;
+    font-size: inherit;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    max-width: 260px;
   `,
   notPart: css`
     font-weight: ${theme.typography.fontWeightBold};
-    color: ${theme.colors.error.text};
-    margin-right: ${theme.spacing(0.5)};
   `,
   fieldPart: css`
-    font-weight: ${theme.typography.fontWeightBold};
-    color: ${theme.colors.text.primary};
+    color: ${theme.colors.text.link};
   `,
   removeBtn: css`
     background: transparent;
@@ -153,5 +287,53 @@ const getStyles = (theme: GrafanaTheme2) => ({
       color: ${theme.colors.text.primary};
       text-decoration: underline;
     }
+  `,
+  backdrop: css`
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+  `,
+  menu: css`
+    position: fixed;
+    z-index: 10000;
+    min-width: 220px;
+    padding: ${theme.spacing(0.5)} 0;
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z2};
+  `,
+  menuItem: css`
+    display: flex;
+    align-items: center;
+    gap: ${theme.spacing(1)};
+    width: 100%;
+    padding: ${theme.spacing(0.75)} ${theme.spacing(1.5)};
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: ${theme.colors.text.primary};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    &:hover { background: ${theme.colors.action.hover}; }
+  `,
+  editPanel: css`
+    position: fixed;
+    z-index: 10000;
+    width: 760px;
+    max-width: calc(100vw - 16px);
+    padding: ${theme.spacing(2)};
+    background: ${theme.colors.background.primary};
+    border: 1px solid ${theme.colors.border.medium};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z3};
+  `,
+  panelHeader: css`
+    margin-bottom: ${theme.spacing(1.5)};
+  `,
+  panelTitle: css`
+    font-size: ${theme.typography.h5.fontSize};
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
   `,
 });

@@ -109,6 +109,32 @@ export function addFilterPill(filters: FilterPill[], pill: FilterPill): FilterPi
   return [...deduplicated, pill];
 }
 
+/** Replace one pill by id with a patched copy (edit-save). No-op if the id isn't found. */
+export function updateFilter(filters: FilterPill[], id: string, patch: Partial<FilterPill>): FilterPill[] {
+  return filters.map((f) => (f.id === id ? { ...f, ...patch, id: f.id } : f));
+}
+
+/** Toggle a pill's `disabled` flag in place (id-preserving). */
+export function toggleDisabled(filters: FilterPill[], id: string): FilterPill[] {
+  return filters.map((f) => (f.id === id ? { ...f, disabled: !f.disabled } : f));
+}
+
+const NEGATED_OP: Record<FilterOp, FilterOp> = {
+  '=': '!=',
+  '!=': '=',
+  contains: 'not_contains',
+  not_contains: 'contains',
+  one_of: 'not_one_of',
+  not_one_of: 'one_of',
+  exists: 'not_exists',
+  not_exists: 'exists',
+};
+
+/** Flip a pill's polarity (Exclude results / Include results in the pill menu). */
+export function negateFilter(pill: FilterPill): FilterPill {
+  return { ...pill, op: NEGATED_OP[pill.op] };
+}
+
 /** Human-readable label for a filter pill. */
 export function filterLabel(f: FilterPill): string {
   // Custom label takes priority

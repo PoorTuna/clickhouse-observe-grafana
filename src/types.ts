@@ -75,6 +75,7 @@ export interface FilterPill {
   value: string;        // single-value ops; '' for multi / exists ops
   values?: string[];    // one_of / not_one_of
   label?: string;       // optional custom display label
+  disabled?: boolean;   // temporarily excluded from the query, kept in state/URL
 }
 
 export type ColumnType = 'time' | 'level' | 'text' | 'number' | 'string' | 'exact' | 'map' | 'json' | 'tuple' | 'array' | 'unknown';

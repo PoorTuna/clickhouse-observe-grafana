@@ -139,6 +139,32 @@ describe('buildFilterClause — existing ops unchanged', () => {
   });
 });
 
+// ── disabled pills ──────────────────────────────────────────────────────────
+
+describe('buildWhereConditions — disabled pills', () => {
+  it('a disabled filter emits no WHERE condition', () => {
+    const conditions = buildWhereConditions(
+      config,
+      stateWithFilter({ field: 'ServiceName', op: '=', value: 'api', disabled: true })
+    );
+    // Only the timestamp range condition remains — the disabled filter is skipped entirely.
+    expect(conditions).toHaveLength(1);
+  });
+
+  it('mixing an enabled and a disabled filter only emits the enabled one', () => {
+    const state = {
+      ...DEFAULT_LOGS_QUERY_STATE,
+      filters: [
+        { id: 'a', field: 'ServiceName', op: '=' as const, value: 'api' },
+        { id: 'b', field: 'Body', op: 'contains' as const, value: 'error', disabled: true },
+      ],
+    };
+    const conditions = buildWhereConditions(config, state);
+    expect(conditions).toHaveLength(2);
+    expect(conditions[1]).toContain("= 'api'");
+  });
+});
+
 // ── filterLabel ───────────────────────────────────────────────────────────────
 
 describe('filterLabel — new operators', () => {

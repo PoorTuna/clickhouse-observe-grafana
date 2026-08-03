@@ -15,7 +15,30 @@ const columns: SelectedColumn[] = [
   { id: 'body', key: '__body', sqlExpr: 'Body', displayName: 'Message', type: 'text', isCore: true },
 ];
 
+const disabledFilters: FilterPill[] = [
+  { id: 'f1', field: 'SeverityText', op: '=', value: 'ERROR' },
+  { id: 'f2', field: 'HostName', op: '!=', value: 'host-1', disabled: true },
+];
+
 describe('encodeLogsState / decodeLogsState round-trip', () => {
+  it('round-trips a disabled filter pill', () => {
+    const timeRange = {
+      from: dateTime(Date.now() - 3600_000),
+      to: dateTime(Date.now()),
+      raw: { from: 'now-1h', to: 'now' },
+    };
+    const encoded = encodeLogsState({
+      search: '',
+      filters: disabledFilters,
+      columns: [],
+      timeRange,
+    });
+    const decoded = decodeLogsState(encoded);
+    expect(decoded.filters).toEqual(disabledFilters);
+    expect(decoded.filters?.[1].disabled).toBe(true);
+  });
+
+
   it('round-trips search, filters, columns, sort, relative time range, and view id', () => {
     const timeRange = {
       from: dateTime(Date.now() - 3600_000),

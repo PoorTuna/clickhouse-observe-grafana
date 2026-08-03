@@ -1066,6 +1066,7 @@ export function LogsExplorer() {
             <FilterPills
               filters={queryState.filters}
               onChange={(f) => dispatch({ type: 'SET_FILTERS', filters: f })}
+              loadValues={logsLoadValues}
             />
           </div>
         )}

@@ -85,4 +85,25 @@ describe('encodeLogsState / decodeLogsState round-trip', () => {
     const decoded = decodeLogsState(new URLSearchParams());
     expect(decoded).toEqual({});
   });
+
+  it('decodes traceId/dsUid — the inbound-only trace->logs deep-link contract', () => {
+    const sp = new URLSearchParams();
+    sp.set('traceId', 'deadbeefcafebabe0123456789abcdef');
+    sp.set('dsUid', 'afrf0mt8ssn40d');
+    const decoded = decodeLogsState(sp);
+    expect(decoded.traceId).toBe('deadbeefcafebabe0123456789abcdef');
+    expect(decoded.dsUid).toBe('afrf0mt8ssn40d');
+  });
+
+  it('never emits traceId/dsUid from encodeLogsState — they are decode-only', () => {
+    const encoded = encodeLogsState({
+      search: 'error',
+      filters,
+      columns,
+      timeRange: { from: dateTime(0), to: dateTime(1), raw: { from: 'now-1h', to: 'now' } },
+      viewId: 'shared_123',
+    });
+    expect(encoded.has('traceId')).toBe(false);
+    expect(encoded.has('dsUid')).toBe(false);
+  });
 });

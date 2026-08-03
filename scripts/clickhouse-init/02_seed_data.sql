@@ -45,3 +45,50 @@ SELECT
         '}'
     )                                                           AS Payload
 FROM numbers(2000);
+
+-- Seed matching traces for every seeded log row. Pulled directly from the otel_logs rows just
+-- inserted above (TraceId/SpanId/ServiceName copied verbatim) rather than recomputed via rand64/
+-- rand32 with the "same" argument — those functions' argument is only a subexpression-elimination
+-- guard, not a seed, so two separate INSERT ... SELECT statements produce unrelated values even
+-- when given the same `number`. Selecting from the table itself is the only way to guarantee the
+-- TraceId actually matches, which is what makes the log detail drawer's trace link resolve to a
+-- real trace instead of "No data". Safe to run right after the otel_logs insert on a fresh volume
+-- (this script only runs once, via docker-entrypoint-initdb.d, against an empty table).
+-- Root span: server-side request, ServiceName matches the log row's.
+INSERT INTO default.otel_traces
+    (Timestamp, TraceId, SpanId, ParentSpanId, SpanName, SpanKind, ServiceName, ResourceAttributes, SpanAttributes, Duration, StatusCode, StatusMessage)
+SELECT
+    Timestamp,
+    TraceId,
+    SpanId,
+    ''                                                           AS ParentSpanId,
+    multiIf(ServiceName = 'payment-gateway', 'ProcessPayment',
+            ServiceName = 'order-service',   'ProcessOrder',
+            ServiceName = 'catalog-api',     'QueryCatalog',
+            ServiceName = 'auth-service',    'ValidateToken',
+            'HandleCartRequest')                                 AS SpanName,
+    'SPAN_KIND_SERVER'                                          AS SpanKind,
+    ServiceName,
+    ResourceAttributes,
+    map('http.method', LogAttributes['http.method'])            AS SpanAttributes,
+    toUInt64(5_000_000 + (sipHash64(SpanId) % 500) * 1_000_000) AS Duration, -- ns: 5-505ms
+    if(SeverityText IN ('ERROR', 'CRITICAL'), 'STATUS_CODE_ERROR', 'STATUS_CODE_OK') AS StatusCode,
+    if(SeverityText IN ('ERROR', 'CRITICAL'), 'internal error', '') AS StatusMessage
+FROM default.otel_logs;
+
+-- Child span: a downstream call the root span makes, so the trace waterfall in Explore shows
+-- more than a single bar. ParentSpanId references the root span's SpanId (= the log row's SpanId).
+INSERT INTO default.otel_traces
+    (Timestamp, TraceId, SpanId, ParentSpanId, SpanName, SpanKind, ServiceName, SpanAttributes, Duration, StatusCode)
+SELECT
+    Timestamp + INTERVAL 1 MILLISECOND,
+    TraceId,
+    lower(hex(sipHash128(SpanId, 'child')))                     AS SpanId,
+    SpanId                                                      AS ParentSpanId,
+    ['DB Query', 'Cache Lookup', 'External API Call'][1 + (sipHash64(SpanId) % 3)] AS SpanName,
+    'SPAN_KIND_CLIENT'                                          AS SpanKind,
+    ['postgres', 'redis', 'payment-provider'][1 + (sipHash64(SpanId) % 3)] AS ServiceName,
+    map()                                                       AS SpanAttributes,
+    toUInt64(1_000_000 + (sipHash64(SpanId) % 200) * 500_000)   AS Duration, -- ns: 1-101ms
+    'STATUS_CODE_OK'                                            AS StatusCode
+FROM default.otel_logs;

@@ -8,6 +8,7 @@ import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
 import { LogsTable } from '../components/LogsTable';
 import { LogDetailDrawer } from '../components/LogDetailDrawer';
+import { useTraceExploreLink } from '../components/useTraceExploreLink';
 import { CompareLogsModal } from '../components/CompareLogsModal';
 import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
 import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
@@ -203,15 +204,27 @@ export function LogsExplorer() {
   const [queryState, dispatch] = useReducer(
     queryReducer,
     DEFAULT_LOGS_QUERY_STATE,
-    (init) => ({
-      ...init,
-      ...(initialUrlState.search !== undefined ? { search: initialUrlState.search } : {}),
-      ...(initialUrlState.filters ? { filters: initialUrlState.filters } : {}),
-      ...(initialUrlState.columns ? { columns: initialUrlState.columns } : {}),
-      ...(initialUrlState.sort ? { sort: initialUrlState.sort } : {}),
-    })
+    (init) => {
+      const baseFilters = initialUrlState.filters ?? init.filters;
+      // Inbound trace->logs link (?traceId=…, see data/traceToLogsLink.ts): seed a filter pill for
+      // it, appended after the URL's own `filters` so both survive. Only when this view actually
+      // has a trace column mapped — config is available here because App.tsx already resolved the
+      // right Data View (possibly via the trace picker modal) before LogsExplorer ever mounted.
+      const filters =
+        initialUrlState.traceId && config.columns.traceId
+          ? addFilterPill(baseFilters, makeFilter(config.columns.traceId, initialUrlState.traceId, '='))
+          : baseFilters;
+      return {
+        ...init,
+        ...(initialUrlState.search !== undefined ? { search: initialUrlState.search } : {}),
+        ...(initialUrlState.filters || filters !== baseFilters ? { filters } : {}),
+        ...(initialUrlState.columns ? { columns: initialUrlState.columns } : {}),
+        ...(initialUrlState.sort ? { sort: initialUrlState.sort } : {}),
+      };
+    }
   );
   const [timeRange, setTimeRange] = useState<TimeRange>(() => initialUrlState.timeRange ?? defaultTimeRange());
+  const getTraceHref = useTraceExploreLink(config.datasourceUid, timeRange);
 
   // Discovered once here (not just via <FieldsProvider> in descendants) so executeQuery below can
   // resolve JSON-path/Map-key field references to the right SQL — see useFieldDiscovery's doc
@@ -328,7 +341,7 @@ export function LogsExplorer() {
       didReconcileForDiscoveryRef.current = false;
     }
     prevViewId.current = viewId;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [activeView?.id]);
 
   // Sidebar collapse + resizable width, persisted across sessions
@@ -1333,13 +1346,7 @@ export function LogsExplorer() {
                       onToggleExpanded={() => setDetailExpanded((v) => !v)}
                       onAddFilter={onAddFilter}
                       onToggleColumn={onToggleColumn}
-                      onViewTrace={
-                        config.columns.traceId && selectedRow[CORE_ALIAS.traceId]
-                          ? (traceId) => {
-                              onAddFilter(makeFilter(config.columns.traceId, traceId, '='));
-                            }
-                          : undefined
-                      }
+                      getTraceHref={config.columns.traceId ? getTraceHref : undefined}
                       onPrev={selectedIndex > 0 ? () => setSelectedRow(pageRows[selectedIndex - 1]) : undefined}
                       onNext={
                         selectedIndex >= 0 && selectedIndex < pageRows.length - 1

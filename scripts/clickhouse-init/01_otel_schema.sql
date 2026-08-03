@@ -30,3 +30,41 @@ CREATE TABLE IF NOT EXISTS default.otel_logs (
 PARTITION BY toDate(TimestampTime)
 ORDER BY (ServiceName, TimestampTime, Timestamp)
 TTL TimestampTime + INTERVAL 30 DAY;
+
+-- OTel-compatible traces table — schema matches opentelemetry-collector-contrib's
+-- clickhouseexporter default DDL (internal/sqltemplates/traces_table.sql), which is also what
+-- grafana-clickhouse-datasource's built-in OTel trace column map (otel.ts) expects. Seeded rows
+-- share TraceId values with a subset of otel_logs (see 02_seed_data.sql) so the log detail
+-- drawer's "open trace in Explore" link resolves to a real trace instead of "No data".
+CREATE TABLE IF NOT EXISTS default.otel_traces (
+    Timestamp           DateTime64(9) CODEC(Delta, ZSTD(1)),
+    TraceId             String   CODEC(ZSTD(1)),
+    SpanId              String   CODEC(ZSTD(1)),
+    ParentSpanId        String   CODEC(ZSTD(1)),
+    TraceState          String   CODEC(ZSTD(1)),
+    SpanName            LowCardinality(String) CODEC(ZSTD(1)),
+    SpanKind            LowCardinality(String) CODEC(ZSTD(1)),
+    ServiceName         LowCardinality(String) CODEC(ZSTD(1)),
+    ResourceAttributes  Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    ScopeName           String   CODEC(ZSTD(1)),
+    ScopeVersion        String   CODEC(ZSTD(1)),
+    SpanAttributes      Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+    Duration            UInt64   CODEC(ZSTD(1)),
+    StatusCode          LowCardinality(String) CODEC(ZSTD(1)),
+    StatusMessage       String   CODEC(ZSTD(1)),
+    Events Nested (
+        Timestamp   DateTime64(9),
+        Name        LowCardinality(String),
+        Attributes  Map(LowCardinality(String), String)
+    ) CODEC(ZSTD(1)),
+    Links Nested (
+        TraceId     String,
+        SpanId      String,
+        TraceState  String,
+        Attributes  Map(LowCardinality(String), String)
+    ) CODEC(ZSTD(1)),
+    INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1
+) ENGINE = MergeTree()
+PARTITION BY toDate(Timestamp)
+ORDER BY (ServiceName, SpanName, toDateTime(Timestamp))
+TTL toDateTime(Timestamp) + INTERVAL 30 DAY;

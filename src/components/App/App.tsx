@@ -1,4 +1,4 @@
-import React, { createContext, Suspense, useCallback, useMemo, useState } from 'react';
+import React, { createContext, Suspense, useCallback, useMemo, useRef, useState } from 'react';
 import { AppRootProps } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
 import {
@@ -18,6 +18,9 @@ import {
   savePersonalView,
   updatePersonalView as updatePVStorage,
 } from '../../data/dataViews';
+import { decodeLogsState } from '../../data/urlState';
+import { getRememberedView, rememberView, resolveTraceLanding, TraceLanding } from '../../data/traceViewChoice';
+import { TraceViewPickerModal } from '../TraceViewPickerModal';
 
 const LogsExplorer = React.lazy(() =>
   import('../../pages/LogsExplorer').then((m) => ({ default: m.LogsExplorer }))
@@ -62,8 +65,35 @@ function App(props: AppRootProps<AppJsonData>) {
 
   const allViews = useMemo(() => mergeViews(sharedViews, personalViews), [sharedViews, personalViews]);
 
-  // Active view ID: prefer stored value, fall back to defaultDataViewId, then first view.
+  // Inbound trace->logs deep link (?traceId=&dsUid=…, see data/traceToLogsLink.ts). Decoded once
+  // at mount, independent of react-router — App.tsx renders above LogsExplorer's <Route>-less
+  // Suspense boundary and must resolve which Data View to activate *before* LogsExplorer (and its
+  // queries) mounts, so it can't wait on router context the way LogsExplorer's own useSearchParams
+  // does. window.location.search is read here for that reason, not out of router-avoidance alone.
+  const [dsUid] = useState<string | undefined>(
+    () => decodeLogsState(new URLSearchParams(window.location.search)).dsUid
+  );
+  // Once a view is picked (automatically, or via the picker modal below) for this dsUid, later
+  // manual view switches during this mount refine the remembered preference for it — see
+  // setActiveViewId below. Doesn't persist across an unrelated future visit without its own
+  // dsUid, by design: the preference is scoped to "arrived here via a trace from this datasource".
+  const traceDsUidRef = useRef<string | undefined>(dsUid);
+
+  // Resolves dsUid -> a single Data View, or flags that a user choice is needed (several views on
+  // that datasource, or none) — see traceViewChoice.ts's doc comment for why this can't be a
+  // silent guess. `status: 'none'` (no dsUid at all) is the everyday case and short-circuits
+  // immediately.
+  const [traceLanding, setTraceLanding] = useState<TraceLanding>(() =>
+    resolveTraceLanding(allViews, dsUid, dsUid ? getRememberedView(dsUid) : null)
+  );
+
+  // Active view ID: an already-resolved trace landing wins over everything else — it's a link the
+  // user just clicked, more specific than whatever was merely left over from a prior session.
+  // Otherwise: prefer stored value, fall back to defaultDataViewId, then first view.
   const [activeViewId, setActiveViewIdState] = useState<string | null>(() => {
+    if (traceLanding.status === 'resolved') {
+      return traceLanding.viewId;
+    }
     const stored = getActiveViewId();
     const available = [...sharedViews, ...loadPersonalViews()];
     if (stored && available.some((v) => v.id === stored)) {
@@ -80,6 +110,12 @@ function App(props: AppRootProps<AppJsonData>) {
   const setActiveViewId = useCallback((id: string) => {
     setActiveViewIdState(id);
     persistActiveViewId(id);
+    // This session was reached via a trace link — a manual switch afterward is the user
+    // correcting/refining which view that datasource's traces should land on, so update the
+    // remembered choice too (see traceViewChoice.ts).
+    if (traceDsUidRef.current) {
+      rememberView(traceDsUidRef.current, id);
+    }
   }, []);
 
   const createPersonalView = useCallback(
@@ -117,15 +153,41 @@ function App(props: AppRootProps<AppJsonData>) {
   // The active view (a DataView) is assignable to SourceConfig — existing consumers unchanged.
   const sourceConfig: SourceConfig = activeView ?? DEFAULT_SOURCE_CONFIG;
 
+  const handleTraceViewChoice = useCallback(
+    (view: DataView, remember: boolean) => {
+      setActiveViewId(view.id);
+      if (remember && traceDsUidRef.current) {
+        rememberView(traceDsUidRef.current, view.id);
+      }
+      setTraceLanding({ status: 'resolved', viewId: view.id });
+    },
+    [setActiveViewId]
+  );
+
+  // Dismissed without picking — activeViewId was already computed via the ordinary
+  // stored/default chain (the 'choosing' branch never wins that initializer), so unblocking
+  // LogsExplorer here just lets it mount against whatever that chain already picked.
+  const handleTraceViewDismiss = useCallback(() => {
+    setTraceLanding({ status: 'none' });
+  }, []);
+
   return (
     <DataViewContext.Provider
       value={{ views: allViews, activeView, setActiveViewId, createPersonalView, updatePersonalView, deletePersonalView }}
     >
       <AiConfigContext.Provider value={jsonData.ai ?? null}>
         <SourceConfigContext.Provider value={sourceConfig}>
-          <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>
-            <LogsExplorer />
-          </Suspense>
+          {traceLanding.status === 'choosing' ? (
+            <TraceViewPickerModal
+              landing={traceLanding}
+              onChoose={handleTraceViewChoice}
+              onDismiss={handleTraceViewDismiss}
+            />
+          ) : (
+            <Suspense fallback={<LoadingPlaceholder text="Loading…" />}>
+              <LogsExplorer />
+            </Suspense>
+          )}
         </SourceConfigContext.Provider>
       </AiConfigContext.Provider>
     </DataViewContext.Provider>

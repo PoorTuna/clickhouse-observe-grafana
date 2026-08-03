@@ -17,6 +17,13 @@ export interface DecodedLogsUrlState {
   sort?: { col: string; dir: 'asc' | 'desc' };
   timeRange?: TimeRange;
   viewId?: string;
+  // traceId/dsUid: inbound-only fields carried by a trace->logs deep link from Grafana Explore's
+  // ClickHouse trace view (see data/traceToLogsLink.ts) — a `traceId`/`dsUid` filter pill isn't
+  // something a colleague reproduces by copying a Logs Explorer URL, so unlike every other field
+  // here these are deliberately absent from EncodeLogsUrlStateInput/encodeLogsState below. Never
+  // round-tripped, only consumed once at mount (App.tsx / LogsExplorer.tsx).
+  traceId?: string;
+  dsUid?: string;
 }
 
 export interface EncodeLogsUrlStateInput {
@@ -113,6 +120,16 @@ export function decodeLogsState(searchParams: URLSearchParams): DecodedLogsUrlSt
   const ds = searchParams.get('ds');
   if (ds) {
     result.viewId = ds;
+  }
+
+  const traceId = searchParams.get('traceId');
+  if (traceId) {
+    result.traceId = traceId;
+  }
+
+  const dsUid = searchParams.get('dsUid');
+  if (dsUid) {
+    result.dsUid = dsUid;
   }
 
   return result;

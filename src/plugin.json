@@ -20,7 +20,7 @@
       "large": "img/logo.svg"
     },
     "screenshots": [],
-    "version": "0.4.3",
+    "version": "0.4.5",
     "updated": "%TODAY%"
   },
   "includes": [
@@ -42,12 +42,21 @@
     }
   ],
   "dependencies": {
-    "grafanaDependency": ">=10.0.0",
+    "grafanaDependency": ">=13.0.0",
     "plugins": [
       {
         "type": "datasource",
         "id": "grafana-clickhouse-datasource",
         "name": "ClickHouse"
+      }
+    ]
+  },
+  "extensions": {
+    "addedLinks": [
+      {
+        "title": "View logs in ClickHouse Observe",
+        "description": "Open this trace's logs in the ClickHouse Observe log explorer",
+        "targets": ["grafana/traceview/header/actions"]
       }
     ]
   }

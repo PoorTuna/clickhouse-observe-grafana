@@ -50,9 +50,10 @@ interface LogDetailDrawerProps {
   onToggleExpanded?: () => void;
   onAddFilter: (filter: FilterPill) => void;
   onToggleColumn?: (col: SelectedColumn) => void;
-  /** Filters the log list down to this trace ID. Named for a future waterfall-view jump —
-   *  today it just adds a traceId filter pill and closes the drawer. */
-  onViewTrace?: (traceId: string) => void;
+  /** Resolves the mapped traceId column's value to a ClickHouse Explore trace-view URL (see
+   *  data/traceLinks.ts). Returns undefined while resolving or when the datasource has no
+   *  Traces config — the traceId then renders as plain text instead of a link. */
+  getTraceHref?: (traceId: string) => string | undefined;
   /** Step to the previous/next row on the current page. Omit to hide the nav control. */
   onPrev?: () => void;
   onNext?: () => void;
@@ -79,7 +80,7 @@ export function LogDetailDrawer({
   onToggleExpanded,
   onAddFilter,
   onToggleColumn,
-  onViewTrace,
+  getTraceHref,
   onPrev,
   onNext,
   navLabel,
@@ -254,21 +255,25 @@ export function LogDetailDrawer({
     const isLong = value.length > VALUE_TRUNCATE_LEN;
     const isValueExpanded = expandedValues.has(valueKey);
     const displayValue = isLong && !isValueExpanded ? value.slice(0, VALUE_TRUNCATE_LEN) + '…' : value;
-    const isTraceId = Boolean(onViewTrace && clickhouseField === config.columns.traceId);
+    const traceHref =
+      clickhouseField === config.columns.traceId ? getTraceHref?.(value) : undefined;
     return (
       <div key={field} className={styles.attrRow}>
         <span className={styles.attrKey} title={field}>
           <Icon className={styles.attrTypeIcon} name={FIELD_TYPE_ICONS[type] as any} size="sm" />
           {field}
         </span>
-        {isTraceId ? (
-          <button
+        {traceHref ? (
+          <a
             className={styles.traceIdButton}
-            title="Show all logs for this trace"
-            onClick={() => onViewTrace!(value)}
+            title="Open trace in Explore"
+            href={traceHref}
+            target="_blank"
+            rel="noreferrer"
           >
             {displayValue}
-          </button>
+            <Icon name="external-link-alt" size="sm" className={styles.traceIdIcon} />
+          </a>
         ) : (
           <span className={styles.attrValue}>
             {displayValue}
@@ -584,13 +589,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: 1;
   `,
   traceIdButton: css`
+    display: inline-flex;
+    align-items: center;
+    gap: ${theme.spacing(0.5)};
     font-family: ${theme.typography.fontFamilyMonospace};
     font-size: ${theme.typography.bodySmall.fontSize};
     color: ${theme.colors.text.link};
-    background: transparent;
-    border: none;
-    padding: 0;
-    text-align: left;
     text-decoration: underline;
     cursor: pointer;
     word-break: break-word;
@@ -600,6 +604,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     &:hover {
       color: ${theme.colors.text.maxContrast};
     }
+  `,
+  traceIdIcon: css`
+    flex-shrink: 0;
   `,
   attrActions: cx(
     'attr-actions',

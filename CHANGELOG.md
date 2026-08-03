@@ -10,6 +10,22 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.5] — 2026-08-03
+
+### Added
+
+- Reverse half of the trace↔logs integration: a "View logs in ClickHouse Observe" button in Grafana Explore's ClickHouse trace view header, jumping back into Logs Explorer filtered to that trace, with the right data view and a time range spanning the trace (±5min) pre-selected. When a trace's datasource matches more than one configured data view, a picker lets you choose (optionally remembered per datasource); when none match, it offers all views as a fallback.
+
+---
+
+## [0.4.4] — 2026-08-03
+
+### Changed
+
+- The traceId in the log detail drawer no longer just adds an in-plugin "filter by trace" pill (redundant with the row's existing "Filter for value" action). It's now a link straight into Grafana Explore's ClickHouse trace waterfall, reusing the "View trace" link the ClickHouse datasource already generates for its own trace queries — no extra config needed beyond the datasource's own Traces defaults. Falls back to plain text when the datasource has no Traces config.
+
+---
+
 ## [0.4.3] — 2026-08-02
 
 ### Fixed

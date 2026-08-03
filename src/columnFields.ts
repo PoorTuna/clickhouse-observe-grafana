@@ -34,7 +34,7 @@ export const COL_FIELDS: Array<{
   {
     key: 'traceId',
     label: 'Trace ID column',
-    description: 'Enables the "show all logs for this trace" filter action in the log detail drawer.',
+    description: 'Enables the "open trace in Explore" link on the trace ID in the log detail drawer.',
   },
   {
     key: 'serviceName',

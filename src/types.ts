@@ -6,7 +6,7 @@ export interface ColumnMapping {
   timestamp: string;
   body: string;
   severity: string;
-  // Trace ID column — powers the log→trace filter action in the log detail drawer.
+  // Trace ID column — powers the "open trace in Explore" link in the log detail drawer.
   traceId: string;
   serviceName: string;
   // Map column — empty string means column absent.

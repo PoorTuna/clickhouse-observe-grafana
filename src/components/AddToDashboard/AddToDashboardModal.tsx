@@ -133,7 +133,6 @@ export function AddToDashboardModal({
           config, queryState, volBreakdown, { id: id++, gridPos: { x: 0, y, w: 24, h: 8 } }, fieldIndex
         )
       );
-      y += 8;
     }
     return panels;
   }

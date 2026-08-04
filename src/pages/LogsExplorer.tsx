@@ -2,7 +2,7 @@ import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, us
 import { css, cx } from '@emotion/css';
 import { dateTime, GrafanaTheme2, PageLayoutType, rangeUtil, TimeRange } from '@grafana/data';
 import { PluginPage } from '@grafana/runtime';
-import { Button, ClipboardButton, Icon, Spinner, Switch, useStyles2, TimeRangePicker, RefreshPicker, useSplitter } from '@grafana/ui';
+import { Button, Icon, Spinner, Switch, useStyles2, TimeRangePicker, RefreshPicker, useSplitter } from '@grafana/ui';
 import { useSearchParams } from 'react-router-dom';
 import { SearchBar } from '../components/SearchBar';
 import { FilterPills } from '../components/FilterPills';
@@ -10,15 +10,14 @@ import { LogsTable } from '../components/LogsTable';
 import { LogDetailDrawer } from '../components/LogDetailDrawer';
 import { useTraceExploreLink } from '../components/useTraceExploreLink';
 import { CompareLogsModal } from '../components/CompareLogsModal';
-import { VolumeHistogram, resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
-import { IntervalPicker } from '../components/HistogramControls/IntervalPicker';
-import { BreakdownPicker } from '../components/HistogramControls/BreakdownPicker';
+import { resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../components/VolumeHistogram';
+import { LogsHistogramPanel } from '../components/LogsHistogramPanel';
 import { FieldSidebar, fieldToColumn } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
-import { SavedSearchMenu } from '../components/SavedSearches/SavedSearchMenu';
 import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
+import { SqlInspectorBar } from '../components/SqlInspectorBar';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
 import { buildLogsQuery, buildLogDetailQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
@@ -44,6 +43,7 @@ import {
 import { decodeLogsState, encodeLogsState } from '../data/urlState';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 import { useAvailableHeight } from '../utils/useAvailableHeight';
+import { logsQueryReducer } from './_logsQueryReducer';
 
 const INITIAL_FETCH = 200;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250, 500];
@@ -94,98 +94,6 @@ export function defaultColumns(config: SourceConfig): SelectedColumn[] {
   return [...core, ...pinned];
 }
 
-type Action =
-  | { type: 'SET_SEARCH'; value: string }
-  | { type: 'SET_FILTERS'; filters: FilterPill[] }
-  | { type: 'TOGGLE_RAW_SQL' }
-  | { type: 'SET_RAW_SQL'; sql: string }
-  // `columns` on every one of these is the caller's current *displayed* list (effectiveColumns),
-  // not state.columns — state.columns is empty until the user's first explicit column change, so
-  // acting against state.columns directly would silently no-op (reorder) or blow away the
-  // still-visible default set (add — appending to [] replaces defaultColumns() as soon as
-  // effectiveColumns switches from the fallback to state.columns).
-  // `targetId`: when set, the new column is inserted immediately before it instead of appended
-  // at the end — lets a sidebar field drag land wherever the user actually dropped it.
-  | { type: 'ADD_COLUMN'; col: SelectedColumn; columns: SelectedColumn[]; targetId?: string }
-  | { type: 'REMOVE_COLUMN'; id: string; columns: SelectedColumn[] }
-  | { type: 'REORDER_COLUMN'; id: string; direction: 'left' | 'right'; columns: SelectedColumn[] }
-  | { type: 'MOVE_COLUMN_TO'; id: string; targetId: string; columns: SelectedColumn[] }
-  | { type: 'SET_SORT'; col: string }
-  | { type: 'LOAD_SAVED'; state: Partial<LogsQueryState> };
-
-function queryReducer(state: LogsQueryState, action: Action): LogsQueryState {
-  switch (action.type) {
-    case 'SET_SEARCH':
-      return { ...state, search: action.value };
-    case 'SET_FILTERS':
-      return { ...state, filters: action.filters };
-    case 'TOGGLE_RAW_SQL':
-      return { ...state, useRawSql: !state.useRawSql };
-    case 'SET_RAW_SQL':
-      return { ...state, rawSql: action.sql };
-    case 'ADD_COLUMN': {
-      if (action.columns.some((c) => c.id === action.col.id)) {
-        return state;
-      }
-      const targetIdx = action.targetId ? action.columns.findIndex((c) => c.id === action.targetId) : -1;
-      if (targetIdx === -1) {
-        return { ...state, columns: [...action.columns, action.col] };
-      }
-      const next = [...action.columns];
-      next.splice(targetIdx, 0, action.col);
-      return { ...state, columns: next };
-    }
-    case 'REMOVE_COLUMN': {
-      // If the removed column was the active sort target, clear sort — its `key` was only ever
-      // a synthetic SELECT alias (see extraSelect in buildLogsQuery), so leaving it in state.sort
-      // produces an `ORDER BY fld_...` with no matching column once the SELECT drops it, which
-      // ClickHouse rejects outright ("Unknown identifier").
-      const removed = action.columns.find((c) => c.id === action.id);
-      const sort = removed && state.sort?.col === removed.key ? undefined : state.sort;
-      return { ...state, columns: action.columns.filter((c) => c.id !== action.id), sort };
-    }
-    case 'REORDER_COLUMN': {
-      const idx = action.columns.findIndex((c) => c.id === action.id);
-      if (idx === -1) {
-        return state;
-      }
-      const next = [...action.columns];
-      const swapIdx = action.direction === 'left' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= next.length) {
-        return state;
-      }
-      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
-      return { ...state, columns: next };
-    }
-    case 'MOVE_COLUMN_TO': {
-      // Drag-and-drop reorder: pull the dragged column out and reinsert it at the target
-      // column's position — an arbitrary-distance move, unlike REORDER_COLUMN's adjacent swap.
-      if (action.id === action.targetId) {
-        return state;
-      }
-      const fromIdx = action.columns.findIndex((c) => c.id === action.id);
-      const toIdx = action.columns.findIndex((c) => c.id === action.targetId);
-      if (fromIdx === -1 || toIdx === -1) {
-        return state;
-      }
-      const next = [...action.columns];
-      const [moved] = next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, moved);
-      return { ...state, columns: next };
-    }
-    case 'SET_SORT': {
-      const current = state.sort;
-      const dir: 'asc' | 'desc' =
-        current?.col === action.col && current.dir === 'desc' ? 'asc' : 'desc';
-      return { ...state, sort: { col: action.col, dir } };
-    }
-    case 'LOAD_SAVED':
-      return { ...state, ...action.state };
-    default:
-      return state;
-  }
-}
-
 export function LogsExplorer() {
   const styles = useStyles2(getStyles);
   const config = useContext(SourceConfigContext);
@@ -202,7 +110,7 @@ export function LogsExplorer() {
   const [initialUrlState] = useState(() => decodeLogsState(searchParams));
 
   const [queryState, dispatch] = useReducer(
-    queryReducer,
+    logsQueryReducer,
     DEFAULT_LOGS_QUERY_STATE,
     (init) => {
       const baseFilters = initialUrlState.filters ?? init.filters;
@@ -1072,86 +980,21 @@ export function LogsExplorer() {
         )}
 
         {/* SQL preview / edit */}
-        <div className={styles.sqlRow}>
-          <div className={styles.sqlActions}>
-            <div className={styles.sqlActionsLeft}>
-              <button
-                className={styles.sqlToggle}
-                onClick={onToggleRawSql}
-                title={
-                  queryState.useRawSql
-                    ? 'Discard raw SQL and go back to the visual query builder'
-                    : 'For regex, ClickHouse functions, and other advanced queries, switch to raw SQL'
-                }
-              >
-                <Icon name={queryState.useRawSql ? 'angle-down' : 'angle-right'} size="xs" />
-                {queryState.useRawSql ? 'Back to query builder' : 'Edit as SQL'}
-              </button>
-              <button
-                className={styles.sqlToggle}
-                onClick={() => setShowSqlInspect((v) => !v)}
-                title="Inspect the SQL query that will be sent to ClickHouse"
-              >
-                <Icon name={showSqlInspect ? 'angle-down' : 'angle-right'} size="xs" />
-                {showSqlInspect ? 'Hide SQL' : 'Inspect SQL'}
-              </button>
-            </div>
-            <div className={styles.sqlActionsRight}>
-              <SavedSearchMenu
-                queryState={{ ...queryState, columns: effectiveColumns }}
-                timeRange={timeRange}
-                onLoad={onLoadSaved}
-                activeDataViewId={activeView?.id}
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                icon="apps"
-                onClick={() => setAddToDashboardOpen(true)}
-                disabled={!canAddToDashboard}
-                tooltip={canAddToDashboard ? 'Add to dashboard' : 'You do not have permission to create dashboards'}
-              >
-                Add to dashboard
-              </Button>
-            </div>
-          </div>
-          {queryState.useRawSql && (
-            <>
-              <textarea
-                className={styles.sqlEditor}
-                value={rawSqlDraft}
-                onChange={(e) => setRawSqlDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                    e.preventDefault();
-                    runRawSql();
-                  }
-                }}
-                rows={6}
-              />
-              <div className={styles.sqlRunRow}>
-                <Button size="sm" variant="primary" onClick={runRawSql}>
-                  Run query
-                </Button>
-                <span className={styles.sqlRunHint}>Ctrl+Enter</span>
-              </div>
-            </>
-          )}
-          {showSqlInspect && !queryState.useRawSql && (
-            <div className={styles.sqlInspect}>
-              <pre className={styles.sqlInspectPre}>{builderSql}</pre>
-              <ClipboardButton
-                className={styles.sqlCopyBtn}
-                size="sm"
-                variant="secondary"
-                icon="clipboard-alt"
-                getText={() => builderSql}
-              >
-                Copy
-              </ClipboardButton>
-            </div>
-          )}
-        </div>
+        <SqlInspectorBar
+          queryState={{ ...queryState, columns: effectiveColumns }}
+          timeRange={timeRange}
+          activeViewId={activeView?.id}
+          onLoadSaved={onLoadSaved}
+          canAddToDashboard={canAddToDashboard}
+          onOpenAddToDashboard={() => setAddToDashboardOpen(true)}
+          onToggleRawSql={onToggleRawSql}
+          showSqlInspect={showSqlInspect}
+          onToggleShowSqlInspect={() => setShowSqlInspect((v) => !v)}
+          rawSqlDraft={rawSqlDraft}
+          onRawSqlDraftChange={setRawSqlDraft}
+          onRunRawSql={runRawSql}
+          builderSql={builderSql}
+        />
 
         {/* Error banner */}
         {error && (
@@ -1222,50 +1065,21 @@ export function LogsExplorer() {
                 {/* Histogram + toolbar live inside the table pane (not the results pane as a
                     whole) so they shrink along with the table when the detail panel opens,
                     instead of spanning the full width behind it. */}
-                {caps.hasTime && (
-                  <div className={styles.histogramPanel}>
-                    <div className={styles.histogramHeader}>
-                      <IntervalPicker
-                        value={intervalMode}
-                        onChange={setIntervalMode}
-                        timeRange={timeRange}
-                      />
-                      <BreakdownPicker
-                        value={breakdown}
-                        onChange={setBreakdown}
-                        hasSeverity={caps.hasSeverity}
-                      />
-                      <div className={styles.histogramHeaderSpacer} />
-                      {volumeData.length > 0 && (
-                        <span className={styles.histogramMeta}>
-                          {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
-                        </span>
-                      )}
-                    </div>
-                    {volumeData.length > 0 ? (
-                      <VolumeHistogram
-                        data={volumeData}
-                        timeRange={timeRange}
-                        height={110}
-                        loading={volLoading}
-                        onSelectRange={onHistogramSelectRange}
-                        onBreakdownFilter={onHistogramBreakdownFilter}
-                        colorMode={
-                          breakdown.kind === 'field'
-                            ? 'breakdown'
-                            : breakdown.kind === 'severity'
-                            ? 'severity'
-                            : 'single'
-                        }
-                        bucketMs={resolvedInterval.intervalMs}
-                      />
-                    ) : (
-                      <div className={styles.histogramEmpty}>
-                        {volLoading ? 'Loading…' : 'No events in selected time range'}
-                      </div>
-                    )}
-                  </div>
-                )}
+                <LogsHistogramPanel
+                  hasTime={caps.hasTime}
+                  hasSeverity={caps.hasSeverity}
+                  intervalMode={intervalMode}
+                  onIntervalModeChange={setIntervalMode}
+                  timeRange={timeRange}
+                  breakdown={breakdown}
+                  onBreakdownChange={setBreakdown}
+                  volumeData={volumeData}
+                  volLoading={volLoading}
+                  totalEvents={totalEvents}
+                  resolvedInterval={resolvedInterval}
+                  onSelectRange={onHistogramSelectRange}
+                  onBreakdownFilter={onHistogramBreakdownFilter}
+                />
                 <div className={styles.tableToolbar}>
                   {compareSelection.size >= 2 && (
                     <Button
@@ -1422,91 +1236,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   pills: css`
     min-height: 0;
   `,
-  sqlRow: css`
-    display: flex;
-    flex-direction: column;
-    gap: ${theme.spacing(0.5)};
-  `,
-  sqlActions: css`
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    row-gap: ${theme.spacing(0.5)};
-  `,
-  sqlActionsLeft: css`
-    display: flex;
-    gap: ${theme.spacing(2)};
-    align-items: center;
-  `,
-  sqlActionsRight: css`
-    display: flex;
-    gap: ${theme.spacing(1)};
-    align-items: center;
-  `,
-  sqlToggle: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.body.fontSize};
-    text-align: left;
-    padding: 0;
-    &:hover { color: ${theme.colors.text.primary}; }
-  `,
-  sqlInspect: css`
-    position: relative;
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    padding: ${theme.spacing(1)};
-  `,
-  sqlInspectPre: css`
-    font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.body.fontSize};
-    color: ${theme.colors.text.primary};
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-all;
-    padding-right: ${theme.spacing(7)};
-  `,
-  sqlCopyBtn: css`
-    position: absolute;
-    top: ${theme.spacing(1)};
-    right: ${theme.spacing(1)};
-    background: ${theme.colors.background.primary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    cursor: pointer;
-    color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.body.fontSize};
-    padding: ${theme.spacing(0.25)} ${theme.spacing(1)};
-    &:hover { color: ${theme.colors.text.primary}; background: ${theme.colors.action.hover}; }
-  `,
-  sqlEditor: css`
-    width: 100%;
-    font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.body.fontSize};
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    padding: ${theme.spacing(1)};
-    color: ${theme.colors.text.primary};
-    resize: vertical;
-    outline: none;
-  `,
-  sqlRunRow: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-  `,
-  sqlRunHint: css`
-    font-size: 13px;
-    color: ${theme.colors.text.disabled};
-  `,
   error: css`
     padding: ${theme.spacing(1)};
     background: ${theme.colors.error.transparent};
@@ -1514,35 +1243,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border-radius: ${theme.shape.radius.default};
     color: ${theme.colors.error.text};
     font-size: ${theme.typography.body.fontSize};
-  `,
-  histogramPanel: css`
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    background: ${theme.colors.background.primary};
-  `,
-  histogramEmpty: css`
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: ${theme.colors.text.disabled};
-    font-size: ${theme.typography.body.fontSize};
-  `,
-  histogramHeader: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
-    border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  histogramHeaderSpacer: css`
-    flex: 1;
-  `,
-  histogramMeta: css`
-    font-size: 13px;
-    color: ${theme.colors.text.disabled};
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   `,
   body: css`
     flex: 1;

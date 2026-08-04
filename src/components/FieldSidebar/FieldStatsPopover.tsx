@@ -1,15 +1,16 @@
-import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
-import { buildFieldTopValuesQuery, buildWhereConditions } from '../../sql/queryBuilder';
-import { runQueryRows } from '../../data/runQuery';
+import { buildWhereConditions } from '../../sql/queryBuilder';
+import { buildFieldIndex } from '../../sql/fields';
+import { buildValuesCacheKey, fetchFieldValuesWithTotal, valuesCache } from '../../sql/kql/_values';
 import { makeFilter } from '../../sql/filters';
 import { FilterPill, LogsQueryState, SourceConfig } from '../../types';
 import { SourceConfigContext } from '../App/App';
-import { coarseTimeBucket } from '../FieldsContext';
+import { useFields } from '../FieldsContext';
 
 interface TopValue {
   value: string;
@@ -17,24 +18,18 @@ interface TopValue {
   pct: number;
 }
 
-interface CacheEntry {
-  values: TopValue[];
-  total: number;
-}
-
-// Module-level cache: keyed by datasourceUid:sqlExpr:timeBucket:filtersHash.
-// No TTL — invalidated naturally when the key changes (time/filters changed).
-const topValuesCache = new Map<string, CacheEntry>();
-
-function cacheKey(
-  datasourceUid: string,
-  sqlExpr: string,
-  timeRange: TimeRange,
-  queryState: LogsQueryState
-): string {
-  const bucket = coarseTimeBucket(timeRange);
-  const filtersHash = JSON.stringify([queryState.search, queryState.filters]);
-  return `${datasourceUid}:${sqlExpr}:${bucket}:${filtersHash}`;
+/** Same field+filter context used by the KQL autocomplete cache key (kql/_values.ts) — this
+ *  popover shares that cache (via valuesCache/buildValuesCacheKey) so the two never disagree on
+ *  a field's top values, they just format the request options differently (whole-page filter
+ *  state vs. a single arbitrary cacheKey string). */
+function toValuesOpts(config: SourceConfig, queryState: LogsQueryState, timeRange: TimeRange, fieldIndex: ReturnType<typeof buildFieldIndex>) {
+  return {
+    table: config.logsTable,
+    conditions: buildWhereConditions(config, queryState, fieldIndex),
+    timeRange,
+    cacheKey: JSON.stringify([queryState.search, queryState.filters]),
+    limit: 10,
+  };
 }
 
 interface FieldStatsPopoverProps {
@@ -56,6 +51,13 @@ export function FieldStatsPopover({
 }: FieldStatsPopoverProps) {
   const styles = useStyles2(getStyles);
   const config: SourceConfig = useContext(SourceConfigContext);
+  // Same discovered-fields index every other WHERE-builder call site threads through (see
+  // LogsExplorer's fieldIndex / hydratePage) — without it, a filter on a Map/JSON field falls
+  // back to resolveField's unindexed heuristics here while the rest of the page resolves it
+  // correctly, so this popover's top-values could silently reflect a different WHERE clause than
+  // what's actually applied to the grid.
+  const { fields } = useFields();
+  const fieldIndex = useMemo(() => buildFieldIndex(fields), [fields]);
   const [values, setValues] = useState<TopValue[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -67,10 +69,11 @@ export function FieldStatsPopover({
       return;
     }
 
-    const key = cacheKey(config.datasourceUid, field.sqlExpr, timeRange, queryState);
-    const cached = topValuesCache.get(key);
+    const opts = toValuesOpts(config, queryState, timeRange, fieldIndex);
+    const key = buildValuesCacheKey(config.datasourceUid, field.sqlExpr, timeRange, opts);
+    const cached = valuesCache.get(key);
     if (cached) {
-      setValues(cached.values);
+      setValues(cached.values.map((v) => ({ ...v, pct: cached.total > 0 ? (v.count / cached.total) * 100 : 0 })));
       setTotal(cached.total);
       setLoading(false);
       return;
@@ -79,26 +82,20 @@ export function FieldStatsPopover({
     setLoading(true);
     setError(null);
     try {
-      const sql = buildFieldTopValuesQuery(config, field.sqlExpr, {
-        table: config.logsTable,
-        conditions: buildWhereConditions(config, queryState),
-        limit: 10,
-        sampleSize: 500,
-      });
-      const rows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
+      // Not loadFieldValuesWithTotal (which swallows a query failure into an empty result, right
+      // for autocomplete) — this popover shows a real error banner on failure, so it needs the
+      // throwing fetch and does its own cache write.
+      const { values: rawValues, total: sampleTotal } = await fetchFieldValuesWithTotal(config, field.sqlExpr, opts);
       if (!mountedRef.current) {
         return;
       }
 
-      // total is the same for every row — from the CTE scalar subquery
-      const sampleTotal = rows.length > 0 ? Number(rows[0]['total'] ?? 0) : 0;
-      const mapped: TopValue[] = rows.map((r) => ({
-        value: String(r['value'] ?? ''),
-        count: Number(r['count'] ?? 0),
-        pct: sampleTotal > 0 ? (Number(r['count'] ?? 0) / sampleTotal) * 100 : 0,
+      const mapped: TopValue[] = rawValues.map((v) => ({
+        ...v,
+        pct: sampleTotal > 0 ? (v.count / sampleTotal) * 100 : 0,
       }));
 
-      topValuesCache.set(key, { values: mapped, total: sampleTotal });
+      valuesCache.set(key, { values: rawValues, total: sampleTotal });
       setValues(mapped);
       setTotal(sampleTotal);
     } catch (e) {
@@ -110,7 +107,7 @@ export function FieldStatsPopover({
         setLoading(false);
       }
     }
-  }, [config, field.sqlExpr, queryState, timeRange]);
+  }, [config, field.sqlExpr, queryState, timeRange, fieldIndex]);
 
   // load() fetches top values async and mirrors the result into state — an external fetch
   // synced to React, not a render-time update.

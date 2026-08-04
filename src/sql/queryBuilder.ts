@@ -6,7 +6,7 @@
  * from the query request's time range automatically.
  */
 
-import { BreakdownSel, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
+import { BreakdownSel, ColumnMapping, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
 import { resolveField, FieldIndex } from './fields';
 import { parseKql, kqlToSql } from './kql';
 
@@ -55,6 +55,30 @@ export function quoteString(value: string): string {
 
 export function tableRef(config: SourceConfig, table: string): string {
   return `"${config.database}"."${table}"`;
+}
+
+/**
+ * Core aliases for mapped columns only, omitted entirely when unmapped. Aliased under a
+ * `__`-prefixed name (CORE_ALIAS.*) rather than the field's plain name — an arbitrary table's own
+ * real column can legitimately be named `timestamp`/`body`/`severity`/etc (unrelated to what the
+ * user mapped to that role); a `__`-prefixed alias can't collide with a pre-existing column the
+ * way a bare name can, closing off the whole collision class rather than special-casing individual
+ * instances of it. Note: ResourceAttributes/LogAttributes/ScopeAttributes are deliberately NOT
+ * aliased here — groupAttributes() (schema.ts) already reads them by their raw mapped column name
+ * via SELECT *, so a fixed alias was dead weight.
+ *
+ * Shared by buildLogsQuery and buildLogDetailQuery — both project the exact same core aliases so a
+ * row fetched by either one produces the same logRowKey(), and this is the single place that
+ * mapping has to stay right.
+ */
+function buildCoreSelectAliases(c: ColumnMapping): string[] {
+  return [
+    c.timestamp ? `${c.timestamp} AS ${CORE_ALIAS.timestamp}` : null,
+    c.body ? `${c.body} AS ${CORE_ALIAS.body}` : null,
+    c.severity ? `${c.severity} AS ${CORE_ALIAS.severity}` : null,
+    c.traceId ? `${c.traceId} AS ${CORE_ALIAS.traceId}` : null,
+    c.serviceName ? `${c.serviceName} AS ${CORE_ALIAS.serviceName}` : null,
+  ].filter(Boolean) as string[];
 }
 
 function filterOpToSql(op: FilterOp): string {
@@ -205,21 +229,7 @@ export function buildLogsQuery(
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
 
-  // Core aliases for mapped columns only, omitted entirely when unmapped. Aliased under a
-  // `__`-prefixed name (CORE_ALIAS.*) rather than the field's plain name — an arbitrary table's
-  // own real column can legitimately be named `timestamp`/`body`/`severity`/etc (unrelated to
-  // what the user mapped to that role); a `__`-prefixed alias can't collide with a pre-existing
-  // column the way a bare name can, closing off the whole collision class rather than special-
-  // casing individual instances of it. Note: ResourceAttributes/LogAttributes/ScopeAttributes
-  // are deliberately NOT aliased here — groupAttributes() (schema.ts) already reads them by
-  // their raw mapped column name via SELECT *, so a fixed alias was dead weight.
-  const coreSelect = [
-    c.timestamp ? `${c.timestamp} AS ${CORE_ALIAS.timestamp}` : null,
-    c.body ? `${c.body} AS ${CORE_ALIAS.body}` : null,
-    c.severity ? `${c.severity} AS ${CORE_ALIAS.severity}` : null,
-    c.traceId ? `${c.traceId} AS ${CORE_ALIAS.traceId}` : null,
-    c.serviceName ? `${c.serviceName} AS ${CORE_ALIAS.serviceName}` : null,
-  ].filter(Boolean) as string[];
+  const coreSelect = buildCoreSelectAliases(c);
 
   // Extra SELECT for user-added non-core columns
   const extraSelect = (state.columns ?? [])
@@ -319,14 +329,9 @@ export function buildLogDetailQuery(
   const tbl = tableRef(config, config.logsTable);
 
   // Same core aliasing as buildLogsQuery's coreSelect — the fetched row must produce the same
-  // logRowKey() as the narrow grid row it's replacing in `hydratedRows`.
-  const coreSelect = [
-    `${c.timestamp} AS ${CORE_ALIAS.timestamp}`,
-    c.body ? `${c.body} AS ${CORE_ALIAS.body}` : null,
-    c.severity ? `${c.severity} AS ${CORE_ALIAS.severity}` : null,
-    c.traceId ? `${c.traceId} AS ${CORE_ALIAS.traceId}` : null,
-    c.serviceName ? `${c.serviceName} AS ${CORE_ALIAS.serviceName}` : null,
-  ].filter(Boolean) as string[];
+  // logRowKey() as the narrow grid row it's replacing in `hydratedRows`. c.timestamp is guaranteed
+  // truthy here (guarded above), so buildCoreSelectAliases always includes it.
+  const coreSelect = buildCoreSelectAliases(c);
 
   const conditions = [
     `${c.timestamp} >= fromUnixTimestamp64Milli(${tsMs})`,

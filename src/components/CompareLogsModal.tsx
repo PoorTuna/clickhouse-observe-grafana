@@ -37,8 +37,12 @@ export function CompareLogsModal({ rows, onDismiss }: CompareLogsModalProps) {
     }
     // Timestamp first, then the rest alphabetically — a stable, readable order.
     return [...keys].sort((a, b) => {
-      if (a === CORE_ALIAS.timestamp) return -1;
-      if (b === CORE_ALIAS.timestamp) return 1;
+      if (a === CORE_ALIAS.timestamp) {
+        return -1;
+      }
+      if (b === CORE_ALIAS.timestamp) {
+        return 1;
+      }
       return a.localeCompare(b);
     });
   }, [rows]);

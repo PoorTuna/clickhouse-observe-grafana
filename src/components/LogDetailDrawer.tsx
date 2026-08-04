@@ -15,13 +15,79 @@ import {
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
 import { FieldModel, FieldType } from '../sql/fieldModel';
-import { groupAttributes, flattenJson, parseJsonColumnValue } from '../sql/schema';
+import { groupAttributes, flattenJson, parseJsonColumnValue, GroupedAttrRow } from '../sql/schema';
 import { makeFilter } from '../sql/filters';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp } from './LogsTable';
 import { makeColumnKey, fieldToColumn } from './FieldSidebar/FieldSidebar';
 import { FIELD_TYPE_ICONS } from './FieldSidebar/fieldIcons';
 import { JsonTree, allContainerPaths } from './JsonTree';
+
+interface FlatAttrRow {
+  key: string;
+  value: string;
+  sqlExpr: string;
+  type: FieldType;
+}
+
+/**
+ * Flattens effectiveRow's plain top-level entries into flat Field|Value rows, skipping container
+ * columns (handled separately by flattenAttrGroups, below, via their already-flattened dotted-path
+ * children). A JSON-typed column that isn't one of the configured attribute containers gets its
+ * own dotted-path flattening here too — the same treatment every other JSON column in this app
+ * gets, instead of falling through to a single stringified blob row.
+ */
+function flattenRowEntries(
+  row: Record<string, unknown>,
+  containerCols: Set<string>,
+  jsonColumns: Set<string>,
+  timestampSqlExpr: string,
+  resolveType: (sqlExpr: string) => FieldType
+): FlatAttrRow[] {
+  const flat: FlatAttrRow[] = [];
+  for (const [k, v] of Object.entries(row)) {
+    if (!k || containerCols.has(k)) {
+      continue;
+    }
+    // The mapped timestamp column (and its OTel alias) renders as a raw epoch/DateTime value
+    // otherwise — every other timestamp-shaped value in this UI (header, table) goes through
+    // formatTimestamp, so this flat list shouldn't be the one place that doesn't.
+    const isTimestampField = k === timestampSqlExpr || k === CORE_ALIAS.timestamp;
+    if (jsonColumns.has(k)) {
+      const leaves = flattenJson(parseJsonColumnValue(v));
+      if (leaves.length > 0) {
+        for (const leaf of leaves) {
+          flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}`, type: 'string' });
+        }
+        continue;
+      }
+    }
+    flat.push({
+      key: k,
+      value: isTimestampField
+        ? formatTimestamp(v)
+        : v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
+      sqlExpr: k,
+      type: resolveType(k),
+    });
+  }
+  return flat;
+}
+
+/** Flattens groupAttributes()'s per-column groups (Map/JSON attribute containers) into the same
+ *  flat Field|Value row shape flattenRowEntries produces, so both merge into one sortable list. */
+function flattenAttrGroups(
+  attrGroups: Array<{ col: string; rows: GroupedAttrRow[] }>,
+  resolveType: (sqlExpr: string) => FieldType
+): FlatAttrRow[] {
+  const flat: FlatAttrRow[] = [];
+  for (const g of attrGroups) {
+    for (const r of g.rows) {
+      flat.push({ key: `${g.col}.${r.key}`, value: r.value, sqlExpr: r.sqlExpr, type: resolveType(r.sqlExpr) });
+    }
+  }
+  return flat;
+}
 
 interface LogDetailDrawerProps {
   /** Narrow (grid-projection) row — always present, used for the header summary which must
@@ -157,42 +223,10 @@ export function LogDetailDrawer({
     [effectiveRow, config.columns, mapColumns, jsonColumns]
   );
   const allRows = useMemo(() => {
-    const flat: Array<{ key: string; value: string; sqlExpr: string; type: FieldType }> = [];
-    for (const [k, v] of Object.entries(effectiveRow)) {
-      if (!k || containerCols.has(k)) {
-        continue;
-      }
-      // The mapped timestamp column (and its OTel alias) renders as a raw epoch/DateTime value
-      // otherwise — every other timestamp-shaped value in this UI (header, table) goes through
-      // formatTimestamp, so this flat list shouldn't be the one place that doesn't.
-      const isTimestampField = k === c.timestamp || k === CORE_ALIAS.timestamp;
-      // Any other JSON-typed column (not one of the four configured attribute containers, which
-      // attrGroups below already handles) used to fall through to JSON.stringify — a single raw
-      // blob row instead of the dotted-path rows every JSON column elsewhere in the app gets.
-      // Flatten it the same way groupAttributes does for JSON attribute columns.
-      if (jsonColumns.has(k)) {
-        const leaves = flattenJson(parseJsonColumnValue(v));
-        if (leaves.length > 0) {
-          for (const leaf of leaves) {
-            flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}`, type: 'string' });
-          }
-          continue;
-        }
-      }
-      flat.push({
-        key: k,
-        value: isTimestampField
-          ? formatTimestamp(v)
-          : v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''),
-        sqlExpr: k,
-        type: resolveType(k),
-      });
-    }
-    for (const g of attrGroups) {
-      for (const r of g.rows) {
-        flat.push({ key: `${g.col}.${r.key}`, value: r.value, sqlExpr: r.sqlExpr, type: resolveType(r.sqlExpr) });
-      }
-    }
+    const flat = [
+      ...flattenRowEntries(effectiveRow, containerCols, jsonColumns, c.timestamp, resolveType),
+      ...flattenAttrGroups(attrGroups, resolveType),
+    ];
     return flat.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveRow, containerCols, attrGroups, c.timestamp, jsonColumns, typeByExpr]);

@@ -10,6 +10,22 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.7] — 2026-08-04
+
+### Fixed
+
+- The field-stats sidebar popover built its WHERE clause without the discovered field index, unlike every other query in the app — a filter on a Map/JSON field could silently resolve differently there than in the grid/histogram, showing top-values for the wrong condition.
+
+### Removed
+
+- Dropped the unused Go backend scaffold (`pkg/`, Magefile, go.mod) — this plugin has always been frontend-only (`plugin.json` already declared `"backend": false`); the ping/echo resource handlers were never called by anything.
+
+### Changed
+
+- Internal cleanup pass: deduplicated repeated SQL-builder and query-cache logic, converted the last inline-styled modal to the shared theme pattern, fixed three pre-existing lint errors (`react-hooks/refs`, `react-hooks/set-state-in-effect`, `curly`), and split `LogsExplorer`/`VolumeHistogram`/`LogDetailDrawer` into smaller, independently-tested modules. No user-facing behavior change beyond the fix above.
+
+---
+
 ## [0.4.6] — 2026-08-03
 
 ### Changed

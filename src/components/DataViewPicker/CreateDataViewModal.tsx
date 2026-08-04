@@ -4,9 +4,10 @@
  * Step 2: map timestamp + body columns, auto-detect OTel, configure name → save.
  */
 import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { dateTime, SelectableValue, TimeRange } from '@grafana/data';
+import { css } from '@emotion/css';
+import { dateTime, GrafanaTheme2, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner } from '@grafana/ui';
+import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner, useStyles2 } from '@grafana/ui';
 import { AiConfigContext, DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildJsonPathsQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
@@ -53,6 +54,7 @@ function schemaTimeRange(): TimeRange {
 type Step = 'location' | 'columns';
 
 export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDataViewModalProps) {
+  const styles = useStyles2(getStyles);
   const { createPersonalView, updatePersonalView, setActiveViewId } = useContext(DataViewContext);
   const aiCfg = useContext(AiConfigContext);
   const aiOn = Boolean(aiCfg?.enabled && aiCfg?.baseUrl && aiCfg?.model);
@@ -158,9 +160,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     if (!isOpen) {
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     resetAll();
     if (editingView) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDatasourceUid(editingView.datasourceUid);
       setDatabase(editingView.database);
       setLogsTable(editingView.logsTable);
@@ -449,7 +451,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       onDismiss={onDismiss}
     >
       {error && (
-        <Alert title="Error" severity="error" style={{ marginBottom: 16 }}>
+        <Alert title="Error" severity="error" className={styles.alert}>
           {error}
         </Alert>
       )}
@@ -504,7 +506,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
             )}
           </Field>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <div className={styles.footerRowEnd}>
             <Button variant="secondary" onClick={onDismiss}>Cancel</Button>
             <Button variant="primary" disabled={!canProceed} onClick={goToColumnsStep}>
               Next →
@@ -519,19 +521,11 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         // shrink, then jump/resize again the instant the full form replaced it — the visible
         // flicker reported against this step. Matching the loaded form's rough height up front
         // keeps the modal's bounding box stable through the transition.
-        <div style={{ minHeight: 420 }}>
+        <div className={styles.columnsStep}>
           {loadingCols && (
-            <div
-              style={{
-                minHeight: 420,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
+            <div className={styles.loadingCentered}>
               <Spinner size="xl" />
-              <div style={{ marginTop: 8, color: 'var(--color-text-secondary)' }}>
+              <div className={styles.loadingLabel}>
                 Loading columns…
               </div>
             </div>
@@ -539,7 +533,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
 
           {!loadingCols && (
             <>
-              <div style={{ marginBottom: 16 }}>
+              <div className={styles.blockSpacingLg}>
                 <Checkbox
                   label="This table uses the OpenTelemetry schema — apply preset"
                   description="Pre-fills all column mappings with standard OTel column names (Timestamp, Body, SeverityText, …)."
@@ -549,7 +543,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
               </div>
 
               {aiOn && (
-                <div style={{ marginBottom: 12 }}>
+                <div className={styles.blockSpacing}>
                   <Button
                     variant="secondary"
                     size="sm"
@@ -592,16 +586,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                 />
               </Field>
 
-              <div style={{ marginBottom: 12 }}>
+              <div className={styles.blockSpacing}>
                 <button
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: '0.85em',
-                    padding: 0,
-                  }}
+                  className={styles.disclosureBtn}
                   onClick={() => setShowAdvanced((v) => !v)}
                 >
                   {showAdvanced ? '▾' : '▸'} Advanced column mapping (severity, service, trace, attributes…)
@@ -626,16 +613,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                 />
               )}
 
-              <div style={{ marginBottom: 12 }}>
+              <div className={styles.blockSpacing}>
                 <button
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: '0.85em',
-                    padding: 0,
-                  }}
+                  className={styles.disclosureBtn}
                   onClick={() => setShowPinned((v) => !v)}
                 >
                   {showPinned ? '▾' : '▸'} Pinned columns ({pinnedIds.length} selected)
@@ -667,11 +647,11 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                 />
               </Field>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+              <div className={styles.footerRowBetween}>
                 <Button variant="secondary" onClick={() => setStep('location')}>
                   ← Back
                 </Button>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div className={styles.footerRowGroup}>
                   <Button variant="secondary" onClick={onDismiss}>Cancel</Button>
                   <Button
                     variant="primary"
@@ -689,3 +669,59 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     </Modal>
   );
 }
+
+const getStyles = (theme: GrafanaTheme2) => ({
+  alert: css`
+    margin-bottom: ${theme.spacing(2)};
+  `,
+  footerRowEnd: css`
+    display: flex;
+    justify-content: flex-end;
+    gap: ${theme.spacing(1)};
+    margin-top: ${theme.spacing(2)};
+  `,
+  footerRowBetween: css`
+    display: flex;
+    justify-content: space-between;
+    margin-top: ${theme.spacing(2)};
+  `,
+  footerRowGroup: css`
+    display: flex;
+    gap: ${theme.spacing(1)};
+  `,
+  // Fixed min-height across the loading→loaded swap: <Modal> auto-sizes to its content, so
+  // without this the small spinner block made the modal shrink, then jump/resize again the
+  // instant the full form replaced it. Matching the loaded form's rough height up front keeps
+  // the modal's bounding box stable through the transition.
+  columnsStep: css`
+    min-height: 420px;
+  `,
+  loadingCentered: css`
+    min-height: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  `,
+  loadingLabel: css`
+    margin-top: ${theme.spacing(1)};
+    color: ${theme.colors.text.secondary};
+  `,
+  blockSpacing: css`
+    margin-bottom: ${theme.spacing(1.5)};
+  `,
+  blockSpacingLg: css`
+    margin-bottom: ${theme.spacing(2)};
+  `,
+  disclosureBtn: css`
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: ${theme.colors.text.secondary};
+    font-size: 0.85em;
+    padding: 0;
+    &:hover {
+      color: ${theme.colors.text.primary};
+    }
+  `,
+});

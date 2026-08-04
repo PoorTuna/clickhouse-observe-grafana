@@ -5,6 +5,8 @@
  */
 
 import { buildWhereConditions } from '../queryBuilder';
+import { buildFieldIndex } from '../fields';
+import { FieldModel } from '../fieldModel';
 import { filterLabel, addFilterPill } from '../filters';
 import {
   FilterPill,
@@ -162,6 +164,48 @@ describe('buildWhereConditions — disabled pills', () => {
     const conditions = buildWhereConditions(config, state);
     expect(conditions).toHaveLength(2);
     expect(conditions[1]).toContain("= 'api'");
+  });
+});
+
+// ── fieldIndex threading ─────────────────────────────────────────────────────
+//
+// Regression test for a real bug: FieldStatsPopover.tsx built its WHERE conditions without
+// passing the discovered FieldIndex through to buildWhereConditions, unlike every other call site
+// (LogsExplorer's logsLoadValues, hydratePage, etc.) — so a filter on a discovered Map/JSON field
+// silently resolved differently there than everywhere else on the page. This locks in that passing
+// the index is what makes a discovered-but-not-directly-mapped field resolve correctly at all.
+
+describe('buildWhereConditions — fieldIndex threading', () => {
+  const jsonField: FieldModel = {
+    id: 'json:Payload:user.id',
+    name: 'user.id',
+    displayName: 'user.id',
+    sqlExpr: 'Payload.user.id',
+    type: 'number',
+    source: 'json',
+    jsonColumn: 'Payload',
+    jsonPath: 'user.id',
+  };
+  const index = buildFieldIndex([jsonField]);
+
+  it('without an index, a filter on a discovered JSON field name falls back to a raw column reference', () => {
+    const conditions = buildWhereConditions(
+      config,
+      stateWithFilter({ field: 'user.id', op: '=', value: '42' })
+    );
+    // resolveField(..., undefined) can't see the JSON field, so the field name is used verbatim —
+    // wrong: "user.id" isn't a real column, ClickHouse would reject this. (quoteIdentifier skips
+    // quoting names containing '.', treating them as already-qualified — see queryBuilder.ts.)
+    expect(conditions[1]).toBe(`user.id = '42'`);
+  });
+
+  it('with the index, the same filter resolves to the real JSON path expression', () => {
+    const conditions = buildWhereConditions(
+      config,
+      stateWithFilter({ field: 'user.id', op: '=', value: '42' }),
+      index
+    );
+    expect(conditions[1]).toBe(`Payload.user.id = '42'`);
   });
 });
 

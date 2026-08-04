@@ -10,6 +10,19 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.8] — 2026-08-04
+
+### Fixed
+
+- Fields sidebar: hovering a field's row used to permanently reserve space for its filter/add-column icons on every row (even hidden), truncating the field name earlier than the sidebar's actual width allowed. Icons now only claim that space while actually revealed on hover, and no longer overlap the name text.
+- Volume histogram: the y-axis number column was sized for 3-digit counts and let larger compact-formatted values ("1.5 M", "999.9 K") overflow past its left edge instead of fitting inside it.
+
+### Changed
+
+- Volume histogram legend narrowed (220px → 140px) to give the chart more width; truncated legend entries now show their full value in a tooltip on hover.
+
+---
+
 ## [0.4.7] — 2026-08-04
 
 ### Fixed

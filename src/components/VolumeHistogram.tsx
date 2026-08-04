@@ -585,13 +585,16 @@ export function VolumeHistogram({
                 key={level}
                 className={cx(styles.legendItem, isHidden && styles.legendItemHidden)}
                 onClick={(e) => onLegendClick(level, e)}
-                title={
+                // Level name first — the narrower legend column (see styles.legend) truncates
+                // longer values more readily now, so the full value needs to be recoverable on
+                // hover, not just the click-behavior hint that used to be the whole tooltip.
+                title={`${level || '(empty)'} — ${
                   isHidden
                     ? 'Hidden — click to isolate, ctrl/cmd-click to show'
                     : onBreakdownFilter
                     ? 'Click to isolate, ctrl/cmd-click to toggle, shift-click to filter'
                     : 'Click to isolate, ctrl/cmd-click to toggle'
-                }
+                }`}
               >
                 <span
                   className={styles.legendSwatch}
@@ -755,9 +758,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
     align-items: stretch;
     gap: ${theme.spacing(0.5)};
   `,
+  // Fixed width (not content-sized: children below are position:absolute, out of flow, so an
+  // "auto" width here would just collapse to 0). Sized for the widest label formatCompact can
+  // realistically produce ("999.9 K", "1.5 M", …) — the old 36px only fit up to 3 plain digits
+  // and let anything wider (thousands/millions abbreviations) overflow past the column's left
+  // edge instead of just wrapping/clipping inside it. yAxisSpacer must match exactly so the axis
+  // row below stays aligned with the bars above it (a stray 2px gap here used to throw that off).
   yAxis: css`
     position: relative;
-    width: 36px;
+    width: 52px;
     flex-shrink: 0;
     text-align: right;
     font-size: 12px;
@@ -777,7 +786,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     }
   `,
   yAxisSpacer: css`
-    width: 34px;
+    width: 52px;
     flex-shrink: 0;
   `,
   container: css`
@@ -805,7 +814,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     flex-shrink: 0;
     gap: ${theme.spacing(0.5)};
-    width: 220px;
+    width: 140px;
     max-height: 100%;
     overflow-y: auto;
     padding: 2px ${theme.spacing(1)};

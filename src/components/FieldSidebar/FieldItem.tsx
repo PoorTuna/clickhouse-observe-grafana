@@ -67,7 +67,7 @@ export function FieldItem({
         }}
       >
         <Icon name={icon as any} size="xs" className={styles.typeIcon} />
-        <span className={styles.name}>{field.displayName}</span>
+        <span className={`${styles.name} field-item-name`}>{field.displayName}</span>
         <div className={`${styles.actions} field-item-actions`}>
           <button
             className={styles.actionBtn}
@@ -136,6 +136,7 @@ export function FieldItem({
 
 const getStyles = (theme: GrafanaTheme2) => ({
   row: css`
+    position: relative;
     display: flex;
     align-items: center;
     gap: ${theme.spacing(0.75)};
@@ -147,6 +148,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     }
     &:hover .field-item-actions {
       opacity: 1;
+      pointer-events: auto;
+    }
+    /* Only shrink the name's available width (earlier ellipsis) while the actions are actually
+     * revealed — the previous fixed-width flex sibling reserved this room on every row, all the
+     * time; this claims it only on hover, and via padding (which text-overflow respects) rather
+     * than the actions overlapping the text on top of it. */
+    &:hover .field-item-name {
+      padding-right: 72px;
     }
   `,
   rowSelected: css`
@@ -164,11 +173,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: ${theme.typography.fontFamilyMonospace};
+    transition: padding-right 0.1s;
   `,
+  // Absolutely positioned (not a flex sibling of .name) so it doesn't permanently reserve layout
+  // width on every row — that reserved-but-invisible space was silently stealing room from the
+  // field name, truncating it far earlier than the sidebar's actual available width. The
+  // ".field-item-name:hover" rule above reserves this same width back via padding, but only while
+  // actions are actually shown, so this never overlaps the name text.
   actions: css`
+    position: absolute;
+    top: 50%;
+    right: ${theme.spacing(0.75)};
+    transform: translateY(-50%);
     display: flex;
     gap: 2px;
     opacity: 0;
+    pointer-events: none;
     transition: opacity 0.1s;
   `,
   actionBtn: css`

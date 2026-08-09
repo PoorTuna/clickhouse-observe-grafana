@@ -12,6 +12,8 @@ import {
   Tab,
   Spinner,
   Pagination,
+  Alert,
+  Button,
 } from '@grafana/ui';
 import { LogRow, FilterPill, SourceConfig, SelectedColumn } from '../types';
 import { FieldModel, FieldType } from '../sql/fieldModel';
@@ -96,13 +98,29 @@ interface LogDetailDrawerProps {
   /**
    * Full-row data (all columns, incl. Map attribute columns), fetched lazily by the caller and
    * matched to `row` by content key — see logRowKey() in sql/queryBuilder.ts. Undefined while
-   * unhydrated/hydrating, or in raw-SQL mode where `row` already *is* the full row. Attribute
-   * groups, "All fields", and the JSON tab fall back to `row` when this is absent, so they never
-   * show nothing — just less than once hydration lands.
+   * unhydrated/hydrating, or in raw-SQL mode where the caller passes `row` straight through
+   * (LogsExplorer.tsx's detailRow memo). While undefined (and fieldsLoading isn't also false), the
+   * panel body blocks on a loading spinner instead of rendering `row`'s narrow grid columns as if
+   * they were the whole row — see `blocked` below. This reverses this prop's old contract, which
+   * fell back to `row` and rendered a partial field list; that partial state was indistinguishable
+   * from "this row genuinely only has 5 fields," which is the bug this change fixes.
    */
   detailRow?: LogRow;
   /** True while a hydrate fetch for detailRow's page is in flight. */
   detailLoading?: boolean;
+  /** True while field discovery (Map keys / JSON paths — see useFieldDiscovery) is still running.
+   *  The panel body blocks until this is false too, not just detailRow — otherwise a Map/JSON
+   *  column's dotted-path children render before discovery knows the column is Map/JSON-typed. */
+  fieldsLoading?: boolean;
+  /** Set when field discovery failed (see FieldsContext's error state) — surfaced as a blocking
+   *  error alongside detailError rather than silently discovered fields. */
+  fieldsError?: string | null;
+  /** Set when hydrating detailRow failed outright, or its fallback also couldn't find the row
+   *  (e.g. a multi-replica read miss) — surfaced as a blocking error with a Retry action instead
+   *  of falling back to a partial field list. */
+  detailError?: string | null;
+  /** Re-attempts hydration for the currently open row. Required for the error state's Retry button. */
+  onRetryHydrate?: () => void;
   config: SourceConfig;
   /** Discovered fields (from useFieldDiscovery) — used to tell JSON-typed attribute columns apart
    *  from Map-typed ones so flattened attribute rows get the right SQL accessor. Optional: omitted
@@ -137,7 +155,13 @@ const VALUE_TRUNCATE_LEN = 300;
 export function LogDetailDrawer({
   row,
   detailRow,
-  detailLoading,
+  // detailLoading is accepted for API completeness (LogsExplorer still tracks it for other UI)
+  // but isn't read here — `blocked` below derives purely from detailRow/fieldsLoading, since a
+  // background re-hydrate of an already-cached row (e.g. after Retry) shouldn't re-block the panel.
+  fieldsLoading,
+  fieldsError,
+  detailError,
+  onRetryHydrate,
   config,
   fields,
   columns,
@@ -171,11 +195,18 @@ export function LogDetailDrawer({
   };
 
   // Header summary reads the narrow `row` directly — it must render instantly, before/without
-  // the full row ever arriving. The flat field/value table below reads `effectiveRow`, which is
-  // the hydrated full row once available, falling back to the narrow row (never blank).
+  // the full row ever arriving (timestamp, prev/next nav, expand/close, tabs). The panel *body*
+  // below blocks separately — see `blocked`/`failure` — until both the full row and field
+  // discovery have landed, rather than rendering `row`'s narrow grid columns as a stand-in.
   const timestamp = formatTimestamp(row[CORE_ALIAS.timestamp]);
   const effectiveRow = detailRow ?? row;
-  const hydrating = Boolean(detailLoading) && !detailRow;
+  // detailRow undefined covers both "still hydrating" and "hydration hasn't been kicked off yet"
+  // (e.g. the effect that calls hydrateRow hasn't run this render) — either way, the body isn't
+  // ready to show real data. fieldsLoading blocks too: Map/JSON columns can't be told apart from
+  // plain columns (see jsonColumns/mapColumns below) until discovery finishes, so blocking only on
+  // detailRow would flash unflattened attribute blobs for a moment on every fresh page load.
+  const blocked = !detailRow || Boolean(fieldsLoading);
+  const failure = detailError ?? fieldsError ?? null;
   const c = config.columns;
   const jsonColumns = useMemo(
     () =>
@@ -394,13 +425,30 @@ export function LogDetailDrawer({
         </TabsBar>
       </div>
       <div className={styles.panelBody}>
-      {activeTab === 'json' ? (
+      {failure ? (
+        // Never render a partial field table under a failure — a truncated/wrong field list read
+        // as a real answer is worse than an empty pane with an obvious way to retry.
+        <div className={styles.centerFill}>
+          <Alert severity="error" title="Couldn't load this log's full data">
+            {failure}
+            {onRetryHydrate && (
+              <div className={styles.retryRow}>
+                <Button size="sm" variant="secondary" icon="sync" onClick={onRetryHydrate}>
+                  Retry
+                </Button>
+              </div>
+            )}
+          </Alert>
+        </div>
+      ) : blocked ? (
+        // Blocks both tabs until the full row AND field discovery have landed — see `blocked`'s
+        // doc comment above for why detailRow alone isn't enough.
+        <div className={styles.centerFill}>
+          <Spinner size="lg" />
+          <span className={styles.loadingLabel}>Loading all fields…</span>
+        </div>
+      ) : activeTab === 'json' ? (
         <div className={styles.jsonWrap}>
-          {hydrating && (
-            <span className={styles.hydratingNote}>
-              <Spinner size="sm" /> Loading full row…
-            </span>
-          )}
           <JsonTree data={effectiveRow} defaultExpanded={jsonExpandedPaths} />
         </div>
       ) : (
@@ -418,7 +466,6 @@ export function LogDetailDrawer({
               <Switch value={selectedOnly} onChange={(e) => setSelectedOnly(e.currentTarget.checked)} />
               Selected only
             </label>
-            {hydrating && <Spinner size="sm" />}
           </div>
 
           {/* Flat Field | Value table — no OTel category grouping. */}
@@ -487,6 +534,24 @@ const getStyles = (theme: GrafanaTheme2) => ({
     min-height: 0;
     overflow-y: auto;
   `,
+  // ── Blocking loading/error states (both tabs) ───────────────────────────────
+  centerFill: css`
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: ${theme.spacing(1)};
+    height: 100%;
+    padding: ${theme.spacing(3)};
+    text-align: center;
+  `,
+  retryRow: css`
+    margin-top: ${theme.spacing(1)};
+  `,
+  loadingLabel: css`
+    font-size: ${theme.typography.body.fontSize};
+    color: ${theme.colors.text.secondary};
+  `,
   showMoreBtn: css`
     display: block;
     background: transparent;
@@ -532,14 +597,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: ${theme.spacing(1)};
     padding: ${theme.spacing(1)};
     height: 100%;
-  `,
-  hydratingNote: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    font-size: ${theme.typography.body.fontSize};
-    color: ${theme.colors.text.secondary};
-    margin-right: auto;
   `,
   // ── Table tab ─────────────────────────────────────────────────────────────
   content: css`

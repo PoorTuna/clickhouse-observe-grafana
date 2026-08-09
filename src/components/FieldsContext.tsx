@@ -135,7 +135,7 @@ export function useFieldDiscovery(
       try {
         const rows = await runQueryRows({
           datasourceUid: config.datasourceUid,
-          sql: buildColumnsQuery(config.database, resolvedTable),
+          sql: buildColumnsQuery(config, resolvedTable),
           timeRange,
         });
         columns = rows
@@ -178,19 +178,19 @@ export function useFieldDiscovery(
       const mKey = mapKeyCacheKey(config, resolvedTable, mapCol, bucket);
       const cached = mapKeyCache.get(mKey);
       if (cached) {
-        return { mapCol, keys: cached };
+        return { mapCol, keys: cached, error: undefined as string | undefined };
       }
       try {
         const rows = await runQueryRows({
           datasourceUid: config.datasourceUid,
-          sql: buildMapKeysQuery(config, mapCol, undefined, resolvedTable),
+          sql: buildMapKeysQuery(config, mapCol, resolvedTable),
           timeRange,
         });
         const keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
         mapKeyCache.set(mKey, keys);
-        return { mapCol, keys };
-      } catch {
-        return { mapCol, keys: [] as string[] };
+        return { mapCol, keys, error: undefined as string | undefined };
+      } catch (e) {
+        return { mapCol, keys: [] as string[], error: String((e as Error)?.message ?? e) };
       }
     });
 
@@ -202,21 +202,25 @@ export function useFieldDiscovery(
       const jKey = jsonPathCacheKey(config, resolvedTable, jsonCol, bucket);
       const cached = jsonPathCache.get(jKey);
       if (cached) {
-        return { jsonCol, paths: cached };
+        return { jsonCol, paths: cached, error: undefined as string | undefined };
       }
       try {
         const rows = await runQueryRows({
           datasourceUid: config.datasourceUid,
-          sql: buildJsonPathsQuery(config, jsonCol, undefined, resolvedTable),
+          sql: buildJsonPathsQuery(config, jsonCol, resolvedTable),
           timeRange,
         });
         const paths = rows
           .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
           .filter((p) => p.path);
         jsonPathCache.set(jKey, paths);
-        return { jsonCol, paths };
-      } catch {
-        return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };
+        return { jsonCol, paths, error: undefined as string | undefined };
+      } catch (e) {
+        return {
+          jsonCol,
+          paths: [] as Array<{ path: string; chType: string }>,
+          error: String((e as Error)?.message ?? e),
+        };
       }
     });
 
@@ -288,10 +292,23 @@ export function useFieldDiscovery(
       }
     }
 
+    // Discovery failures (e.g. a Map/JSON scan timing out — see DISCOVERY_SETTINGS' 'throw')
+    // must surface, not vanish into an empty key list that reads as "this column has no keys."
+    // Still publish whatever fields *were* discovered — a visible error alongside partial fields,
+    // never partial fields silently presented as complete.
+    const failedCols = [
+      ...perColKeys.filter((r) => r.error).map((r) => r.mapCol),
+      ...perColPaths.filter((r) => r.error).map((r) => r.jsonCol),
+    ];
+
     if (runRef.current === runId) {
       setFields([...columns, ...mapFields, ...jsonFields, ...tupleFields]);
       setLoading(false);
-      setError(null);
+      setError(
+        failedCols.length > 0
+          ? `Field discovery failed for: ${failedCols.join(', ')}. Some Map/JSON attribute fields may be missing.`
+          : null
+      );
     }
   }
 

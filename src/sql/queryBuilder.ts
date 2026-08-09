@@ -9,6 +9,7 @@
 import { BreakdownSel, ColumnMapping, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
 import { resolveField, FieldIndex } from './fields';
 import { parseKql, kqlToSql } from './kql';
+import { configSettingsFragments, withSettings } from './settings';
 
 /**
  * Row-object keys for buildLogsQuery's core (fixed-role) columns. `__`-prefixed so they can't
@@ -247,30 +248,34 @@ export function buildLogsQuery(
   const sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);
   const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
 
-  return [
-    `SELECT ${selectParts.join(', ')}`,
-    `FROM ${tbl}`,
-    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
-    sortCol ? `ORDER BY ${sortCol} ${sortDir}` : null,
-    pagination
-      ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
-      : `LIMIT ${state.limit}`,
-  ].filter(Boolean).join('\n');
+  return withSettings(
+    [
+      `SELECT ${selectParts.join(', ')}`,
+      `FROM ${tbl}`,
+      conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : null,
+      sortCol ? `ORDER BY ${sortCol} ${sortDir}` : null,
+      pagination
+        ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
+        : `LIMIT ${state.limit}`,
+    ],
+    configSettingsFragments(config)
+  );
 }
 
 /**
- * Execution guardrail for buildLogDetailQuery — a narrow point lookup should be near-instant;
- * 'break' (rather than 'throw') means a timeout degrades to "0 rows", which the caller already
- * treats as "point lookup missed, fall back to hydratePage" — one code path handles both.
- * Unlike VOLUME_QUERY_SETTINGS, 'break' here is safe: this query is bounded to a 1ms WHERE
- * window (see buildLogDetailQuery's doc comment) so it never has enough rows in scope for a
- * rows-read cap to bite before the real match is found, and a truncated result is treated by the
- * caller as "not found" — never displayed as a trustworthy answer the way a partial histogram
- * bucket was.
+ * Execution guardrail for buildLogDetailQuery — a narrow point lookup should be near-instant.
+ *
+ * Previously used `max_rows_to_read` + `read_overflow_mode = 'break'` on the theory that the 1ms
+ * WHERE window (see buildLogDetailQuery's doc comment) never has enough rows in scope for a
+ * rows-read cap to bite. That's only true if the timestamp column is a prefix of the table's
+ * ORDER BY — on a table sorted by e.g. (ServiceName, Timestamp) the 1ms window can't be
+ * index-pruned, the scan can hit the rows cap, and 'break' silently returned 0 rows: a real match
+ * indistinguishable from "not found," which is exactly the "1 row, then 0 rows on the same click"
+ * bug this file exists to fix. `throw` on timeout instead — the caller (hydrateRow in
+ * LogsExplorer.tsx) already has a real error path via its catch block, and a loud failure beats a
+ * quietly wrong "not found."
  */
-const DETAIL_QUERY_SETTINGS =
-  `SETTINGS max_execution_time = 10, timeout_overflow_mode = 'break', ` +
-  `max_rows_to_read = 5000000, read_overflow_mode = 'break'`;
+const DETAIL_QUERY_SETTINGS = [`max_execution_time = 10`, `timeout_overflow_mode = 'throw'`];
 
 /**
  * Best-effort coercion of a log row's timestamp cell (DateTime-like object, epoch-ms number, or
@@ -351,13 +356,15 @@ export function buildLogDetailQuery(
   // Map-key/JSON-path field references that would need index resolution.
   void index;
 
-  return [
-    `SELECT *, ${coreSelect.join(', ')}`,
-    `FROM ${tbl}`,
-    `WHERE ${conditions.join(' AND ')}`,
-    `LIMIT 1`,
-    DETAIL_QUERY_SETTINGS,
-  ].join('\n');
+  return withSettings(
+    [
+      `SELECT *, ${coreSelect.join(', ')}`,
+      `FROM ${tbl}`,
+      `WHERE ${conditions.join(' AND ')}`,
+      `LIMIT 1`,
+    ],
+    [...DETAIL_QUERY_SETTINGS, ...configSettingsFragments(config)]
+  );
 }
 
 export type CHIntervalUnit = 'SECOND' | 'MINUTE' | 'HOUR' | 'DAY' | 'WEEK' | 'MONTH' | 'YEAR';
@@ -387,8 +394,7 @@ export type VolumeBreakdown =
  * was meant to avoid. `throw` on timeout instead: a real error the user can act on (narrow the
  * range, pick a coarser interval) beats a histogram that lies.
  */
-const VOLUME_QUERY_SETTINGS =
-  `SETTINGS max_execution_time = 60, timeout_overflow_mode = 'throw'`;
+const VOLUME_QUERY_SETTINGS = [`max_execution_time = 60`, `timeout_overflow_mode = 'throw'`];
 
 export interface VolumeQueryOpts {
   /**
@@ -425,14 +431,16 @@ export function buildVolumeQuery(
 
   if (breakdown.kind === 'none') {
     // Single series: constant empty-string level so the fold loop stays generic.
-    return [
-      `SELECT ${timeExpr} AS time, '' AS level, count() AS count`,
-      `FROM ${tbl}`,
-      whereSql || null,
-      `GROUP BY time, level`,
-      `ORDER BY time ASC`,
-      VOLUME_QUERY_SETTINGS,
-    ].filter(Boolean).join('\n');
+    return withSettings(
+      [
+        `SELECT ${timeExpr} AS time, '' AS level, count() AS count`,
+        `FROM ${tbl}`,
+        whereSql || null,
+        `GROUP BY time, level`,
+        `ORDER BY time ASC`,
+      ],
+      [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+    );
   }
 
   if (breakdown.kind === 'severity') {
@@ -443,35 +451,39 @@ export function buildVolumeQuery(
     // on a breakdown segment produced `SeverityText = 'error'` against data stored as 'ERROR',
     // matching nothing). If a table's severity values are genuinely inconsistently cased, that's
     // real data to show as real data, not something to paper over here.
-    return [
-      `SELECT ${timeExpr} AS time, toString(${breakdown.expr}) AS level, count() AS count`,
-      `FROM ${tbl}`,
-      whereSql || null,
-      `GROUP BY time, level`,
-      `ORDER BY time ASC`,
-      VOLUME_QUERY_SETTINGS,
-    ].filter(Boolean).join('\n');
+    return withSettings(
+      [
+        `SELECT ${timeExpr} AS time, toString(${breakdown.expr}) AS level, count() AS count`,
+        `FROM ${tbl}`,
+        whereSql || null,
+        `GROUP BY time, level`,
+        `ORDER BY time ASC`,
+      ],
+      [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+    );
   }
 
   // Field breakdown: compute top-N server-side so 'Other' is one aggregated series.
   const limit = breakdown.limit ?? 10;
   const exprStr = `toString(${breakdown.expr})`;
-  return [
-    `WITH top AS (`,
-    `  SELECT ${exprStr} AS v`,
-    `  FROM ${tbl}`,
-    whereSql ? `  ${whereSql}` : null,
-    `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
-    `)`,
-    `SELECT ${timeExpr} AS time,`,
-    `       if(${exprStr} GLOBAL IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
-    `       count() AS count`,
-    `FROM ${tbl}`,
-    whereSql || null,
-    `GROUP BY time, level`,
-    `ORDER BY time ASC`,
-    VOLUME_QUERY_SETTINGS,
-  ].filter(Boolean).join('\n');
+  return withSettings(
+    [
+      `WITH top AS (`,
+      `  SELECT ${exprStr} AS v`,
+      `  FROM ${tbl}`,
+      whereSql ? `  ${whereSql}` : null,
+      `  GROUP BY v ORDER BY count() DESC LIMIT ${limit}`,
+      `)`,
+      `SELECT ${timeExpr} AS time,`,
+      `       if(${exprStr} GLOBAL IN (SELECT v FROM top), ${exprStr}, 'Other') AS level,`,
+      `       count() AS count`,
+      `FROM ${tbl}`,
+      whereSql || null,
+      `GROUP BY time, level`,
+      `ORDER BY time ASC`,
+    ],
+    [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+  );
 }
 
 /**
@@ -513,25 +525,28 @@ export function buildFieldTopValuesQuery(
   // The scalar subquery returns total sampled rows so the UI can show
   // "Calculated from N records" with real percentages.
   const condClause = conditions.length > 0 ? `  WHERE ${conditions.join(' AND ')}` : null;
-  return [
-    `WITH sample AS (`,
-    `  SELECT toString(${sqlExpr}) AS value`,
-    `  FROM ${tbl}`,
-    condClause,
-    tsCol ? `  ORDER BY ${tsCol} DESC` : null,
-    `  LIMIT ${sampleSize}`,
-    `)`,
-    `SELECT value, count() AS count, sum(count()) OVER () AS total`,
-    `FROM sample`,
-    // notEmpty() alone lets through non-null-but-meaningless stand-ins for "absent" — a JSON
-    // path missing from a given row's dynamic structure can stringify to '{}', '[]', or the
-    // literal text 'null' rather than SQL NULL/''. Exclude those too, or a field made mostly of
-    // rows without that path renders as if every sampled value were "empty."
-    `WHERE notEmpty(value) AND value NOT IN ('{}', '[]', 'null')`,
-    `GROUP BY value`,
-    `ORDER BY count DESC`,
-    `LIMIT ${limit}`,
-  ].filter(Boolean).join('\n');
+  return withSettings(
+    [
+      `WITH sample AS (`,
+      `  SELECT toString(${sqlExpr}) AS value`,
+      `  FROM ${tbl}`,
+      condClause,
+      tsCol ? `  ORDER BY ${tsCol} DESC` : null,
+      `  LIMIT ${sampleSize}`,
+      `)`,
+      `SELECT value, count() AS count, sum(count()) OVER () AS total`,
+      `FROM sample`,
+      // notEmpty() alone lets through non-null-but-meaningless stand-ins for "absent" — a JSON
+      // path missing from a given row's dynamic structure can stringify to '{}', '[]', or the
+      // literal text 'null' rather than SQL NULL/''. Exclude those too, or a field made mostly of
+      // rows without that path renders as if every sampled value were "empty."
+      `WHERE notEmpty(value) AND value NOT IN ('{}', '[]', 'null')`,
+      `GROUP BY value`,
+      `ORDER BY count DESC`,
+      `LIMIT ${limit}`,
+    ],
+    configSettingsFragments(config)
+  );
 }
 
 export function buildSurroundingDocsQuery(
@@ -550,12 +565,15 @@ export function buildSurroundingDocsQuery(
   const op = direction === 'before' ? '<' : '>';
   const order = direction === 'before' ? 'DESC' : 'ASC';
 
-  return [
-    `SELECT ${c.timestamp} AS timestamp, ${c.body || "''"} AS body,`,
-    `  ${c.severity || "''"} AS severity, ${c.serviceName || "''"} AS serviceName`,
-    `FROM ${tbl}`,
-    `WHERE ${c.timestamp} ${op} ${quoteString(rowTimestamp)}`,
-    `ORDER BY ${c.timestamp} ${order}`,
-    `LIMIT ${n}`,
-  ].join('\n');
+  return withSettings(
+    [
+      `SELECT ${c.timestamp} AS timestamp, ${c.body || "''"} AS body,`,
+      `  ${c.severity || "''"} AS severity, ${c.serviceName || "''"} AS serviceName`,
+      `FROM ${tbl}`,
+      `WHERE ${c.timestamp} ${op} ${quoteString(rowTimestamp)}`,
+      `ORDER BY ${c.timestamp} ${order}`,
+      `LIMIT ${n}`,
+    ],
+    configSettingsFragments(config)
+  );
 }

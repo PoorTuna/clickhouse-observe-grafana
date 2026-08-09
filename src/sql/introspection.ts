@@ -1,27 +1,22 @@
 import { SourceConfig } from '../types';
+import { configSettingsFragments, withSettings } from './settings';
 
 /**
- * Execution guardrails for field-discovery scans (Map keys / JSON paths) — these queries scan
- * real data (bounded by time range, but the row cost to reach that many DISTINCT results isn't
- * bounded by LIMIT alone; see buildJsonPathsQuery's doc comment). Matches the values HyperDX
- * (github.com/hyperdxio/hyperdx, packages/common-utils/src/core/metadata.ts) uses for the same
- * class of query: stop after 15s or 3M rows read and return whatever was found so far instead of
- * hanging or erroring — 'break' overflow mode degrades to a partial result, which the caller
- * (FieldsContext.tsx) already tolerates (a column found 0/fewer keys this pass, not a crash).
+ * Execution guardrail for field-discovery scans (Map keys / JSON paths) — these queries scan
+ * real data (bounded by time range, but the row cost to reach every DISTINCT result isn't bounded
+ * by anything else; see buildJsonPathsQuery's doc comment).
  *
- * 'break' is safe here specifically because the output is a *set of field names*, not a count —
- * a truncated scan just finds fewer names, which reads to the user as "fewer autocomplete
- * suggestions this pass," not as a wrong number. Do not copy this pattern onto an aggregation
- * query (COUNT/GROUP BY): there, a rows-read cap doesn't bound truncated results to "fewer of the
- * right thing," it produces confidently-wrong numbers with no indication anything was cut short —
- * see VOLUME_QUERY_SETTINGS in queryBuilder.ts for the bug this caused and why it uses 'throw'.
+ * Previously capped at 15s/3M rows read with `read_overflow_mode = 'break'`, matching HyperDX
+ * (github.com/hyperdxio/hyperdx, packages/common-utils/src/core/metadata.ts) — the reasoning was
+ * that a truncated scan just finds fewer field names, which reads as "fewer autocomplete
+ * suggestions" rather than a wrong number. In practice that "fewer names" silently drops whole
+ * Map/JSON columns from `fields`, which the log detail drawer depends on to flatten those columns
+ * into dotted-path rows (LogDetailDrawer.tsx) — a capped scan there doesn't read as "fewer
+ * suggestions," it reads as "the drawer is missing data." `throw` on timeout instead, same
+ * reasoning as VOLUME_QUERY_SETTINGS in queryBuilder.ts: a loud failure the caller
+ * (FieldsContext.tsx) already surfaces beats a quietly incomplete field list.
  */
-const DISCOVERY_SETTINGS =
-  `SETTINGS max_execution_time = 15, timeout_overflow_mode = 'break', ` +
-  `max_rows_to_read = 3000000, read_overflow_mode = 'break'`;
-
-/** Matches HyperDX's DEFAULT_MAX_KEYS. */
-const DEFAULT_DISCOVERY_LIMIT = 1000;
+const DISCOVERY_SETTINGS = [`max_execution_time = 60`, `timeout_overflow_mode = 'throw'`];
 
 /** All databases available on this ClickHouse server. */
 export function buildDatabasesQuery(): string {
@@ -34,11 +29,14 @@ export function buildTablesQuery(database: string): string {
 }
 
 /** Fetch column names + types from system.columns for any database + table combination. */
-export function buildColumnsQuery(database: string, table: string): string {
-  return (
-    `SELECT name, type FROM system.columns` +
-    ` WHERE database = '${database}' AND table = '${table}'` +
-    ` ORDER BY position`
+export function buildColumnsQuery(config: SourceConfig, table: string): string {
+  return withSettings(
+    [
+      `SELECT name, type FROM system.columns`,
+      `WHERE database = '${config.database}' AND table = '${table}'`,
+      `ORDER BY position`,
+    ],
+    configSettingsFragments(config)
   );
 }
 
@@ -50,18 +48,18 @@ export function buildColumnsQuery(database: string, table: string): string {
 export function buildMapKeysQuery(
   config: SourceConfig,
   mapColumn: string,
-  limit = DEFAULT_DISCOVERY_LIMIT,
   table: string = config.logsTable
 ): string {
   const tbl = `"${config.database}"."${table}"`;
   const ts = config.columns.timestamp;
-  return [
-    `SELECT DISTINCT arrayJoin(mapKeys(${mapColumn})) AS k`,
-    `FROM ${tbl}`,
-    ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
-    `LIMIT ${limit}`,
-    DISCOVERY_SETTINGS,
-  ].filter(Boolean).join('\n');
+  return withSettings(
+    [
+      `SELECT DISTINCT arrayJoin(mapKeys(${mapColumn})) AS k`,
+      `FROM ${tbl}`,
+      ts ? `WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
+    ],
+    [...DISCOVERY_SETTINGS, ...configSettingsFragments(config)]
+  );
 }
 
 /**
@@ -78,7 +76,6 @@ export function buildMapKeysQuery(
 export function buildJsonPathsQuery(
   config: SourceConfig,
   jsonColumn: string,
-  limit = DEFAULT_DISCOVERY_LIMIT,
   table: string = config.logsTable
 ): string {
   const tbl = `"${config.database}"."${table}"`;
@@ -87,15 +84,16 @@ export function buildJsonPathsQuery(
   // row in the inner subquery (aliased `m`) instead of calling it twice at the outer level (once
   // for mapKeys, once for mapValues) — the previous version paid for the same dynamic-path
   // introspection twice per row, which is the expensive part of this query.
-  return [
-    `SELECT DISTINCT pt.1 AS path, pt.2 AS type`,
-    `FROM (`,
-    `  SELECT JSONAllPathsWithTypes(${jsonColumn}) AS m`,
-    `  FROM ${tbl}`,
-    ts ? `  WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
-    `)`,
-    `ARRAY JOIN arrayZip(mapKeys(m), mapValues(m)) AS pt`,
-    `LIMIT ${limit}`,
-    DISCOVERY_SETTINGS,
-  ].filter(Boolean).join('\n');
+  return withSettings(
+    [
+      `SELECT DISTINCT pt.1 AS path, pt.2 AS type`,
+      `FROM (`,
+      `  SELECT JSONAllPathsWithTypes(${jsonColumn}) AS m`,
+      `  FROM ${tbl}`,
+      ts ? `  WHERE ${ts} >= $__fromTime AND ${ts} <= $__toTime` : null,
+      `)`,
+      `ARRAY JOIN arrayZip(mapKeys(m), mapValues(m)) AS pt`,
+    ],
+    [...DISCOVERY_SETTINGS, ...configSettingsFragments(config)]
+  );
 }

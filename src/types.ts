@@ -48,6 +48,16 @@ export interface SourceConfig {
    * remain reorderable/removable in the grid like any manually-added column (isCore: false).
    */
   pinnedColumns?: SelectedColumn[];
+  /** Append `select_sequential_consistency = 1` to every query for this view — makes whichever
+   *  replica answers catch up from Keeper first, so a round-robin load balancer (e.g. an
+   *  OpenShift Route) in front of a multi-replica cluster can't serve a stale or missing read.
+   *  Undefined is treated as true (see configSettingsFragments in sql/settings.ts) so views
+   *  persisted before this setting existed inherit it. */
+  sequentialConsistency?: boolean;
+  /** Advanced: extra ClickHouse SETTINGS for this view's queries, comma-separated, e.g.
+   *  "max_replica_delay_for_distributed_queries = 30". Overrides builder/sequentialConsistency
+   *  defaults on key collision (see sql/settings.ts's withSettings). */
+  extraQuerySettings?: string;
 }
 
 export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
@@ -56,6 +66,7 @@ export const DEFAULT_SOURCE_CONFIG: SourceConfig = {
   logsTable: '',
   isOtel: false,
   columns: EMPTY_COLUMN_MAPPING,
+  sequentialConsistency: true,
 };
 
 export type FilterOp =

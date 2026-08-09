@@ -44,16 +44,14 @@ describe('buildJsonPathsQuery', () => {
     expect(sqlStr).toContain('$__fromTime');
     expect(sqlStr).toContain('$__toTime');
     expect(sqlStr).toContain('JSONAllPathsWithTypes(Payload)');
-    expect(sqlStr).toContain('LIMIT 1000');
   });
 
-  it('defaults to a 1000-row limit and matches HyperDX\'s execution guardrails', () => {
+  it('has no row-count cap and throws (rather than silently truncating) on timeout', () => {
     const sqlStr = buildJsonPathsQuery(config, 'Payload');
-    expect(sqlStr).toContain('LIMIT 1000');
-    expect(sqlStr).toContain('max_execution_time = 15');
-    expect(sqlStr).toContain("timeout_overflow_mode = 'break'");
-    expect(sqlStr).toContain('max_rows_to_read = 3000000');
-    expect(sqlStr).toContain("read_overflow_mode = 'break'");
+    expect(sqlStr).not.toContain('LIMIT');
+    expect(sqlStr).not.toContain('max_rows_to_read');
+    expect(sqlStr).toContain('max_execution_time = 60');
+    expect(sqlStr).toContain("timeout_overflow_mode = 'throw'");
   });
 
   it('degrades to an unbounded scan when no timestamp column is mapped', () => {
@@ -63,10 +61,14 @@ describe('buildJsonPathsQuery', () => {
     expect(sqlStr).toContain('JSONAllPathsWithTypes(Payload)');
   });
 
-  it('respects a custom limit and table', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', 50, 'custom_table');
-    expect(sqlStr).toContain('LIMIT 50');
+  it('respects a custom table', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', 'custom_table');
     expect(sqlStr).toContain('"default"."custom_table"');
+  });
+
+  it('includes select_sequential_consistency by default', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload');
+    expect(sqlStr).toContain('select_sequential_consistency = 1');
   });
 });
 

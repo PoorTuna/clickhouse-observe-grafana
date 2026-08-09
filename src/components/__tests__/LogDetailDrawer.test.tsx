@@ -30,6 +30,10 @@ const row: LogRow = {
 
 const baseProps = {
   row,
+  // The panel body now blocks until detailRow is populated (see LogDetailDrawer's `blocked`) —
+  // these tests exercise rendered content, not the loading state itself, so pass row straight
+  // through as an already-hydrated detailRow, same as raw-SQL mode does in LogsExplorer.
+  detailRow: row,
   config,
   columns: [],
   onClose: jest.fn(),
@@ -58,5 +62,56 @@ describe('LogDetailDrawer traceId row', () => {
 
     expect(screen.queryByRole('link', { name: new RegExp(TRACE_ID) })).not.toBeInTheDocument();
     expect(screen.getByText(TRACE_ID)).toBeInTheDocument();
+  });
+});
+
+describe('LogDetailDrawer blocking states', () => {
+  // Regression coverage for the "only underscored fields show" bug: the panel body must never
+  // render `row`'s narrow grid columns as if they were the complete field list — it either shows
+  // real (fully hydrated + field-discovered) data, a loading state, or an error with Retry.
+  it('blocks the panel body on a spinner, not a partial field list, while detailRow is unhydrated', () => {
+    render(<LogDetailDrawer {...baseProps} detailRow={undefined} />);
+
+    expect(screen.getByText(/loading all fields/i)).toBeInTheDocument();
+    expect(screen.queryByText(TRACE_ID)).not.toBeInTheDocument();
+  });
+
+  it('blocks the panel body while field discovery is still loading, even once detailRow has landed', () => {
+    render(<LogDetailDrawer {...baseProps} fieldsLoading />);
+
+    expect(screen.getByText(/loading all fields/i)).toBeInTheDocument();
+    expect(screen.queryByText(TRACE_ID)).not.toBeInTheDocument();
+  });
+
+  it('shows the real field list once both detailRow and field discovery have completed', () => {
+    render(<LogDetailDrawer {...baseProps} fieldsLoading={false} />);
+
+    expect(screen.queryByText(/loading all fields/i)).not.toBeInTheDocument();
+    expect(screen.getByText(TRACE_ID)).toBeInTheDocument();
+  });
+
+  it('shows a blocking error with Retry instead of a partial field list when hydration failed', () => {
+    const onRetryHydrate = jest.fn();
+    render(
+      <LogDetailDrawer
+        {...baseProps}
+        detailRow={undefined}
+        detailError="This row wasn't found on the replica that answered."
+        onRetryHydrate={onRetryHydrate}
+      />
+    );
+
+    expect(screen.getByText(/wasn't found on the replica/i)).toBeInTheDocument();
+    expect(screen.queryByText(TRACE_ID)).not.toBeInTheDocument();
+
+    screen.getByRole('button', { name: /retry/i }).click();
+    expect(onRetryHydrate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a blocking error when field discovery failed, even if detailRow is present', () => {
+    render(<LogDetailDrawer {...baseProps} fieldsError="Field discovery failed for: LogAttributes." />);
+
+    expect(screen.getByText(/field discovery failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(TRACE_ID)).not.toBeInTheDocument();
   });
 });

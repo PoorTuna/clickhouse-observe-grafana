@@ -167,6 +167,12 @@ export function LogsExplorer() {
   const [volLoading, setVolLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<LogRow | null>(null);
+  // Mirrors selectedRow for fetchLogs's hydratedRows-pruning below — read from a callback whose
+  // deps deliberately don't include selectedRow (see fetchLogs), same pattern as hydratedRowsRef.
+  const selectedRowRef = useRef(selectedRow);
+  useEffect(() => {
+    selectedRowRef.current = selectedRow;
+  }, [selectedRow]);
   // "Expand" on the log detail pane — visually overrides the splitter's flex-basis
   // without touching its underlying drag state, so collapsing back returns to whatever width the
   // user last dragged it to. Reset whenever the drawer closes so the next log opens at normal size.
@@ -195,6 +201,10 @@ export function LogsExplorer() {
   // hydrateRow below.
   const hydratingRowKeysRef = useRef<Set<string>>(new Set());
   const [detailLoading, setDetailLoading] = useState(false);
+  // Set when hydrateRow's point lookup AND its hydratePage fallback both fail to produce the
+  // selected row — surfaced by the drawer as a blocking error + Retry, never silently degraded
+  // to the narrow grid columns (see LogDetailDrawer's fieldsError/detailError props).
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   // Histogram controls.
   // Breakdown: `breakdownChoice` is null until the user explicitly picks something — the
@@ -386,7 +396,17 @@ export function LogsExplorer() {
     setError(null);
     // A new list query invalidates any previously hydrated detail rows/pages — they were
     // fetched under the old filters/time range/sort and would otherwise mismatch the new rows.
-    setHydratedRows(new Map());
+    // Exception: the currently-open drawer's row. With the drawer now blocking on hydration
+    // (see LogDetailDrawer), clearing it unconditionally meant every auto-refresh (every 30s by
+    // default) flashed the drawer back to a full-body loading spinner even though the same row
+    // (by content key) is almost always still hydrated and still present in the new results —
+    // setSelectedRow below re-points at it by the same key. Keep just that one entry; everything
+    // else is dropped as before.
+    setHydratedRows((prev) => {
+      const key = selectedRowRef.current ? logRowKey(selectedRowRef.current) : null;
+      const surviving = key ? prev.get(key) : undefined;
+      return surviving ? new Map([[key as string, surviving]]) : new Map();
+    });
     hydratedPagesRef.current = new Set();
     hydratingPagesRef.current = new Set();
 
@@ -538,15 +558,16 @@ export function LogsExplorer() {
   // Map attribute columns / "All fields" / JSON without the live list query paying SELECT *'s
   // cost for every row. Raw-SQL mode is exempt: those rows already carry whatever the user's own
   // query selected, so there's nothing to hydrate (see the `detailRow` memo below).
+  // Returns whether `targetKey` (if given) ended up in hydratedRows after this page fetch — lets
+  // hydrateRow's fallback below tell "fetched the page, but the row genuinely isn't in it" apart
+  // from "fetched fine" without racing hydratedRowsRef's post-commit sync.
   const hydratePage = useCallback(
-    async (pageIndex: number) => {
-      if (
-        queryState.useRawSql ||
-        !config.datasourceUid ||
-        hydratedPagesRef.current.has(pageIndex) ||
-        hydratingPagesRef.current.has(pageIndex)
-      ) {
-        return;
+    async (pageIndex: number, targetKey?: string): Promise<boolean> => {
+      if (queryState.useRawSql || !config.datasourceUid) {
+        return false;
+      }
+      if (hydratedPagesRef.current.has(pageIndex) || hydratingPagesRef.current.has(pageIndex)) {
+        return targetKey ? hydratedRowsRef.current.has(targetKey) : true;
       }
       hydratingPagesRef.current.add(pageIndex);
       const runId = runRef.current;
@@ -573,7 +594,7 @@ export function LogsExplorer() {
         // reset already cleared hydratedRows, so writing into it here would resurrect stale
         // data under the new query's key space.
         if (runRef.current !== runId) {
-          return;
+          return false;
         }
         setHydratedRows((prev) => {
           const next = new Map(prev);
@@ -583,9 +604,12 @@ export function LogsExplorer() {
           return next;
         });
         hydratedPagesRef.current.add(pageIndex);
-      } catch {
+        return targetKey ? fullRows.some((r) => logRowKey(r) === targetKey) : true;
+      } catch (e) {
         // Leave the page unmarked as hydrated so the next drawer-open on this page retries,
         // rather than permanently degrading to summary-only after one transient failure.
+        setDetailError(String((e as Error)?.message ?? e));
+        return false;
       } finally {
         hydratingPagesRef.current.delete(pageIndex);
         if (runRef.current === runId) {
@@ -612,12 +636,19 @@ export function LogsExplorer() {
       hydratingRowKeysRef.current.add(key);
       const runId = runRef.current;
       setDetailLoading(true);
+      setDetailError(null);
       try {
         const sql = buildLogDetailQuery(config, targetRow, fieldIndexRef.current);
         if (!sql) {
           // No timestamp mapped, or the row's timestamp couldn't be parsed — fall back to the
           // whole-page fetch rather than leaving the drawer permanently unhydrated.
-          await hydratePage(currentPage);
+          const found = await hydratePage(currentPage, key);
+          if (runRef.current === runId && !found) {
+            setDetailError(
+              "Couldn't load this row's full data — no timestamp column is mapped for this view, " +
+              'and the row was not present in the current page fetch.'
+            );
+          }
           return;
         }
         const fullRows = await runQueryRows({
@@ -632,8 +663,15 @@ export function LogsExplorer() {
         if (fullRows.length === 0) {
           // Point lookup missed (millisecond-window/core-field mismatch, or the row aged out of
           // the mapped range between list-fetch and click) — fall back so the drawer isn't stuck
-          // showing only the narrow grid columns.
-          await hydratePage(currentPage);
+          // showing only the narrow grid columns. If the fallback also can't find it, this is the
+          // multi-replica read-inconsistency case the sequential-consistency setting exists for.
+          const found = await hydratePage(currentPage, key);
+          if (runRef.current === runId && !found) {
+            setDetailError(
+              "This row wasn't found on the replica that answered. If this ClickHouse cluster has " +
+              'multiple replicas, enable "Sequential consistency" for this view in Configuration.'
+            );
+          }
           return;
         }
         setHydratedRows((prev) => {
@@ -641,8 +679,8 @@ export function LogsExplorer() {
           next.set(logRowKey(fullRows[0]), fullRows[0]);
           return next;
         });
-      } catch {
-        // Leave unhydrated — re-opening the same row (selectedRow change) retries.
+      } catch (e) {
+        setDetailError(String((e as Error)?.message ?? e));
       } finally {
         hydratingRowKeysRef.current.delete(key);
         if (runRef.current === runId) {
@@ -911,8 +949,13 @@ export function LogsExplorer() {
     if (!selectedRow) {
       return undefined;
     }
+    // Raw-SQL mode: `row` already is the full row (see hydrateRow's early return above), so treat
+    // it as pre-hydrated instead of leaving the drawer waiting on a hydration that will never run.
+    if (queryState.useRawSql) {
+      return selectedRow;
+    }
     return hydratedRows.get(logRowKey(selectedRow));
-  }, [selectedRow, hydratedRows]);
+  }, [selectedRow, hydratedRows, queryState.useRawSql]);
 
   return (
     <FieldsContext.Provider value={fieldsState}>
@@ -1150,6 +1193,19 @@ export function LogsExplorer() {
                       row={selectedRow}
                       detailRow={detailRow}
                       detailLoading={detailLoading}
+                      fieldsLoading={fieldsState.loading}
+                      fieldsError={fieldsState.error}
+                      detailError={detailError}
+                      onRetryHydrate={() => {
+                        if (!selectedRow) {
+                          return;
+                        }
+                        const key = logRowKey(selectedRow);
+                        hydratedRowsRef.current.delete(key);
+                        hydratingRowKeysRef.current.delete(key);
+                        setDetailError(null);
+                        hydrateRow(selectedRow);
+                      }}
                       config={config}
                       fields={fieldsState.fields}
                       columns={effectiveColumns}

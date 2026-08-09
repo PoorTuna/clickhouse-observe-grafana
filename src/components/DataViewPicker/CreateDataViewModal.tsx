@@ -7,7 +7,7 @@ import React, { ChangeEvent, useCallback, useContext, useEffect, useMemo, useRef
 import { css } from '@emotion/css';
 import { dateTime, GrafanaTheme2, SelectableValue, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Checkbox, Field, Input, Modal, MultiSelect, Select, Spinner, Switch, useStyles2 } from '@grafana/ui';
 import { AiConfigContext, DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildJsonPathsQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
@@ -103,6 +103,17 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // including Map/JSON leaf paths like "LogAttributes.http.method" — not just top-level columns.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [showPinned, setShowPinned] = useState(false);
+  // Advanced query settings — defaults match DEFAULT_SOURCE_CONFIG so a regular user creating a
+  // view never has to look at this; it exists for the rare case a personal view points at a
+  // multi-replica cluster with unusual latency/consistency needs.
+  const [sequentialConsistency, setSequentialConsistency] = useState(true);
+  const [extraQuerySettings, setExtraQuerySettings] = useState('');
+  const [showQuerySettings, setShowQuerySettings] = useState(false);
+  // Single outer gate for all three "advanced" sub-disclosures below — a regular user creating a
+  // view sees none of column mapping / pinned columns / query settings until they open this once.
+  // Each sub-section still collapses independently once inside, so opening one doesn't dump all
+  // three onto the screen at once.
+  const [showAdvancedSection, setShowAdvancedSection] = useState(false);
   // Stable TimeRange reference for schema-only field discovery below — created once so it doesn't
   // change identity every render (schemaTimeRange() uses Date.now(), which would otherwise churn
   // the discovery hook's coarse time bucket and re-fetch on every keystroke).
@@ -129,6 +140,10 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setError('');
     setPinnedIds([]);
     setShowPinned(false);
+    setSequentialConsistency(true);
+    setExtraQuerySettings('');
+    setShowQuerySettings(false);
+    setShowAdvancedSection(false);
   }, []);
 
   // Field discovery for the "Pinned columns" picker — same hook FieldSidebar/LogsExplorer use,
@@ -172,6 +187,8 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       setApplyOtel(editingView.isOtel);
       setName(editingView.name);
       setPinnedIds((editingView.pinnedColumns ?? []).map((col) => col.id));
+      setSequentialConsistency(editingView.sequentialConsistency ?? true);
+      setExtraQuerySettings(editingView.extraQuerySettings ?? '');
       goToColumnsStepFor(editingView.datasourceUid, editingView.database, editingView.logsTable, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -248,7 +265,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     try {
       const rows = await runQueryRows({
         datasourceUid: uid,
-        sql: buildColumnsQuery(db, table),
+        sql: buildColumnsQuery({ ...DEFAULT_SOURCE_CONFIG, datasourceUid: uid, database: db }, table),
         timeRange: schemaTimeRange(),
       });
       const typedRows = rows as Array<Record<string, unknown>>;
@@ -285,7 +302,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
           try {
             const pathRows = await runQueryRows({
               datasourceUid: uid,
-              sql: buildJsonPathsQuery(scanCfg, jsonCol, undefined, table),
+              sql: buildJsonPathsQuery(scanCfg, jsonCol, table),
               timeRange: schemaTimeRange(),
             });
             const paths = pathRows
@@ -419,6 +436,8 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         columns: mapping,
         name: name.trim() || `${database}.${logsTable}`,
         pinnedColumns: pinnedColumns.length > 0 ? pinnedColumns : undefined,
+        sequentialConsistency,
+        extraQuerySettings: extraQuerySettings.trim() || undefined,
       };
       if (editingView) {
         updatePersonalView(editingView.id, values);
@@ -589,53 +608,101 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
               <div className={styles.blockSpacing}>
                 <button
                   className={styles.disclosureBtn}
-                  onClick={() => setShowAdvanced((v) => !v)}
+                  onClick={() => setShowAdvancedSection((v) => !v)}
                 >
-                  {showAdvanced ? '▾' : '▸'} Advanced column mapping (severity, service, trace, attributes…)
+                  {showAdvancedSection ? '▾' : '▸'} Advanced
                 </button>
               </div>
 
-              {showAdvanced && (
-                <ColumnMappingForm
-                  value={mapping}
-                  onChange={(updated) => {
-                    setMapping(updated);
-                    setTimestampField(updated.timestamp || NO_TIME_VALUE);
-                    setBodyField(updated.body || NO_BODY_VALUE);
-                  }}
-                  columnOptions={allColumnOptions}
-                  onAiGuess={
-                    aiOn
-                      ? () => runAiGuess(COL_FIELDS.map((f) => f.key), true)
-                      : undefined
-                  }
-                  aiBusy={aiBusy}
-                />
-              )}
+              {showAdvancedSection && (
+                <div className={styles.advancedGroup}>
+                  <div className={styles.blockSpacing}>
+                    <button
+                      className={styles.disclosureBtn}
+                      onClick={() => setShowAdvanced((v) => !v)}
+                    >
+                      {showAdvanced ? '▾' : '▸'} Column mapping (severity, service, trace, attributes…)
+                    </button>
+                  </div>
 
-              <div className={styles.blockSpacing}>
-                <button
-                  className={styles.disclosureBtn}
-                  onClick={() => setShowPinned((v) => !v)}
-                >
-                  {showPinned ? '▾' : '▸'} Pinned columns ({pinnedIds.length} selected)
-                </button>
-              </div>
+                  {showAdvanced && (
+                    <ColumnMappingForm
+                      value={mapping}
+                      onChange={(updated) => {
+                        setMapping(updated);
+                        setTimestampField(updated.timestamp || NO_TIME_VALUE);
+                        setBodyField(updated.body || NO_BODY_VALUE);
+                      }}
+                      columnOptions={allColumnOptions}
+                      onAiGuess={
+                        aiOn
+                          ? () => runAiGuess(COL_FIELDS.map((f) => f.key), true)
+                          : undefined
+                      }
+                      aiBusy={aiBusy}
+                    />
+                  )}
 
-              {showPinned && (
-                <Field
-                  label="Pinned columns"
-                  description="Extra columns this view loads with the grid by default, in addition to Time/Level/Service/Message — which are always shown. Reorderable and removable in the grid afterward, just like any manually-added column."
-                >
-                  <MultiSelect
-                    width={36}
-                    value={pinnedIds}
-                    options={pinnableOptions}
-                    onChange={(opts) => setPinnedIds(opts.map((o) => o.value ?? '').filter(Boolean))}
-                    placeholder="Select fields to pin…"
-                    closeMenuOnSelect={false}
-                  />
-                </Field>
+                  <div className={styles.blockSpacing}>
+                    <button
+                      className={styles.disclosureBtn}
+                      onClick={() => setShowPinned((v) => !v)}
+                    >
+                      {showPinned ? '▾' : '▸'} Pinned columns ({pinnedIds.length} selected)
+                    </button>
+                  </div>
+
+                  {showPinned && (
+                    <Field
+                      label="Pinned columns"
+                      description="Extra columns this view loads with the grid by default, in addition to Time/Level/Service/Message — which are always shown. Reorderable and removable in the grid afterward, just like any manually-added column."
+                    >
+                      <MultiSelect
+                        width={36}
+                        value={pinnedIds}
+                        options={pinnableOptions}
+                        onChange={(opts) => setPinnedIds(opts.map((o) => o.value ?? '').filter(Boolean))}
+                        placeholder="Select fields to pin…"
+                        closeMenuOnSelect={false}
+                      />
+                    </Field>
+                  )}
+
+                  <div className={styles.blockSpacing}>
+                    <button
+                      className={styles.disclosureBtn}
+                      onClick={() => setShowQuerySettings((v) => !v)}
+                    >
+                      {showQuerySettings ? '▾' : '▸'} Query settings
+                    </button>
+                  </div>
+
+                  {showQuerySettings && (
+                    <>
+                      <Field
+                        label="Sequential consistency"
+                        description="Makes each replica catch up before answering, so a load-balanced cluster can't return stale rows. Costs one Keeper round-trip per query. Turn off for single-node."
+                      >
+                        <Switch
+                          value={sequentialConsistency}
+                          onChange={(e) => setSequentialConsistency(e.currentTarget.checked)}
+                        />
+                      </Field>
+
+                      <Field
+                        label="Additional query SETTINGS"
+                        description="Appended to every query for this view. Comma-separated. Overrides the defaults above."
+                      >
+                        <Input
+                          width={50}
+                          value={extraQuerySettings}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setExtraQuerySettings(e.target.value)}
+                          placeholder="max_replica_delay_for_distributed_queries = 30"
+                        />
+                      </Field>
+                    </>
+                  )}
+                </div>
               )}
 
               <Field label="Data view name" required>
@@ -673,6 +740,11 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
 const getStyles = (theme: GrafanaTheme2) => ({
   alert: css`
     margin-bottom: ${theme.spacing(2)};
+  `,
+  advancedGroup: css`
+    padding-left: ${theme.spacing(2)};
+    border-left: 2px solid ${theme.colors.border.weak};
+    margin-bottom: ${theme.spacing(1.5)};
   `,
   footerRowEnd: css`
     display: flex;

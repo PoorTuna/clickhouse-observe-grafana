@@ -47,18 +47,22 @@ describe('buildMapKeysQuery', () => {
     expect(sql).toContain('WHERE ts >= $__fromTime');
   });
 
-  it('defaults to a 1000-row limit and matches HyperDX\'s execution guardrails', () => {
+  it('has no row-count cap and throws (rather than silently truncating) on timeout', () => {
     const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
-    expect(sql).toContain('LIMIT 1000');
-    expect(sql).toContain('max_execution_time = 15');
-    expect(sql).toContain("timeout_overflow_mode = 'break'");
-    expect(sql).toContain('max_rows_to_read = 3000000');
-    expect(sql).toContain("read_overflow_mode = 'break'");
+    expect(sql).not.toContain('LIMIT');
+    expect(sql).not.toContain('max_rows_to_read');
+    expect(sql).toContain('max_execution_time = 60');
+    expect(sql).toContain("timeout_overflow_mode = 'throw'");
   });
 
-  it('still honors an explicit limit override', () => {
-    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', 50);
-    expect(sql).toContain('LIMIT 50');
+  it('respects a custom table', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', 'custom_table');
+    expect(sql).toContain('"default"."custom_table"');
+  });
+
+  it('includes select_sequential_consistency by default', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
+    expect(sql).toContain('select_sequential_consistency = 1');
   });
 });
 

@@ -174,6 +174,30 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                   />
                 </Field>
 
+                <Field
+                  label="Sequential consistency"
+                  description="Makes each replica catch up before answering, so a load-balanced cluster can't return stale rows. Costs one Keeper round-trip per query. Turn off for single-node."
+                >
+                  <Switch
+                    value={v.sequentialConsistency ?? true}
+                    onChange={(e) => patchView(v.id, { sequentialConsistency: e.currentTarget.checked })}
+                  />
+                </Field>
+
+                <Field
+                  label="Additional query SETTINGS"
+                  description="Appended to every query for this view. Comma-separated. Overrides the defaults above."
+                >
+                  <Input
+                    width={50}
+                    value={v.extraQuerySettings ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      patchView(v.id, { extraQuerySettings: e.target.value })
+                    }
+                    placeholder="max_replica_delay_for_distributed_queries = 30"
+                  />
+                </Field>
+
                 <ColumnMappingForm
                   value={v.columns}
                   onChange={(updated) => patchView(v.id, { columns: updated })}

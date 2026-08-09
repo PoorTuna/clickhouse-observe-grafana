@@ -72,8 +72,21 @@ describe('buildLogDetailQuery', () => {
     expect(sql).toBe('');
   });
 
-  it('carries an execution guardrail (SETTINGS max_execution_time)', () => {
+  it('carries an execution guardrail (SETTINGS max_execution_time) that throws, not silently truncates', () => {
     const sql = buildLogDetailQuery(otelConfig, { [CORE_ALIAS.timestamp]: 1000 });
     expect(sql).toContain('SETTINGS max_execution_time');
+    expect(sql).toContain("timeout_overflow_mode = 'throw'");
+    expect(sql).not.toContain('max_rows_to_read');
+    expect(sql).not.toContain("'break'");
+  });
+
+  it('includes select_sequential_consistency by default, so this point lookup and the list query it follows agree', () => {
+    const sql = buildLogDetailQuery(otelConfig, { [CORE_ALIAS.timestamp]: 1000 });
+    expect(sql).toContain('select_sequential_consistency = 1');
+  });
+
+  it('omits select_sequential_consistency when the view has it explicitly disabled', () => {
+    const sql = buildLogDetailQuery({ ...otelConfig, sequentialConsistency: false }, { [CORE_ALIAS.timestamp]: 1000 });
+    expect(sql).not.toContain('select_sequential_consistency');
   });
 });

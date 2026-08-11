@@ -21,6 +21,7 @@ import { Icon, IconButton, useStyles2 } from '@grafana/ui';
 import { useFields } from './FieldsContext';
 import { getSuggestions, resolveValueContext, Suggestion } from '../sql/kql/suggest';
 import { FieldValue } from '../sql/kql/_values';
+import { parseKql, KqlSyntaxError } from '../sql/kql';
 
 interface SearchBarProps {
   value: string;
@@ -53,6 +54,9 @@ export function SearchBar({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const [open, setOpen] = useState(false);
+  // Kibana-style "reject the query, don't guess" — set only when commit() fails to parse the
+  // current input as KQL. The search is not run and results on screen stay as they are.
+  const [parseError, setParseError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,6 +128,7 @@ export function SearchBar({
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setInputValue(v);
+    setParseError(null); // clear a stale error as soon as the user edits the query again
     const cursor = e.target.selectionStart ?? v.length;
     computeSuggestions(v, cursor);
   };
@@ -149,7 +154,25 @@ export function SearchBar({
     [inputValue, computeSuggestions]
   );
 
+  // Client-side parse-before-send, same placement Kibana uses (KQLSyntaxError is thrown before
+  // the query ever reaches Elasticsearch). An unparseable query is refused here rather than
+  // silently run as a plain-text search — the table on screen is left exactly as it was.
+  // buildSearchClause's own try/catch (queryBuilder.ts) still exists as a safety net for callers
+  // that don't go through this gate — restored saved searches, dashboard export — so it stays
+  // reachable there, just not from typing.
   const commit = useCallback(() => {
+    const trimmed = inputValue.trim();
+    if (trimmed) {
+      try {
+        parseKql(trimmed);
+      } catch (e) {
+        setSuggestions([]);
+        setOpen(false);
+        setParseError(e instanceof KqlSyntaxError ? e.message : String(e));
+        return;
+      }
+    }
+    setParseError(null);
     setSuggestions([]);
     setOpen(false);
     onChange(inputValue);
@@ -191,6 +214,7 @@ export function SearchBar({
 
   const onClear = () => {
     setInputValue('');
+    setParseError(null);
     setSuggestions([]);
     setOpen(false);
     onChange('');
@@ -261,6 +285,15 @@ export function SearchBar({
             ))}
           </ul>
         )}
+
+        {/* Parse-error banner — replaces the dropdown (commit() clears suggestions/open on
+            failure) rather than stacking under it. Kibana shows an "Expected X but Y found" +
+            caret diagram in the same spot; this mirrors that instead of silently guessing. */}
+        {!open && parseError && (
+          <div className={styles.errorBox} role="alert">
+            <pre className={styles.errorText}>{parseError}</pre>
+          </div>
+        )}
       </div>
 
       {/* Icon-only — condensed to fit the merged single-line toolbar (see LogsExplorer.tsx's
@@ -322,6 +355,28 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     &:hover { color: ${theme.colors.text.primary}; }
+  `,
+
+  // ── Parse-error banner ──────────────────────────────────────────────────────
+  errorBox: css`
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: ${theme.colors.error.transparent};
+    border: 1px solid ${theme.colors.error.border};
+    border-radius: ${theme.shape.radius.default};
+    box-shadow: ${theme.shadows.z2};
+    padding: ${theme.spacing(1)};
+  `,
+  errorText: css`
+    margin: 0;
+    color: ${theme.colors.error.text};
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    white-space: pre-wrap;
+    word-break: break-word;
   `,
 
   // ── Dropdown ──────────────────────────────────────────────────────────────

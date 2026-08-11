@@ -3,7 +3,7 @@
  * The CH datasource backend handles $__fromTime / $__toTime macro expansion.
  */
 
-import { DataQuery, DataQueryRequest, DataFrame, DataQueryResponse, TimeRange } from '@grafana/data';
+import { DataQuery, DataQueryError, DataQueryRequest, DataFrame, DataQueryResponse, TimeRange } from '@grafana/data';
 import { getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom, from, Observable } from 'rxjs';
 
@@ -14,6 +14,34 @@ interface ChTarget extends DataQuery {
   rawSql: string;
   editorType: 'sql';
   format: number;
+}
+
+/**
+ * Extracts every piece of information a DataQueryError actually carries, instead of picking one
+ * field and discarding the rest. `.message` is usually the whole ClickHouse exception text, but
+ * `.data.message`/`.data.error` (dev-mode detail) and `.status`/`.statusText` (e.g. 504 from a
+ * proxy timing out before ClickHouse itself responds) can be the only signal present when
+ * `.message` is empty or generic — never collapse those into a fixed "query failed" string, or a
+ * real timeout/permissions/network distinction gets thrown away right when it matters most.
+ */
+function formatDataQueryError(err: DataQueryError): string {
+  const parts = [
+    err.message,
+    err.data?.message,
+    err.data?.error,
+    err.status != null ? `HTTP ${err.status}${err.statusText ? ` ${err.statusText}` : ''}` : undefined,
+  ].filter((p): p is string => Boolean(p && p.trim()));
+  if (parts.length > 0) {
+    // dedupe: .message and .data.message are frequently the same string verbatim.
+    return Array.from(new Set(parts)).join(' — ');
+  }
+  // No known field had anything — surface the raw object rather than a generic placeholder, so
+  // whatever shape the backend actually sent is still visible instead of silently discarded.
+  try {
+    return `ClickHouse query failed: ${JSON.stringify(err)}`;
+  } catch {
+    return 'ClickHouse query failed with an error that could not be serialized.';
+  }
 }
 
 export interface RunQueryOptions {
@@ -53,6 +81,19 @@ export async function runQuery(options: RunQueryOptions): Promise<DataFrame[]> {
   const response = await lastValueFrom(
     (result instanceof Observable ? result : from(result)) as Observable<DataQueryResponse>
   );
+  // The datasource resolves (never rejects) on a backend-reported query failure — Grafana's
+  // DataQueryResponse carries `.error`/`.errors` *alongside* `.data` rather than throwing (see
+  // @grafana/runtime's toDataQueryResponse, and CHDatasource.query()'s own catchError, which both
+  // only ever emit a resolved value). Without this check every ClickHouse error (bad SQL, a
+  // `timeout_overflow_mode = 'throw'` guardrail firing, permissions) would silently surface here as
+  // an empty/partial `data` array instead of a catchable error.
+  if (response.errors?.length || response.error) {
+    // Prefer .errors[0] (the newer, non-deprecated field) but fall back to .error — either can be
+    // populated alone depending on which layer produced it (see runQuery.ts's C0 doc comment
+    // above). Every field either one carries is surfaced via formatDataQueryError, never just one.
+    const err = response.errors?.[0] ?? response.error!;
+    throw new Error(formatDataQueryError(err));
+  }
   return response.data as DataFrame[];
 }
 

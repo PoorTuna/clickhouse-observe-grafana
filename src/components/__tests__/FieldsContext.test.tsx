@@ -75,3 +75,55 @@ describe('useFieldDiscovery — discovery failure surfacing', () => {
     expect(result.current.error).toBeNull();
   });
 });
+
+// ── C2: discovered Map keys / JSON paths must be safely escaped into sqlExpr ──────────────────
+// Regression guard for FieldsContext building FieldModel.sqlExpr directly from scanned *data*
+// (Map keys, JSON paths) rather than from anything this codebase controls the shape of — a key
+// containing `'` used to produce broken/injectable SQL, and a JSON path segment that isn't a bare
+// identifier (e.g. `user-id`) used to silently change meaning (`Payload.user-id` parses as
+// subtraction) instead of erroring or resolving correctly.
+describe('useFieldDiscovery — discovered field sqlExpr escaping', () => {
+  beforeEach(() => {
+    mockRunQueryRows.mockReset();
+  });
+
+  it('a Map key containing a single quote is escaped via quoteString, not spliced in raw', async () => {
+    mockRunQueryRows.mockImplementation(async ({ sql }) => {
+      if (sql.includes('system.columns')) {
+        return [{ name: 'LogAttributes', type: 'Map(LowCardinality(String), String)' }];
+      }
+      if (sql.includes('mapKeys')) {
+        return [{ k: "it's" }];
+      }
+      return [];
+    });
+
+    const { result } = renderHook(() =>
+      useFieldDiscovery({ ...config, logsTable: 'escape_map_keys' }, timeRange)
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const field = result.current.fields.find((f) => f.source === 'map');
+    expect(field?.sqlExpr).toBe("LogAttributes['it\\'s']");
+  });
+
+  it('a JSON path segment that is not a bare identifier is double-quoted, not left bare', async () => {
+    mockRunQueryRows.mockImplementation(async ({ sql }) => {
+      if (sql.includes('system.columns')) {
+        return [{ name: 'Payload', type: 'JSON' }];
+      }
+      if (sql.includes('JSONAllPathsWithTypes')) {
+        return [{ path: 'user-id', type: 'String' }];
+      }
+      return [];
+    });
+
+    const { result } = renderHook(() =>
+      useFieldDiscovery({ ...config, logsTable: 'escape_json_paths' }, timeRange)
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const field = result.current.fields.find((f) => f.source === 'json');
+    expect(field?.sqlExpr).toBe('Payload."user-id"');
+  });
+});

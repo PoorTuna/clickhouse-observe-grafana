@@ -43,8 +43,57 @@ export function logRowKey(row: Record<string, unknown>): string {
   ]);
 }
 
+const BARE_IDENT = '[A-Za-z_][A-Za-z0-9_]*';
+/** A double-quoted SQL identifier using this file's own quoteIdentifier()/quoteDottedPath()
+ *  escaping convention (embedded `"` doubled) — matches a single dotted-path segment quoteDottedPath
+ *  produces for a segment that isn't bare-safe (e.g. a JSON path like `user-id`). */
+const QUOTED_IDENT = '"(?:[^"]|"")*"';
+const IDENT = `(?:${BARE_IDENT}|${QUOTED_IDENT})`;
+/** A single-quoted SQL string literal using this file's own quoteString() escaping convention
+ *  (backslash escaped first, then embedded single quotes) — matches what quoteString() actually
+ *  produces, so this only recognizes a literal that really is safely escaped, not just "has quotes
+ *  around it somewhere". */
+const SAFE_STRING_LITERAL = `'(?:[^'\\\\]|\\\\.)*'`;
+
+const MAP_ACCESSOR_RE = new RegExp(`^${IDENT}\\[${SAFE_STRING_LITERAL}\\]$`);
+const DOTTED_PATH_RE = new RegExp(`^${IDENT}(\\.${IDENT})+$`);
+
+/**
+ * Recognizes a `name` that is a well-formed Map accessor (`Col['key']`, with a properly escaped
+ * key) — nothing else. Deliberately narrower than `looksLikeTrustedExpr()` below: this is what
+ * `resolveField()` (fields.ts) uses for its own "already an expression, pass through" branch, and
+ * that branch must NOT also recognize a bare dotted chain like `user.id` — without field discovery
+ * confirming such a name is a real JSON/Tuple path, treating it as one is exactly the "blind
+ * guessing" this codebase's field resolution deliberately avoids (see resolveField's own doc
+ * comment). A discovered JSON/Tuple path still reaches SQL emission correctly: it's returned
+ * *before* this branch, via the `index.bySqlExpr`/`index.byName` lookups at the top of
+ * `resolveField()`, so the narrower check here never needs to cover that case.
+ */
+export function looksLikeMapAccessor(name: string): boolean {
+  return MAP_ACCESSOR_RE.test(name);
+}
+
+/**
+ * Recognizes a `name` that is already a well-formed, self-contained SQL expression this codebase
+ * itself constructed — a Map accessor (see `looksLikeMapAccessor`) or a dotted identifier chain
+ * (`Payload.user.id` / `Payload."user-id"`, every segment either a bare identifier or a properly
+ * quoted one, matching what `quoteDottedPath()` produces). Anything else — including a string that
+ * merely *contains* `(`/`[`/`.` — is untrusted and must be quoted, never passed through.
+ *
+ * Used by `quoteIdentifier()`, which sees both trusted `resolved.sqlExpr` values (including
+ * genuine discovered JSON/Tuple dotted paths — this is where those need to be recognized) *and*
+ * raw untrusted fallback text when field resolution failed. The dotted-path branch is safe to
+ * apply even to untrusted text: its character class is limited to identifier characters, dots, and
+ * balanced quoting, which cannot express `OR 1=1`-style injection — unlike the old loose
+ * `includes('(')` check this replaces (see C1 in the audit plan), which trusted *any* string
+ * containing a paren, unquoted, straight into the WHERE clause.
+ */
+export function looksLikeTrustedExpr(name: string): boolean {
+  return MAP_ACCESSOR_RE.test(name) || DOTTED_PATH_RE.test(name);
+}
+
 export function quoteIdentifier(name: string): string {
-  if (name.includes('[') || name.includes('(') || name.includes('.')) {
+  if (looksLikeTrustedExpr(name)) {
     return name;
   }
   return `"${name.replace(/"/g, '""')}"`;
@@ -52,6 +101,48 @@ export function quoteIdentifier(name: string): string {
 
 export function quoteString(value: string): string {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Builds a safe dotted-path SQL expression (`root.seg1.seg2…`) from field-discovery *data* — a
+ * JSON path or Tuple element name reported back by ClickHouse, not something this codebase
+ * controls the shape of. A discovered segment that isn't already a bare-safe identifier (e.g.
+ * `user-id`, `k8s.io/name`, a segment starting with a digit) is double-quoted, same escaping
+ * quoteIdentifier() already uses for its own safe branch — so callers get one consistent
+ * identifier-quoting convention instead of two. `root` gets the same treatment: it's normally a
+ * real column name from system.columns, lower risk than a data-driven path segment, but not zero
+ * risk, so it isn't exempted.
+ *
+ * Deliberately does not attempt to disambiguate a `.` that is legitimately *part of* one segment's
+ * name from the `.` ClickHouse itself uses as the path separator in the dotted notation it reports
+ * — that's an inherent ambiguity of dot-notation paths, not something a quoting fix can resolve.
+ */
+export function quoteDottedPath(root: string, path: string): string {
+  const quoteSegment = (seg: string) =>
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(seg) ? seg : `"${seg.replace(/"/g, '""')}"`;
+  return [root, ...path.split('.')].map(quoteSegment).join('.');
+}
+
+/**
+ * Escape ILIKE metacharacters in a literal value so user input matches exactly.
+ * Must be called BEFORE any wildcard-sentinel substitution — a real ILIKE wildcard is added only
+ * after this has already neutralized any %/_ that came from the user's literal text.
+ *
+ * The resulting string is then passed to quoteString(), which doubles backslashes, so the SQL
+ * value `\%` (escaped percent) is reached via:
+ *   escapeLike('%') → '\%' (JS: backslash + percent)
+ *   quoteString('\%') → SQL '\\%'    ← ClickHouse reads \\ as \, so pattern is \%
+ *   ClickHouse ILIKE \% → literal %
+ *
+ * Shared by the KQL path (kql/toSql.ts) and the legacy free-text fallback below — both build
+ * ILIKE patterns from user-typed text and need the same escaping, or %/_ act as wildcards in one
+ * path but not the other.
+ */
+export function escapeLike(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')  // escape backslash first (must be first!)
+    .replace(/%/g, '\\%')    // literal % → not an ILIKE wildcard
+    .replace(/_/g, '\\_');   // literal _ → not an ILIKE single-char wildcard
 }
 
 export function tableRef(config: SourceConfig, table: string): string {
@@ -107,12 +198,15 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig, index?: Fie
   const resolved = resolveField(filter.field, config, index);
   const sqlExprRaw = resolved ? resolved.sqlExpr : filter.field;
 
-  // exists / not_exists — value is irrelevant
+  // exists / not_exists — value is irrelevant. quoteIdentifier() here is load-bearing, not
+  // cosmetic: unlike every other branch below, this one used to interpolate sqlExprRaw directly
+  // with no quoting at all, so a hostile filter.field reached raw SQL regardless of the
+  // looksLikeTrustedExpr() fix elsewhere in this file (see C1 in the audit plan).
   if (filter.op === 'exists') {
-    return `notEmpty(toString(${sqlExprRaw}))`;
+    return `notEmpty(toString(${quoteIdentifier(sqlExprRaw)}))`;
   }
   if (filter.op === 'not_exists') {
-    return `empty(toString(${sqlExprRaw}))`;
+    return `empty(toString(${quoteIdentifier(sqlExprRaw)}))`;
   }
 
   // one_of / not_one_of — use IN (...) / NOT IN (...)
@@ -159,6 +253,16 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig, index?: Fie
   return `${col} ${op} ${quoteString(value)}`;
 }
 
+/**
+ * Build the WHERE fragment for a search string, parsing it as KQL first.
+ *
+ * The live search bar (SearchBar.commit()) rejects an unparseable query before it ever reaches
+ * here — same as Kibana, which never sends a query it couldn't parse client-side. The try/catch
+ * below is a safety net for callers that don't go through that gate and can't afford to throw
+ * mid-render: a restored saved search, a URL-shared query, or dashboard-panel export, any of which
+ * may hold a query written before a syntax change like this one. Those fall back to a legacy
+ * free-text body search rather than breaking the page.
+ */
 export function buildSearchClause(search: string, config: SourceConfig, index?: FieldIndex): string {
   const term = search.trim();
   if (!term) {
@@ -174,17 +278,23 @@ export function buildSearchClause(search: string, config: SourceConfig, index?: 
     // queries and partial input never break a live result set.
   }
 
-  // Legacy fallback: tokenize and ILIKE/hasToken on body.
+  // Legacy fallback: tokenize and ILIKE on body.
   const c = config.columns;
-  // No body column mapped → can't do free-text search; skip rather than emit hasToken(undefined,…).
+  // No body column mapped → can't do free-text search; skip rather than emit ILIKE(undefined,…).
   if (!c.body) {
     return '';
   }
   const terms = term.match(/"[^"]*"|'[^']*'|\S+/g) ?? [term];
   const clauses = terms.map((t) => {
     const clean = t.replace(/^["']|["']$/g, '');
-    const quoted = quoteString(clean);
-    return `(hasToken(${c.body}, ${quoted}) OR ${c.body} ILIKE ${quoteString('%' + clean + '%')})`;
+    // escapeLike so a literal % or _ in the raw text can't act as an ILIKE wildcard here — the
+    // KQL path (kql/toSql.ts's bareTermSql) already escapes it; this legacy fallback used to not.
+    // No hasToken() here — it throws BAD_ARGUMENTS on any needle containing a separator character
+    // (`-`, `.`, `:`, `/`, space — all common in log search terms like "req-59" or "1.2.3.4"), and
+    // is redundant even when it doesn't throw: everything a case-sensitive whole-token hasToken()
+    // match can find, the case-insensitive substring ILIKE below already finds too. See C3 in the
+    // audit plan.
+    return `${c.body} ILIKE ${quoteString('%' + escapeLike(clean) + '%')}`;
   });
   return clauses.length === 1 ? clauses[0] : clauses.map((cl) => `(${cl})`).join(' AND ');
 }

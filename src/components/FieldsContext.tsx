@@ -2,8 +2,10 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { TimeRange } from '@grafana/data';
 import { FieldModel, inferFieldType, parseTupleElements } from '../sql/fieldModel';
 import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
+import { quoteDottedPath, quoteString } from '../sql/queryBuilder';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
+import { errMsg } from '../errMsg';
 
 // Module-level caches survive re-renders; cleared on explicit refresh().
 const columnCache = new Map<string, FieldModel[]>();
@@ -157,7 +159,7 @@ export function useFieldDiscovery(
         columnCache.set(cKey, columns);
       } catch (e) {
         if (runRef.current === runId) {
-          setError(String((e as Error)?.message ?? e));
+          setError(errMsg(e));
           setLoading(false);
         }
         return;
@@ -190,7 +192,7 @@ export function useFieldDiscovery(
         mapKeyCache.set(mKey, keys);
         return { mapCol, keys, error: undefined as string | undefined };
       } catch (e) {
-        return { mapCol, keys: [] as string[], error: String((e as Error)?.message ?? e) };
+        return { mapCol, keys: [] as string[], error: errMsg(e) };
       }
     });
 
@@ -219,7 +221,7 @@ export function useFieldDiscovery(
         return {
           jsonCol,
           paths: [] as Array<{ path: string; chType: string }>,
-          error: String((e as Error)?.message ?? e),
+          error: errMsg(e),
         };
       }
     });
@@ -238,7 +240,10 @@ export function useFieldDiscovery(
           id: `map:${mapCol}:${k}`,
           name: k,
           displayName: `${mapCol}.${k}`,
-          sqlExpr: `${mapCol}['${k}']`,
+          // quoteString() properly escapes `k` (a real Map key read out of discovered *data*, not
+          // something this codebase controls the shape of) — a key containing `'` used to produce
+          // broken/injectable SQL (see C2 in the audit plan).
+          sqlExpr: `${mapCol}[${quoteString(k)}]`,
           type: 'string',
           source: 'map',
           mapColumn: mapCol,
@@ -261,7 +266,11 @@ export function useFieldDiscovery(
           id: `json:${jsonCol}:${path}`,
           name: path,
           displayName: `${jsonCol}.${path}`,
-          sqlExpr: `${jsonCol}.${path}`,
+          // quoteDottedPath() quotes any segment that isn't a bare-safe identifier — a real JSON
+          // path like `user-id` or `k8s.io/name` isn't valid bare-identifier syntax and used to
+          // produce a parse error or a silently different expression (`Payload.user-id` parses as
+          // subtraction). See C2 in the audit plan.
+          sqlExpr: quoteDottedPath(jsonCol, path),
           type: inferFieldType(chType),
           source: 'json',
           jsonColumn: jsonCol,
@@ -284,7 +293,9 @@ export function useFieldDiscovery(
           id: `tuple:${col.name}:${el.name}`,
           name: el.name,
           displayName: `${col.name}.${el.name}`,
-          sqlExpr: `${col.name}.${el.name}`,
+          // Same reasoning as the JSON-path case above — a nested Tuple element name can also be
+          // a non-bare-identifier string.
+          sqlExpr: quoteDottedPath(col.name, el.name),
           type: inferFieldType(el.type),
           source: 'tuple',
           tupleColumn: col.name,

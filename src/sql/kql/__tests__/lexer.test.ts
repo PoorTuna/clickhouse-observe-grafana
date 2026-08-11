@@ -1,4 +1,4 @@
-import { lex, WILDCARD_STAR, WILDCARD_QMARK, WILDCARD_RE } from '../_lexer';
+import { lex, WILDCARD_STAR, WILDCARD_RE } from '../_lexer';
 
 // Convenience: get the token types from a string
 function types(input: string) {
@@ -146,11 +146,11 @@ describe('KQL lexer', () => {
     expect(WILDCARD_RE.test(toks[0].value)).toBe(true);
   });
 
-  it('unescaped ? → IDENT containing WILDCARD_QMARK sentinel', () => {
+  it('? is an ordinary character, not a wildcard — KQL supports only *', () => {
     const toks = lex('web?');
     expect(toks[0].type).toBe('IDENT');
-    expect(toks[0].value).toBe('web' + WILDCARD_QMARK);
-    expect(WILDCARD_RE.test(toks[0].value)).toBe(true);
+    expect(toks[0].value).toBe('web?');
+    expect(WILDCARD_RE.test(toks[0].value)).toBe(false);
   });
 
   it('bare * → IDENT with only WILDCARD_STAR (used for field:* exists)', () => {
@@ -174,9 +174,9 @@ describe('KQL lexer', () => {
     expect(toks[0].value).toBe(WILDCARD_STAR + 'err' + WILDCARD_STAR);
   });
 
-  it('mixed wildcards fo*ar? → f o sentinel a r sentinel', () => {
+  it('* sentinel with a literal trailing ? → fo, sentinel, ar?', () => {
     const toks = lex('fo*ar?');
-    expect(toks[0].value).toBe('fo' + WILDCARD_STAR + 'ar' + WILDCARD_QMARK);
+    expect(toks[0].value).toBe('fo' + WILDCARD_STAR + 'ar?');
   });
 
   // ── Escaped wildcards and keywords ────────────────────────────────────────
@@ -185,13 +185,6 @@ describe('KQL lexer', () => {
     const toks = lex('\\*');
     expect(toks[0].type).toBe('IDENT');
     expect(toks[0].value).toBe('*');
-    expect(WILDCARD_RE.test(toks[0].value)).toBe(false);
-  });
-
-  it('escaped \\? → literal question mark, NO sentinel', () => {
-    const toks = lex('\\?');
-    expect(toks[0].type).toBe('IDENT');
-    expect(toks[0].value).toBe('?');
     expect(WILDCARD_RE.test(toks[0].value)).toBe(false);
   });
 
@@ -223,23 +216,34 @@ describe('KQL lexer', () => {
     expect(WILDCARD_RE.test(toks[0].value)).toBe(true);
   });
 
-  // ── WILDCARD_STAR / WILDCARD_QMARK constants ──────────────────────────────
+  // ── WILDCARD_STAR constant ─────────────────────────────────────────────────
 
   it('WILDCARD_STAR is a single char', () => {
     expect(WILDCARD_STAR).toHaveLength(1);
     expect(WILDCARD_STAR.charCodeAt(0)).toBe(0xE000);
   });
 
-  it('WILDCARD_QMARK is a single char', () => {
-    expect(WILDCARD_QMARK).toHaveLength(1);
-    expect(WILDCARD_QMARK.charCodeAt(0)).toBe(0xE001);
-  });
-
-  it('WILDCARD_RE matches both sentinels', () => {
+  it('WILDCARD_RE matches the sentinel only', () => {
     expect(WILDCARD_RE.test(WILDCARD_STAR)).toBe(true);
-    expect(WILDCARD_RE.test(WILDCARD_QMARK)).toBe(true);
     expect(WILDCARD_RE.test('*')).toBe(false);
     expect(WILDCARD_RE.test('?')).toBe(false);
     expect(WILDCARD_RE.test('foo')).toBe(false);
+  });
+
+  // ── \uXXXX unicode escapes ─────────────────────────────────────────────────
+
+  it('\\u0041 → literal "A" in an unquoted value', () => {
+    const toks = lex('\\u0041');
+    expect(toks[0].value).toBe('A');
+  });
+
+  it('\\u0041 → literal "A" inside a quoted string', () => {
+    const toks = lex('"\\u0041BC"');
+    expect(toks[0].value).toBe('ABC');
+  });
+
+  it('malformed \\u (not 4 hex digits) falls back to literal u + rest', () => {
+    const toks = lex('\\uZZZZ');
+    expect(toks[0].value).toBe('uZZZZ');
   });
 });

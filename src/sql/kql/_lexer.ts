@@ -9,9 +9,9 @@
  * "and" becomes AND, but "\and" stays IDENT.
  *
  * Wildcard handling:
- *   Unescaped * and ? are replaced with private-use-area sentinel chars
- *   (WILDCARD_STAR / WILDCARD_QMARK) in the IDENT value so that downstream
- *   code can distinguish them from escaped \* / \? (which become literal * / ?).
+ *   Unescaped * is replaced with a private-use-area sentinel char (WILDCARD_STAR) in the
+ *   IDENT value so that downstream code can distinguish it from an escaped \* (which becomes
+ *   a literal *). `?` is an ordinary character — real KQL supports only `*` as a wildcard.
  */
 
 export type TokType =
@@ -48,15 +48,8 @@ export interface Token {
  */
 export const WILDCARD_STAR  = String.fromCharCode(0xE000);
 
-/**
- * Private-use-area sentinel for an unescaped `?` wildcard in an IDENT token.
- * Downstream: wildcardLike() converts this to the ILIKE `_` metacharacter.
- * Escaped `\?` becomes a literal `?` with no sentinel.
- */
-export const WILDCARD_QMARK = String.fromCharCode(0xE001);
-
-/** Matches any wildcard sentinel — used by the parser to set isWildcard. */
-export const WILDCARD_RE = new RegExp('[' + WILDCARD_STAR + WILDCARD_QMARK + ']');
+/** Matches the wildcard sentinel — used by the parser to set isWildcard. */
+export const WILDCARD_RE = new RegExp('[' + WILDCARD_STAR + ']');
 
 const DELIMITERS = /[\s(){}<>:"]/;
 
@@ -79,12 +72,13 @@ export function lex(input: string): Token[] {
       let value = '';
       while (i < input.length && input[i] !== '"') {
         if (input[i] === '\\' && i + 1 < input.length) {
-          i++;
-          value += unescapeChar(input[i]);
+          const esc = readEscape(input, i + 1);
+          value += esc.text;
+          i = esc.nextIndex;
         } else {
           value += input[i];
+          i++;
         }
-        i++;
       }
       if (i < input.length) {
         i++; // consume closing "
@@ -126,21 +120,20 @@ export function lex(input: string): Token[] {
     while (i < input.length && !DELIMITERS.test(input[i])) {
       if (input[i] === '\\' && i + 1 < input.length) {
         // Escaped character: consume backslash and treat the next char literally.
-        // \* and \? become literal * / ? (no sentinel = not a wildcard).
+        // \* becomes literal * (no sentinel = not a wildcard).
         // \and becomes literal "and" (hadEscape suppresses keyword classification).
-        i++;
         hadEscape = true;
-        value += unescapeChar(input[i]);
+        const esc = readEscape(input, i + 1);
+        value += esc.text;
+        i = esc.nextIndex;
       } else if (input[i] === '*') {
         // Unescaped * → wildcard sentinel so downstream can distinguish from literal *.
         value += WILDCARD_STAR;
-      } else if (input[i] === '?') {
-        // Unescaped ? → single-char wildcard sentinel (additive ClickHouse extension).
-        value += WILDCARD_QMARK;
+        i++;
       } else {
         value += input[i];
+        i++;
       }
-      i++;
     }
 
     if (value === '') {
@@ -165,12 +158,23 @@ export function lex(input: string): Token[] {
   return tokens;
 }
 
-/** Map escape sequences to their literal characters. */
-function unescapeChar(ch: string): string {
+/**
+ * Read one escape sequence starting at `at` (the character right after the backslash).
+ * Handles \t \r \n, \uXXXX (4 hex digits, per the KQL grammar's EscapedUnicodeSequence), and
+ * falls back to treating the character literally (\* \? \\ \: etc — any single char).
+ * A malformed \u (not followed by 4 hex digits) falls back to literal 'u' + whatever follows,
+ * consuming just the 'u' — same as any other single-char escape.
+ */
+function readEscape(input: string, at: number): { text: string; nextIndex: number } {
+  const ch = input[at];
+  if (ch === 'u' && /^[0-9a-fA-F]{4}$/.test(input.slice(at + 1, at + 5))) {
+    const code = parseInt(input.slice(at + 1, at + 5), 16);
+    return { text: String.fromCharCode(code), nextIndex: at + 5 };
+  }
   switch (ch) {
-    case 't':  return '\t';
-    case 'r':  return '\r';
-    case 'n':  return '\n';
-    default:   return ch;
+    case 't':  return { text: '\t', nextIndex: at + 1 };
+    case 'r':  return { text: '\r', nextIndex: at + 1 };
+    case 'n':  return { text: '\n', nextIndex: at + 1 };
+    default:   return { text: ch,   nextIndex: at + 1 };
   }
 }

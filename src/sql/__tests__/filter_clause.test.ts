@@ -43,12 +43,21 @@ function filterClause(pill: Omit<FilterPill, 'id'>): string {
 describe('buildFilterClause — exists / not_exists', () => {
   it('exists → notEmpty(toString(...))', () => {
     const clause = filterClause({ field: 'ServiceName', op: 'exists', value: '' });
-    expect(clause).toBe('notEmpty(toString(ServiceName))');
+    // Quoted via quoteIdentifier() now — see C1 in the audit plan: this branch used to interpolate
+    // the field expression completely unquoted, a direct SQL-injection route independent of
+    // quoteIdentifier's own fix. Quoting a legitimate column name is semantically identical
+    // ("ServiceName" and ServiceName refer to the same column) and closes that gap.
+    expect(clause).toBe('notEmpty(toString("ServiceName"))');
   });
 
   it('not_exists → empty(toString(...))', () => {
     const clause = filterClause({ field: 'ServiceName', op: 'not_exists', value: '' });
-    expect(clause).toBe('empty(toString(ServiceName))');
+    expect(clause).toBe('empty(toString("ServiceName"))');
+  });
+
+  it('exists on a hostile field name is quoted as one identifier, not spliced in raw', () => {
+    const clause = filterClause({ field: 'x) OR 1=1 -- (', op: 'exists', value: '' });
+    expect(clause).toBe('notEmpty(toString("x) OR 1=1 -- ("))');
   });
 
   it('exists on Map accessor field', () => {
@@ -138,6 +147,32 @@ describe('buildFilterClause — existing ops unchanged', () => {
   it('not_contains → NOT ILIKE with wildcards', () => {
     const clause = filterClause({ field: 'Body', op: 'not_contains', value: 'debug' });
     expect(clause).toContain("NOT ILIKE '%debug%'");
+  });
+});
+
+// ── C1: hostile field names must never be interpolated unquoted ───────────────
+
+describe('buildFilterClause — hostile field name (SQL injection regression guard)', () => {
+  const hostile = 'x) OR 1=1 -- (';
+
+  it('= operator quotes the whole hostile field as one identifier', () => {
+    const clause = filterClause({ field: hostile, op: '=', value: 'api' });
+    expect(clause).toBe(`"${hostile}" = 'api'`);
+  });
+
+  it('contains operator quotes the whole hostile field as one identifier', () => {
+    const clause = filterClause({ field: hostile, op: 'contains', value: 'api' });
+    expect(clause).toBe(`"${hostile}" ILIKE '%api%'`);
+  });
+
+  it('one_of operator quotes the whole hostile field as one identifier', () => {
+    const clause = filterClause({ field: hostile, op: 'one_of', value: '', values: ['a', 'b'] });
+    expect(clause).toBe(`"${hostile}" IN ('a', 'b')`);
+  });
+
+  it('a legitimate discovered Map accessor still passes through unquoted', () => {
+    const clause = filterClause({ field: "LogAttributes['http.method']", op: '=', value: 'GET' });
+    expect(clause).toBe("LogAttributes['http.method'] = 'GET'");
   });
 });
 

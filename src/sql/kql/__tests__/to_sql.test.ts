@@ -1,5 +1,6 @@
 import { parseKql } from '../_parser';
 import { kqlToSql } from '../toSql';
+import { KqlSyntaxError } from '../_error';
 import { SourceConfig, OTEL_COLUMN_MAPPING } from '../../../types';
 import { buildFieldIndex } from '../../fields';
 import { FieldModel } from '../../fieldModel';
@@ -35,9 +36,9 @@ describe('kqlToSql', () => {
 
   // ── Body / bare-term search ───────────────────────────────────────────────
 
-  it('bare term → hasToken OR ILIKE contains on body', () => {
+  it('bare term → Body ILIKE contains (no hasToken — throws on separator-containing needles like "req-59", see C3)', () => {
     const result = sql('hello');
-    expect(result).toContain('hasToken(Body');
+    expect(result).not.toContain('hasToken');
     expect(result).toContain("ILIKE '%hello%'");
   });
 
@@ -79,9 +80,10 @@ describe('kqlToSql', () => {
     expect(result).toContain("ILIKE '%'");
   });
 
-  it('bare ? → Body ILIKE _ (any single char)', () => {
+  it('bare ? → literal question mark in body search, not a wildcard (no _ substitution)', () => {
     const result = sql('?');
-    expect(result).toContain("ILIKE '_'");
+    expect(result).not.toContain('hasToken');
+    expect(result).toContain("ILIKE '%?%'");
   });
 
   // ── Text-kind wildcard (was shadowed by kind=text branch) ─────────────────
@@ -136,16 +138,17 @@ describe('kqlToSql', () => {
     expect(result).toContain("ILIKE '%ment'");
   });
 
-  // ── ? single-char wildcard extension (kept intentionally) ─────────────────
+  // ── ? is a literal character, not a wildcard — real KQL supports only * ──
 
-  it('host:web?.local → ILIKE with _ substitution', () => {
+  it('host:web?.local → literal ?, not a wildcard (KQL supports only *)', () => {
     const result = sql('host:web?.local');
-    expect(result).toContain("ILIKE 'web_.local'");
+    expect(result).toContain("= 'web?.local'");
+    expect(result).not.toContain('ILIKE');
   });
 
-  it('bare web? → ILIKE with _ substitution', () => {
+  it('bare web? → literal ? in body search, not a wildcard', () => {
     const result = sql('web?');
-    expect(result).toContain("ILIKE 'web_'");
+    expect(result).toContain("ILIKE '%web?%'");
   });
 
   // ── Literal % and _ escaping (the "misleading %" reported bug) ───────────
@@ -193,8 +196,8 @@ describe('kqlToSql', () => {
 
   it('bare pay\\* → literal asterisk in body search', () => {
     const result = sql('pay\\*');
-    // No wildcard → hasToken / ILIKE contains, with literal *
-    expect(result).toContain("'pay*'");
+    // No wildcard → ILIKE contains, with literal *
+    expect(result).toContain("ILIKE '%pay*%'");
     expect(result).not.toContain("ILIKE 'pay%'");
   });
 
@@ -269,9 +272,10 @@ describe('kqlToSql', () => {
     expect(result).toContain("ILIKE 'pay%'");
   });
 
-  it('host:web?.local → ILIKE with _ substitution', () => {
+  it('host:web?.local → literal ?, not a wildcard (KQL supports only *)', () => {
     const result = sql('host:web?.local');
-    expect(result).toContain("ILIKE 'web_.local'");
+    expect(result).toContain("= 'web?.local'");
+    expect(result).not.toContain('ILIKE');
   });
 
   // ── Exists ────────────────────────────────────────────────────────────────
@@ -431,26 +435,52 @@ describe('kqlToSql', () => {
     expect(result).not.toContain('Body');
   });
 
-  // ── Implicit AND (multiple terms) ─────────────────────────────────────────
+  // ── No implicit AND — space is an ordinary character inside a value ───────
+  // (matches Elastic's kuery grammar: UnquotedLiteral absorbs whitespace; only an explicit
+  // and/or/not — or the start of a new field:/range clause — ends a value.)
 
-  it('two bare terms → AND', () => {
+  it('two bare words with no "and" → ONE value, not two AND-ed clauses', () => {
     const result = sql('error timeout');
-    expect(result).toContain(') AND (');
+    expect(result).not.toContain(') AND (');
+    expect(result).toContain("ILIKE '%error timeout%'");
   });
 
-  it('field and bare term → AND', () => {
+  it('field:value followed by a bare word with no "and" → swallowed into the field value', () => {
     const result = sql('SeverityText:error timeout');
-    expect(result).toContain(') AND (');
-    expect(result).toContain('SeverityText');
-    expect(result).toContain('Body');
+    expect(result).not.toContain(') AND (');
+    expect(result).not.toContain('Body');
+    expect(result).toContain("= 'error timeout'");
+  });
+
+  it('two field:value clauses with no "and" between them → syntax error, like Kibana', () => {
+    expect(() => sql('SeverityText:error ServiceName:pay')).toThrow(/Expected/);
+  });
+
+  it('os:windows 10 → one value "windows 10", not a second AND-ed clause', () => {
+    const result = sql('os:windows 10');
+    expect(result).toContain("\"os\" = 'windows 10'");
   });
 
   // ── Phrase regex escaping ─────────────────────────────────────────────────
 
-  it('phrase with regex special chars is escaped in match()', () => {
+  it('phrase with regex special chars is escaped for BOTH re2 and the SQL string literal', () => {
     const result = sql('"req.id+1"');
-    // . and + must be escaped in the regex pattern
-    expect(result).toContain('req\\.id\\+1');
+    // escapeRe2 backslash-escapes . and +, then quoteString doubles every backslash so
+    // ClickHouse's own string-literal unescaping doesn't collapse \. back down to a bare .
+    // (the exact bug this fixes: a single backslash survives ClickHouse's parser as no escape
+    // at all, so "req.id" used to also match "reqXid").
+    expect(result).toContain('req\\\\.id\\\\+1');
+  });
+
+  it('phrase containing a single quote does not break out of the SQL string (was a syntax error / injection)', () => {
+    const result = sql('"it\'s fine"');
+    expect(result).toContain("it\\'s fine");
+  });
+
+  it('phrase containing SQL injection payload stays inside one quoted literal', () => {
+    const result = sql(String.raw`"x') OR 1=1 --"`);
+    // The literal must stay a single quoted string — no unescaped ' breaking out of it.
+    expect(result).not.toMatch(/'\)\s+OR\s+1=1/);
   });
 
   it('Body:"req-59" regression: word-boundary prevents req-592 match', () => {
@@ -496,5 +526,108 @@ describe('kqlToSql', () => {
     const result = kqlToSql(parseKql('user.id > 100'), config, indexWithJson);
     expect(result).toContain('toFloat64(Payload.user.id)');
     expect(result).toContain('> 100');
+  });
+
+  // ── Colon runs inside a field value (12:30:45, url:http://x) ─────────────
+
+  it('a value containing further colons stays one clause: field:12:30:45', () => {
+    const result = sql('startedAt:12:30:45');
+    expect(result).toContain("= '12:30:45'");
+  });
+
+  it('url:http://x → one clause, value is the whole "http://x"', () => {
+    const result = sql('url:http://x');
+    expect(result).toContain("= 'http://x'");
+  });
+
+  // ── Unresolvable field:value → plain-text body search (with an index present) ─────────
+
+  it('with an index, an unresolvable field:value falls back to a body search over the raw text, not a broken column reference', () => {
+    const result = kqlToSql(parseKql('http://x'), config, indexWithHttpMethod);
+    expect(result).not.toContain('"http"');
+    expect(result).toContain("ILIKE '%http://x%'");
+  });
+
+  it('12:30:45 with an index present searches the body, no "12" column reference', () => {
+    const result = kqlToSql(parseKql('12:30:45'), config, indexWithHttpMethod);
+    expect(result).not.toContain('"12"');
+    expect(result).toContain("ILIKE '%12:30:45%'");
+  });
+
+  it('without an index, an unresolvable field:value keeps the historical direct-column fallback', () => {
+    const result = sql('http://x');
+    expect(result).toContain('"http"');
+    expect(result).toContain("= '//x'");
+  });
+
+  // ── Field-name wildcards: data*: 5 / datastream.*: logs ───────────────────
+
+  const dsAField: FieldModel = {
+    id: 'col:datastream.a', name: 'datastream.a', displayName: 'datastream.a',
+    sqlExpr: 'datastream_a', type: 'string', source: 'column',
+  };
+  const dsBField: FieldModel = {
+    id: 'col:datastream.b', name: 'datastream.b', displayName: 'datastream.b',
+    sqlExpr: 'datastream_b', type: 'string', source: 'column',
+  };
+  const indexWithDatastream = buildFieldIndex([dsAField, dsBField]);
+
+  it('datastream.*: logs → OR across every matching discovered field', () => {
+    const result = kqlToSql(parseKql('datastream.*:logs'), config, indexWithDatastream);
+    expect(result).toContain('datastream_a');
+    expect(result).toContain('datastream_b');
+    expect(result).toContain(') OR (');
+  });
+
+  it('a field wildcard matching nothing discovered → 1=0 (matches nothing)', () => {
+    const result = kqlToSql(parseKql('nope.*:logs'), config, indexWithDatastream);
+    expect(result).toBe('1=0');
+  });
+
+  it('field wildcard with no index falls back to the literal field name as a direct column', () => {
+    const result = sql('data*:5');
+    expect(result).not.toContain('OR');
+  });
+
+  // ── true / false / null typed literals (unquoted only — quoted values stay strings) ──
+
+  it('flag:true → bare boolean, not the string \'true\'', () => {
+    const result = sql('flag:true');
+    expect(result).toContain('= true');
+    expect(result).not.toContain("'true'");
+  });
+
+  it('flag:false → bare boolean', () => {
+    const result = sql('flag:false');
+    expect(result).toContain('= false');
+  });
+
+  it('field:null → IS NULL', () => {
+    const result = sql('field:null');
+    expect(result).toContain('IS NULL');
+  });
+
+  it('field:"true" (quoted) stays the string \'true\' — QuotedString is never typed', () => {
+    const result = sql('field:"true"');
+    expect(result).toContain("= 'true'");
+  });
+
+  // ── Parser rejects a missing "and"/"or" between clauses, Kibana-style ─────
+
+  it('two field:value clauses with nothing between them throws KqlSyntaxError', () => {
+    expect(() => parseKql('level:error service:pay')).toThrow(/Expected/);
+  });
+
+  it('the thrown error carries the offending token and a usable position', () => {
+    try {
+      parseKql('level:error service:pay');
+      throw new Error('expected parseKql to throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(KqlSyntaxError);
+      const err = e as KqlSyntaxError;
+      expect(err.found).toBe('service');
+      expect(err.position).toBe('level:error '.length);
+      expect(err.message).toContain('level:error service:pay');
+    }
   });
 });

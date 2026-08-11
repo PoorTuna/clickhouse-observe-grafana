@@ -1,5 +1,6 @@
 import { SourceConfig } from '../types';
 import { FieldModel } from './fieldModel';
+import { looksLikeMapAccessor } from './queryBuilder';
 
 export type FieldKind = 'text' | 'exact' | 'map' | 'json';
 
@@ -91,9 +92,21 @@ export function resolveField(rawField: string, config: SourceConfig, index?: Fie
     }
   }
 
-  // Already a Map accessor like ResourceAttributes['key'] or a function call — pass through
-  if (raw.includes('[') || raw.includes('(')) {
-    return { sqlExpr: raw, kind: raw.includes('[') ? 'map' : 'exact' };
+  // Already a well-formed Map accessor (ResourceAttributes['key']) — pass through. Uses a strict
+  // shape check (looksLikeMapAccessor, queryBuilder.ts) rather than a loose "contains a special
+  // character" test — the old `raw.includes('[') || raw.includes('(')` check trusted *any* string
+  // containing those characters, including raw untrusted text like `x) OR 1=1 -- (`, and
+  // interpolated it unquoted (see C1 in the audit plan). A bare function-call passthrough
+  // (previously `kind: 'exact'` on any string with `(`) is dropped entirely: anyone who needs an
+  // arbitrary function-call expression already has raw-SQL mode as the sanctioned escape hatch.
+  //
+  // Deliberately does NOT also recognize a bare dotted chain like `user.id` here — without field
+  // discovery (`index`) confirming such a name is a real JSON/Tuple path, treating it as one would
+  // be exactly the "blind guessing" the comment below already warns against. A *discovered* dotted
+  // path still works correctly: it's matched and returned above, via `index.bySqlExpr`/
+  // `index.byName`, before this branch is ever reached.
+  if (looksLikeMapAccessor(raw)) {
+    return { sqlExpr: raw, kind: 'map' };
   }
 
   // No blind Map-column guessing beyond this point — a field name that doesn't match a discovered

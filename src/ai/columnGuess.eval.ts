@@ -21,6 +21,7 @@
 
 import { guessColumnMapping, TableColumn } from './columnGuess';
 import { ColumnMapping } from '../types';
+import { errMsg } from '../errMsg';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const CH_URL = process.env.CH_URL ?? 'http://localhost:8123';
@@ -118,7 +119,7 @@ async function runLevel(lvl: Level): Promise<void> {
       const guessed = await guessColumnMapping(cfg, { table: lvl.table, columns, targets: lvl.targets });
       runs.push(scoreRun(guessed, lvl.gold, validNames));
     } catch (e) {
-      console.log(`  run ${i + 1}: ERROR — ${(e as Error)?.message ?? e}`);
+      console.log(`  run ${i + 1}: ERROR — ${errMsg(e)}`);
       runs.push({ perField: Object.fromEntries(Object.keys(lvl.gold).map((k) => [k, false])), invalidCount: 0 });
     }
   }

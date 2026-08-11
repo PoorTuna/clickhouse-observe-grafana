@@ -10,6 +10,27 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.10] — 2026-08-09
+
+### Fixed
+
+- **KQL search bar deviated from real Kibana Query Language grammar in ways that silently produced wrong results.** Reported case: `.*xd something something with spaces.*` fanned out into five separate required (AND'd) clauses instead of being searched as one string, because the tokenizer split on every space. Real KQL treats whitespace as an ordinary character inside a value and has no implicit AND — brought the parser in line:
+  - A value (bare term or `field:value`) now absorbs spaces instead of being split into multiple clauses — `os:windows 10` is one value `"windows 10"`, not two.
+  - `and`/`or`/`not` must now be written explicitly between clauses, matching Kibana — `level:error service:pay` (no `and`) is a syntax error rather than a silently-inserted AND.
+  - An invalid query is now refused with a Kibana-style "Expected X but Y found" message and caret shown under the search bar, instead of silently falling back to a raw-text body search with no indication anything was wrong. Results on screen are left as they were.
+  - `?` is no longer treated as a wildcard — real KQL supports only `*`. A literal `?` (URLs, query strings) now matches itself instead of any single character.
+  - A `field:value` whose field doesn't resolve to a real column (e.g. typing a colon-containing value like `http://x` or `12:30:45`, which reads as `field:value`) now falls back to a plain-text body search instead of emitting a broken SQL column reference that errored the whole query.
+  - Added support for two more real KQL features: field-name wildcards (`datastream.*: logs` matches across every discovered field the wildcard covers) and typed `true`/`false`/`null` literals on unquoted values (`flag:true` now compares against a bare boolean instead of the string `'true'`).
+  - Added `\uXXXX` unicode escapes, part of the documented grammar but previously unhandled (left a literal `u0041` in the value).
+- **Quoted-phrase search (`Body:"..."`) had a SQL injection hole and silently broken regex escaping.** The generated `match()` regex pattern was interpolated into the query without ever being passed through the existing SQL-string quoting helper: an unescaped `'` in the search text could break out of the SQL string (e.g. searching `"x') OR 1=1 --"`), and single-backslash regex escapes were silently eaten by ClickHouse's own string-literal parser, so `Body:"req.id"` also matched `"reqXid"`. Both are fixed by building the regex pattern in JS and quoting it the same way every other value is quoted.
+- The legacy free-text fallback path (used only when a query fails to parse as KQL) didn't escape literal `%`/`_` before using them in an `ILIKE` pattern, so those characters silently acted as SQL wildcards there while the normal KQL path already escaped them correctly.
+- **A filter pill's field name could inject arbitrary SQL.** Filter pills round-trip through the URL and saved searches, so a crafted link could set `field` to something like `x) OR 1=1 -- (` and have it interpolated unquoted into the query — the identifier-quoting helper skipped quoting for any name containing `(`, `[`, or `.`, a loose heuristic meant to let already-built expressions (`Col['key']`, `Payload.user.id`) pass through, but applied identically to raw untyped text. Replaced with strict shape validation, and closed a second, more direct route to the same bug: the `exists`/`not_exists` filter operators didn't quote the field expression at all, regardless of the identifier-quoting fix.
+- Discovered Map keys and JSON paths (populating the fields sidebar and filter autocomplete) were interpolated into SQL unescaped — a Map key containing `'`, or a JSON path segment that isn't a valid bare identifier (`user-id`, `k8s.io/name`), produced broken or silently different SQL instead of the intended field reference.
+- `hasToken()` (used in free-text/body search) throws a ClickHouse error on any search term containing a separator character — `-`, `.`, `:`, `/`, or a space, all common in log search (`req-59`, `1.2.3.4`) — failing the whole search instead of matching. Removed: it was also redundant whenever it didn't throw, since the adjacent case-insensitive `ILIKE` match already covers everything a case-sensitive whole-token `hasToken` match could find.
+- The ClickHouse datasource resolves (never rejects) its query response even when a query failed server-side — the failure surfaces via `DataQueryResponse.error`/`.errors` alongside an empty/partial result, not by throwing. Nothing in this plugin checked those fields, so every ClickHouse error (bad SQL, a query hitting its execution-time budget, permissions) silently looked like "0 results" instead of a catchable error — including every timeout guardrail already in this codebase, whose whole point was to fail loudly rather than return a wrong-looking answer. Fixed at the single chokepoint all queries run through.
+
+
+
 ## [0.4.8] — 2026-08-04
 
 ### Fixed

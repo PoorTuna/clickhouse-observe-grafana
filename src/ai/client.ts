@@ -6,6 +6,7 @@
  */
 
 import { AiProviderConfig } from '../types';
+import { errMsg } from '../errMsg';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -38,7 +39,7 @@ export async function chatCompletion(cfg: AiProviderConfig, messages: ChatMessag
       }),
     });
   } catch (e) {
-    throw new Error(`AI request to ${url} failed: ${(e as Error)?.message ?? e}`);
+    throw new Error(`AI request to ${url} failed: ${errMsg(e)}`);
   }
 
   if (!response.ok) {
@@ -47,7 +48,7 @@ export async function chatCompletion(cfg: AiProviderConfig, messages: ChatMessag
   }
 
   const data = await response.json().catch((e) => {
-    throw new Error(`AI response from ${url} was not valid JSON: ${(e as Error)?.message ?? e}`);
+    throw new Error(`AI response from ${url} was not valid JSON: ${errMsg(e)}`);
   });
 
   const content = data?.choices?.[0]?.message?.content;

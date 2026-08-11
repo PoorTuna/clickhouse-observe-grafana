@@ -20,6 +20,7 @@ import { COL_FIELDS } from '../../columnFields';
 import { guessColumnMapping, TableColumn } from '../../ai/columnGuess';
 import { expandColumnCandidates, JsonPathsByColumn } from '../../ai/columnCandidates';
 import { inferFieldType } from '../../sql/fieldModel';
+import { errMsg } from '../../errMsg';
 
 interface CreateDataViewModalProps {
   isOpen: boolean;
@@ -217,7 +218,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       }).filter((o) => o.value);
       setDbOptions(opts);
     } catch (e) {
-      setError(`Failed to load databases: ${(e as Error)?.message ?? e}`);
+      setError(`Failed to load databases: ${errMsg(e)}`);
     } finally {
       setLoadingDbs(false);
     }
@@ -244,7 +245,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       }).filter((o) => o.value);
       setTableOptions(opts);
     } catch (e) {
-      setError(`Failed to load tables: ${(e as Error)?.message ?? e}`);
+      setError(`Failed to load tables: ${errMsg(e)}`);
     } finally {
       setLoadingTables(false);
     }
@@ -328,7 +329,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
           });
       }
     } catch (e) {
-      setError(`Failed to load columns: ${(e as Error)?.message ?? e}`);
+      setError(`Failed to load columns: ${errMsg(e)}`);
     } finally {
       setLoadingCols(false);
     }
@@ -387,7 +388,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         return next;
       });
     } catch (e) {
-      setError(`AI guess failed: ${(e as Error)?.message ?? e}`);
+      setError(`AI guess failed: ${errMsg(e)}`);
     } finally {
       setAiBusy(false);
     }
@@ -448,7 +449,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       }
       onDismiss();
     } catch (e) {
-      setError(String((e as Error)?.message ?? e));
+      setError(errMsg(e));
     } finally {
       setSaving(false);
     }

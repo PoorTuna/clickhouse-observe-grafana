@@ -3,14 +3,15 @@
  *
  * Reuses existing helpers from the parent sql/ package:
  *   resolveField                     (../fields)
- *   quoteString / quoteIdentifier    (../queryBuilder)
+ *   quoteString / quoteIdentifier / escapeLike (../queryBuilder)
  */
 
 import { KqlNode, KqlIs, KqlRange } from './ast';
-import { WILDCARD_STAR, WILDCARD_QMARK } from './_lexer';
+import { WILDCARD_STAR, WILDCARD_RE } from './_lexer';
 import { SourceConfig } from '../../types';
-import { resolveField, FieldIndex } from '../fields';
-import { quoteString, quoteIdentifier } from '../queryBuilder';
+import { resolveField, FieldIndex, FieldKind } from '../fields';
+import { FieldModel } from '../fieldModel';
+import { quoteString, quoteIdentifier, escapeLike } from '../queryBuilder';
 
 export function kqlToSql(node: KqlNode, config: SourceConfig, index?: FieldIndex): string {
   switch (node.type) {
@@ -44,6 +45,13 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
     return bareTermSql(bodyCol, node.value, node.isWildcard, node.isPhrase);
   }
 
+  // ── Field-name wildcard: data*: 5 / datastream.*: logs — matches KQL, which lets a wildcard
+  // stand in for the field too. Only expandable against real discovered fields (`index`); without
+  // one this falls through to the ordinary unresolved-field handling below.
+  if (index && WILDCARD_RE.test(node.field)) {
+    return fieldWildcardSql(node, node.field, config, index);
+  }
+
   // ── Exists: field:* ──────────────────────────────────────────────────────
   if (node.isExists) {
     const resolved = resolveField(node.field, config, index);
@@ -55,10 +63,33 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
 
   // ── Named field ──────────────────────────────────────────────────────────
   const resolved = resolveField(node.field, config, index);
-  // Unknown field: use the field name as a direct column rather than silently
-  // falling back to body search, which produces wrong results for named-field queries.
-  // e.g. `level:info` with severity unmapped → `"level" = 'info'`, not body ILIKE.
-  const { sqlExpr, kind } = resolved ?? { sqlExpr: node.field, kind: 'exact' as const };
+
+  if (resolved === null) {
+    // Unknown field. With `index` present — real discovered columns were threaded through, so
+    // "unresolved" genuinely means "not a column" — fall back to a plain-text body search over
+    // the original `field:value` text instead of emitting a broken direct-column reference
+    // (`"http" = '//x'` from typing `http://x` → ClickHouse "Unknown identifier" error).
+    // Without an index (e.g. dashboard-panel export, which doesn't thread field discovery
+    // through — see fields.ts:56-59) keep the historical direct-column fallback so that caller
+    // doesn't silently regress into body-only search.
+    if (index && node.raw !== undefined) {
+      if (!bodyCol) {
+        return '1=1';
+      }
+      return bareTermSql(bodyCol, node.raw, WILDCARD_RE.test(node.raw), false);
+    }
+    return valueSql(node, node.field, 'exact');
+  }
+
+  return valueSql(node, resolved.sqlExpr, resolved.kind);
+}
+
+/**
+ * Emit the SQL for a resolved (or direct-column-fallback) field + value, shared by the normal
+ * path and field-wildcard expansion below — both need the same wildcard/phrase/typed-literal
+ * handling per matched column.
+ */
+function valueSql(node: KqlIs, sqlExpr: string, kind: FieldKind): string {
   const val = node.value;
 
   // Wildcard — applies to all field kinds (text, exact, map).
@@ -69,7 +100,8 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
 
   // Phrase — behavior is field-kind-dependent:
   //   text  → word-boundary match() (full-text semantics)
-  //   exact / map → exact equality (keyword-field semantics, quotes = precision)
+  //   exact / map → exact equality (keyword-field semantics, quotes = precision; quoted values
+  //                 are never typed as true/false/null — QuotedString always stays a string)
   if (node.isPhrase) {
     if (kind === 'text') {
       return phraseMatch(maybeQuote(sqlExpr), val);
@@ -82,8 +114,53 @@ function kqlIsToSql(node: KqlIs, config: SourceConfig, index?: FieldIndex): stri
     return `${maybeQuote(sqlExpr)} ILIKE ${quoteString('%' + escapeLike(val) + '%')}`;
   }
 
-  // Unquoted exact / map column → equality.
-  return `${maybeQuote(sqlExpr)} = ${quoteString(val)}`;
+  // Unquoted exact / map / json column → equality, with true/false/null typed literals (the KQL
+  // grammar's UnquotedLiteral converts these three exact-case sequences to typed nodes rather
+  // than strings).
+  return equalsSql(maybeQuote(sqlExpr), val);
+}
+
+function equalsSql(sqlExpr: string, value: string): string {
+  if (value === 'true')  { return `${sqlExpr} = true`;  }
+  if (value === 'false') { return `${sqlExpr} = false`; }
+  if (value === 'null')  { return `${sqlExpr} IS NULL`; }
+  return `${sqlExpr} = ${quoteString(value)}`;
+}
+
+/**
+ * `data*: 5` / `datastream.*: logs` — the field position itself carries a wildcard sentinel.
+ * Expand it against every discovered field (`index`) whose name/displayName/sqlExpr matches, and
+ * OR the per-field clause together — mirrors Elasticsearch matching the value across every field
+ * the wildcard covers. No matches → 1=0 (matches nothing; NOT of it correctly matches everything).
+ */
+function fieldWildcardSql(node: KqlIs, field: string, config: SourceConfig, index: FieldIndex): string {
+  const pattern = wildcardFieldRegex(field);
+  const matched = new Map<string, FieldModel>(); // dedupe by sqlExpr
+  for (const f of index.byName.values()) {
+    if (pattern.test(f.name) || pattern.test(f.displayName)) {
+      matched.set(f.sqlExpr, f);
+    }
+  }
+  if (matched.size === 0) {
+    return '1=0';
+  }
+  const clauses = Array.from(matched.values()).map((f) => {
+    if (node.isExists) {
+      return `notEmpty(toString(${maybeQuote(f.sqlExpr)}))`;
+    }
+    const resolved = resolveField(f.sqlExpr, config, index);
+    return valueSql(node, f.sqlExpr, resolved?.kind ?? 'exact');
+  });
+  return clauses.length === 1 ? clauses[0] : clauses.map((c) => `(${c})`).join(' OR ');
+}
+
+/** Convert a field name containing WILDCARD_STAR sentinels into a case-insensitive regex. */
+function wildcardFieldRegex(fieldWithSentinel: string): RegExp {
+  const escaped = fieldWithSentinel
+    .split(WILDCARD_STAR)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.*');
+  return new RegExp('^' + escaped + '$', 'i');
 }
 
 // ── range ─────────────────────────────────────────────────────────────────────
@@ -120,36 +197,19 @@ function bareTermSql(bodyCol: string, value: string, isWildcard: boolean, isPhra
   if (isPhrase) {
     return phraseMatch(bodyCol, value);
   }
-  // hasToken for full-word match + ILIKE as fallback for substrings.
-  return `(hasToken(${bodyCol}, ${quoteString(value)}) OR ${bodyCol} ILIKE ${quoteString('%' + escapeLike(value) + '%')})`;
-}
-
-/**
- * Escape ILIKE metacharacters in a literal value so user input matches exactly.
- * Must be called BEFORE wildcardLike() — wildcard sentinels are unaffected
- * because WILDCARD_STAR / WILDCARD_QMARK are not %, _, or \.
- *
- * The resulting string will be passed to quoteString(), which doubles backslashes,
- * so the SQL value `\%` (escaped percent) is reached via:
- *   escapeLike('%') → '\%' (JS: backslash + percent)
- *   quoteString('\%') → SQL '\\%'    ← ClickHouse reads \\ as \, so pattern is \%
- *   ClickHouse ILIKE \% → literal %
- */
-function escapeLike(value: string): string {
-  return value
-    .replace(/\\/g, '\\\\')  // escape backslash first (must be first!)
-    .replace(/%/g, '\\%')    // literal % → not an ILIKE wildcard
-    .replace(/_/g, '\\_');   // literal _ → not an ILIKE single-char wildcard
+  // No hasToken() here — it throws BAD_ARGUMENTS on any needle containing a separator character
+  // (`-`, `.`, `:`, `/`, space — all common in log search terms like "req-59" or "1.2.3.4"), and is
+  // redundant even when it doesn't throw: everything a case-sensitive whole-token hasToken() match
+  // can find, the case-insensitive substring ILIKE below already finds too. See C3 in the audit plan.
+  return `${bodyCol} ILIKE ${quoteString('%' + escapeLike(value) + '%')}`;
 }
 
 /**
  * Convert a wildcard IDENT value (containing sentinels) to an ILIKE pattern.
- * Escapes literal %, _, \ first, then substitutes sentinels with % and _.
+ * Escapes literal %, _, \ first, then substitutes the wildcard sentinel with %.
  */
 function wildcardLike(value: string): string {
-  return escapeLike(value)
-    .replace(new RegExp(WILDCARD_STAR, 'g'), '%')
-    .replace(new RegExp(WILDCARD_QMARK, 'g'), '_');
+  return escapeLike(value).replace(new RegExp(WILDCARD_STAR, 'g'), '%');
 }
 
 /**
@@ -157,10 +217,16 @@ function wildcardLike(value: string): string {
  * Uses [^a-zA-Z0-9_] instead of \W to avoid backslash-escaping ambiguity
  * in SQL string literals.
  * Prevents "req-59" from matching "req-592".
+ *
+ * The regex pattern is built in plain JS and passed through quoteString() — same as any other
+ * SQL string literal — so a literal ' in the search text (e.g. Body:"it's fine") can't break out
+ * of the string, and regex escapes survive ClickHouse's own string-literal unescaping (quoteString
+ * doubles backslashes, so `\.` in the source pattern arrives as `\\.` in SQL, which ClickHouse
+ * reads back as `\.` — a literal-dot escape for re2 — instead of collapsing to a bare `.`).
  */
 function phraseMatch(col: string, value: string): string {
-  const escaped = escapeRe2(value);
-  return `match(${col}, '(?i)(^|[^a-zA-Z0-9_])${escaped}([^a-zA-Z0-9_]|$)')`;
+  const pattern = `(?i)(^|[^a-zA-Z0-9_])${escapeRe2(value)}([^a-zA-Z0-9_]|$)`;
+  return `match(${col}, ${quoteString(pattern)})`;
 }
 
 /** Escape re2 metacharacters within a literal string segment. */

@@ -20,6 +20,7 @@ import {
   useStyles2,
 } from '@grafana/ui';
 import { BreakdownSel, LogsQueryState, SourceConfig } from '../../types';
+import { errMsg } from '../../errMsg';
 import { ViewCapabilities } from '../../sql/capabilities';
 import { resolveVolumeBreakdown } from '../../sql/queryBuilder';
 import {
@@ -101,7 +102,7 @@ export function AddToDashboardModal({
       })
       .catch((e) => {
         if (!cancelled) {
-          setError(`Failed to load dashboards: ${(e as Error)?.message ?? e}`);
+          setError(`Failed to load dashboards: ${errMsg(e)}`);
         }
       });
     return () => {
@@ -153,7 +154,7 @@ export function AddToDashboardModal({
       onDismiss();
       locationService.push(result.url);
     } catch (e) {
-      setError(String((e as Error)?.message ?? e));
+      setError(errMsg(e));
     } finally {
       setSaving(false);
     }

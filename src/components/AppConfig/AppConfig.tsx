@@ -11,6 +11,7 @@ import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from 
 import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, Field, FieldSet, Input, Select, Switch, useStyles2 } from '@grafana/ui';
 import { applyOtelPreset } from '../../sql/schema';
+import { errMsg } from '../../errMsg';
 import {
   AiProviderConfig,
   AppJsonData,
@@ -88,7 +89,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       setTimeout(() => setSaveStatus('idle'), 2000);
       window.location.reload();
     } catch (err) {
-      setSaveError(String((err as Error)?.message ?? err));
+      setSaveError(errMsg(err));
       setSaveStatus('error');
     }
   };

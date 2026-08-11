@@ -50,12 +50,16 @@ The configuration page is at **Administration > Plugins > ClickHouse Observe > C
 
 ## KQL Search Reference
 
+Follows [Kibana Query Language](https://www.elastic.co/docs/explore-analyze/query-filter/languages/kql) syntax and semantics — a query that's valid in Kibana should mean the same thing here.
+
 | Syntax | Meaning |
 |--------|---------|
 | `level:error` | Field equals value (exact match) |
 | `service:payment*` | Wildcard match |
 | `service:*` | Field exists |
-| `"payment failed"` | Phrase match on the log body |
+| `datastream.*:error` | Field-name wildcard — matches the value across every field the wildcard covers |
+| `"payment failed"` | Phrase match on the log body (word-boundary, not a raw substring) |
+| `active:true`, `deleted:false`, `parentId:null` | Typed literals — unquoted only; `field:"true"` stays the string `"true"` |
 | `responseTime > 500` | Numeric greater-than |
 | `responseTime >= 500` | Numeric greater-than-or-equal |
 | `responseTime < 100` | Numeric less-than |
@@ -65,7 +69,7 @@ The configuration page is at **Administration > Plugins > ClickHouse Observe > C
 | `not level:debug` | Boolean NOT |
 | `level:error and service:pay* and latency > 1000` | Combined |
 
-Bare terms without a field (`payment failed`) search the log body. Autocomplete suggests field names, operators, and live top values at each position.
+Bare terms without a field (`payment failed`) search the log body as one value — spaces don't split it into separate terms. **`and`/`or`/`not` must be written explicitly**: `level:error service:checkout` (no `and`) is a syntax error, same as Kibana, and the search bar refuses to run it rather than guessing. `?` is an ordinary character, not a wildcard — only `*` is. There's no regex support (Kibana doesn't have one either); for that, switch to raw SQL. Autocomplete suggests field names, operators, and live top values at each position.
 
 ---
 

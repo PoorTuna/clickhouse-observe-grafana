@@ -41,6 +41,7 @@ import {
   VolumeDataPoint,
 } from '../types';
 import { decodeLogsState, encodeLogsState } from '../data/urlState';
+import { errMsg } from '../errMsg';
 import { shiftTimeRange, zoomOutTimeRange } from '../utils/timeRangeNav';
 import { useAvailableHeight } from '../utils/useAvailableHeight';
 import { logsQueryReducer } from './_logsQueryReducer';
@@ -448,7 +449,7 @@ export function LogsExplorer() {
       });
     } catch (err) {
       if (runRef.current === runId) {
-        setError(String((err as Error)?.message ?? err));
+        setError(errMsg(err));
       }
     } finally {
       if (runRef.current === runId) {
@@ -502,7 +503,7 @@ export function LogsExplorer() {
         // Also clear volumeData: a failed refetch must not leave the previous time range's bars
         // on screen under a new range/filter — that reads as a (wrong) real answer, not an error.
         setVolumeData([]);
-        const rawMsg = String((err as Error)?.message ?? err);
+        const rawMsg = errMsg(err);
         // ClickHouse's timeout_overflow_mode = 'throw' (see VOLUME_QUERY_SETTINGS) surfaces as
         // this substring — reword it into something the user can act on instead of a raw
         // ClickHouse error string.
@@ -608,7 +609,7 @@ export function LogsExplorer() {
       } catch (e) {
         // Leave the page unmarked as hydrated so the next drawer-open on this page retries,
         // rather than permanently degrading to summary-only after one transient failure.
-        setDetailError(String((e as Error)?.message ?? e));
+        setDetailError(errMsg(e));
         return false;
       } finally {
         hydratingPagesRef.current.delete(pageIndex);
@@ -680,7 +681,7 @@ export function LogsExplorer() {
           return next;
         });
       } catch (e) {
-        setDetailError(String((e as Error)?.message ?? e));
+        setDetailError(errMsg(e));
       } finally {
         hydratingRowKeysRef.current.delete(key);
         if (runRef.current === runId) {

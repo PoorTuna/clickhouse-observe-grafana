@@ -9,6 +9,7 @@ import { buildFieldIndex } from '../../sql/fields';
 import { buildValuesCacheKey, fetchFieldValuesWithTotal, valuesCache } from '../../sql/kql/_values';
 import { makeFilter } from '../../sql/filters';
 import { FilterPill, LogsQueryState, SourceConfig } from '../../types';
+import { errMsg } from '../../errMsg';
 import { SourceConfigContext } from '../App/App';
 import { useFields } from '../FieldsContext';
 
@@ -100,7 +101,7 @@ export function FieldStatsPopover({
       setTotal(sampleTotal);
     } catch (e) {
       if (mountedRef.current) {
-        setError(String((e as Error)?.message ?? e));
+        setError(errMsg(e));
       }
     } finally {
       if (mountedRef.current) {

@@ -1,4 +1,5 @@
 import { parseKql } from '../_parser';
+import { KqlSyntaxError } from '../_error';
 import { KqlAnd, KqlIs, KqlNot, KqlOr, KqlRange } from '../ast';
 
 describe('KQL parser', () => {
@@ -58,9 +59,10 @@ describe('KQL parser', () => {
     expect(node.isWildcard).toBe(true);
   });
 
-  it('? wildcard → isWildcard true', () => {
+  it('? is a literal character, not a wildcard — real KQL supports only *', () => {
     const node = parseKql('host:web?') as KqlIs;
-    expect(node.isWildcard).toBe(true);
+    expect(node.isWildcard).toBe(false);
+    expect(node.value).toBe('web?');
   });
 
   it('escaped \\* is NOT a wildcard', () => {
@@ -185,32 +187,57 @@ describe('KQL parser', () => {
     expect(node.field).toBe('level');
   });
 
-  // ── Implicit AND (space-separated terms) ─────────────────────────────────
-  it('two space-separated bare terms → implicit AND', () => {
-    const node = parseKql('foo bar') as KqlAnd;
+  // ── No implicit AND — space is an ordinary character inside a value ───────
+  // Matches Elastic's kuery grammar: UnquotedLiteral absorbs whitespace, so space-separated
+  // words with no explicit and/or/not are ONE value, not multiple AND-ed clauses. This is the
+  // fix for the reported bug: ".*xd something something with spaces.*" used to fan out into
+  // five required clauses instead of being searched as one string.
+  it('two space-separated bare words with no "and" → one merged value, not an AND', () => {
+    const node = parseKql('foo bar') as KqlIs;
+    expect(node.type).toBe('is');
+    expect(node.value).toBe('foo bar');
+  });
+
+  it('three space-separated words → one merged value', () => {
+    const node = parseKql('a b c') as KqlIs;
+    expect(node.type).toBe('is');
+    expect(node.value).toBe('a b c');
+  });
+
+  it('mixed implicit/explicit: foo AND bar baz → AND(foo, "bar baz")', () => {
+    // "AND" still splits clauses; the words after it with no further "and" merge into one value.
+    const node = parseKql('foo AND bar baz') as KqlAnd;
     expect(node.type).toBe('and');
     expect((node.left as KqlIs).value).toBe('foo');
-    expect((node.right as KqlIs).value).toBe('bar');
+    expect((node.right as KqlIs).value).toBe('bar baz');
   });
 
-  it('three space-separated terms → nested implicit AND', () => {
-    const node = parseKql('a b c') as KqlAnd;
-    expect(node.type).toBe('and');
-    // Should be AND(AND(a,b),c) or AND(a,AND(b,c)); either is acceptable.
-    // Just verify all three leaf nodes exist somewhere
-    const flatten = (n: unknown): string[] => {
-      const kn = n as { type: string; left?: unknown; right?: unknown; operand?: unknown; value?: string };
-      if (kn.type === 'is') { return [kn.value!]; }
-      if (kn.type === 'and' || kn.type === 'or') { return [...flatten(kn.left), ...flatten(kn.right)]; }
-      return [];
-    };
-    expect(flatten(node).sort()).toEqual(['a', 'b', 'c']);
+  it('two field:value clauses with no "and" between them throws (Kibana requires it explicit)', () => {
+    expect(() => parseKql('level:error service:pay')).toThrow(KqlSyntaxError);
   });
 
-  it('mixed implicit/explicit: foo AND bar baz', () => {
-    // "foo AND bar baz" → AND(AND(foo,bar),baz)
-    const node = parseKql('foo AND bar baz');
-    expect(node.type).toBe('and');
+  it('a field value absorbs trailing bare words: level:error timeout → one value "error timeout"', () => {
+    const node = parseKql('level:error timeout') as KqlIs;
+    expect(node.type).toBe('is');
+    expect(node.field).toBe('level');
+    expect(node.value).toBe('error timeout');
+  });
+
+  it('field value absorbs a colon run: startedAt:12:30:45 → value "12:30:45"', () => {
+    const node = parseKql('startedAt:12:30:45') as KqlIs;
+    expect(node.field).toBe('startedAt');
+    expect(node.value).toBe('12:30:45');
+  });
+
+  it('url:http://x → value is the whole "http://x", raw carries the full field:value text', () => {
+    const node = parseKql('url:http://x') as KqlIs;
+    expect(node.field).toBe('url');
+    expect(node.value).toBe('http://x');
+    expect(node.raw).toBe('url:http://x');
+  });
+
+  it('a bare quoted phrase does not absorb a following word without and/or (syntax error)', () => {
+    expect(() => parseKql('"foo" bar')).toThrow(KqlSyntaxError);
   });
 
   // ── Value list ────────────────────────────────────────────────────────────
@@ -281,11 +308,27 @@ describe('KQL parser', () => {
   });
 
   // ── Error cases ───────────────────────────────────────────────────────────
-  it('empty string throws', () => {
-    expect(() => parseKql('')).toThrow();
+  it('empty string throws KqlSyntaxError', () => {
+    expect(() => parseKql('')).toThrow(KqlSyntaxError);
   });
 
-  it('unclosed parenthesis throws', () => {
-    expect(() => parseKql('(level:error')).toThrow();
+  it('unclosed parenthesis throws KqlSyntaxError, expecting ")"', () => {
+    expect(() => parseKql('(level:error')).toThrow(KqlSyntaxError);
+  });
+
+  it('KqlSyntaxError message is Kibana-shaped: "Expected X but Y found." + input + caret', () => {
+    try {
+      parseKql('level:error service:pay');
+      throw new Error('expected parseKql to throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(KqlSyntaxError);
+      const err = e as KqlSyntaxError;
+      expect(err.message).toMatch(/^Expected .+ but "service" found\./);
+      expect(err.message.split('\n')).toEqual([
+        expect.stringMatching(/^Expected/),
+        'level:error service:pay',
+        '------------^',
+      ]);
+    }
   });
 });

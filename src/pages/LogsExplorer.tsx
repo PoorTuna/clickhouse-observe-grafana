@@ -14,6 +14,7 @@ import { resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../componen
 import { LogsHistogramPanel } from '../components/LogsHistogramPanel';
 import { FieldSidebar, fieldToColumn } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
+import { useFieldPresence } from '../components/useFieldPresence';
 import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
@@ -141,6 +142,14 @@ export function LogsExplorer() {
   // SearchBar/etc. get the exact same discovery run rather than a second independent one.
   const fieldsState = useFieldDiscovery(config, timeRange);
   const fieldIndex = useMemo(() => buildFieldIndex(fieldsState.fields), [fieldsState.fields]);
+  // Filter-aware Available/Empty split for the sidebar — separate from discovery above (schema-
+  // scoped) because this must re-derive on every search/filter change, the same trigger set
+  // fetchVolume below already uses for the histogram (see useFieldPresence's doc comment).
+  const presence = useFieldPresence(config, timeRange, queryState, fieldsState.fields, fieldIndex);
+  const fieldsContextValue = useMemo(
+    () => ({ ...fieldsState, presence }),
+    [fieldsState, presence]
+  );
   // Mount-query queries (fetchLogs/fetchVolume) read the field index through this ref instead of
   // closing over `fieldIndex` directly — see the comment on their useCallback deps below for why:
   // depending on `fieldIndex` there made both queries re-fire the moment async field discovery
@@ -973,7 +982,7 @@ export function LogsExplorer() {
   }, [selectedRow, hydratedRows, queryState.useRawSql, config]);
 
   return (
-    <FieldsContext.Provider value={fieldsState}>
+    <FieldsContext.Provider value={fieldsContextValue}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
         {/* Row 1: view picker + add filter + search (left/center) + saved/dashboard/time/refresh

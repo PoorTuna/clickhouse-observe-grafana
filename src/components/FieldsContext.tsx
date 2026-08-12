@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
 import { FieldModel, inferFieldType, parseTupleElements } from '../sql/fieldModel';
+import type { FieldPresence } from './useFieldPresence';
 import { buildColumnsQuery, buildMapKeysQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { quoteDottedPath, quoteString } from '../sql/queryBuilder';
 import { runQueryRows } from '../data/runQuery';
@@ -69,6 +70,10 @@ interface FieldsContextValue {
   loading: boolean;
   error: string | null;
   refresh: () => void;
+  /** Filter-aware Available/Empty split (see useFieldPresence.ts) — defaults to "unknown" (show
+   *  everything) for providers that only call useFieldDiscovery and never compute presence
+   *  (e.g. CreateDataViewModal's pinnable-fields lookup). */
+  presence: FieldPresence;
 }
 
 const EMPTY_FIELDS_CONTEXT: FieldsContextValue = {
@@ -76,6 +81,7 @@ const EMPTY_FIELDS_CONTEXT: FieldsContextValue = {
   loading: false,
   error: null,
   refresh: () => {},
+  presence: { present: null, status: 'unknown', loading: false },
 };
 
 // Exported (not just useFields()) so pages that need the same discovered fields for query
@@ -333,5 +339,9 @@ export function useFieldDiscovery(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.datasourceUid, config.database, resolvedTable, bucket]);
 
-  return { fields, loading, error, refresh };
+  // This hook only discovers *schema*. Filter-aware presence is a separate concern computed by
+  // useFieldPresence and merged in by callers that need it (see LogsExplorer.tsx) — callers that
+  // only need discovery (e.g. CreateDataViewModal's pinnable-fields lookup) get the "unknown/show
+  // everything" default here, same as EMPTY_FIELDS_CONTEXT.
+  return { fields, loading, error, refresh, presence: EMPTY_FIELDS_CONTEXT.presence };
 }

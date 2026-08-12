@@ -202,11 +202,17 @@ export function SearchBar({
       setHighlightIdx(-1);
       return;
     }
-    // Tab accepts the highlighted suggestion. Enter always runs the search as typed — it used to
-    // also accept a highlighted suggestion (after ArrowUp/ArrowDown), which silently rewrote the
-    // query text instead of searching it. Accepting a suggestion is still available via Tab or a
-    // mouse click on the dropdown item.
-    if (e.key === 'Tab' && highlightIdx >= 0) {
+    // Enter or Tab accepts the highlighted suggestion — matches Kibana's own KQL input (its
+    // `index` state starts `null` and resets to `null` on every keystroke, only becoming non-null
+    // via ArrowDown/ArrowUp; Enter checks `index !== null` before accepting, else it submits — see
+    // query_string_input.tsx's onKeyDown). `highlightIdx` here is the same contract: -1 until the
+    // user explicitly arrows into the list, reset to -1 on every keystroke (computeSuggestions). So
+    // typing + Enter always searches; ArrowDown + Enter accepts. This used to always submit on
+    // Enter regardless of highlight — that "fix" was for the wrong bug: the real issue was that
+    // accepting inserted different text than the dropdown showed (see fieldSuggestions/
+    // escapeKqlIdent), not that Enter could accept at all. With insert === display now guaranteed,
+    // accepting via Enter can no longer silently rewrite the query.
+    if ((e.key === 'Enter' || e.key === 'Tab') && highlightIdx >= 0) {
       e.preventDefault();
       applySuggestion(suggestions[highlightIdx]);
       return;

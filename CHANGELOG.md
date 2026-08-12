@@ -10,6 +10,26 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.5.1] — 2026-08-12
+
+### Fixed
+
+- Search bar: Enter now accepts a highlighted autocomplete suggestion again (ArrowDown then Enter),
+  matching Kibana's own KQL input. 0.5.0 made Enter always submit, which was the wrong fix for the
+  underlying bug — the real issue (accepted suggestions rewriting what was typed) was already fixed
+  by 0.5.0's insert-matches-display change, so restoring Enter-to-accept no longer reintroduces it.
+
+### Added
+
+- Fields sidebar now splits into "Available fields" and a collapsed "Empty fields" section based on
+  whether a field actually has values under the current search/filter/time range — not just whether
+  it exists in the schema. Re-derives on every search/filter change, the same trigger the histogram
+  already uses, via a bounded sample of the newest matching rows (mirrors Kibana's own
+  existing-fields sampling). Falls back to a single "All fields" list (no split) if the presence
+  check is unavailable, rather than guessing.
+
+---
+
 ## [0.5.0] — 2026-08-12
 
 ### Changed

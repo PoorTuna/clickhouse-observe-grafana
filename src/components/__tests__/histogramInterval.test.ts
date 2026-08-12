@@ -30,9 +30,22 @@ describe('calcBucketInterval', () => {
     expect(calcBucketInterval(r)).toBe(60);
   });
 
-  it('falls back to a day step for a very long range', () => {
+  it('picks a coarser-than-a-day step for a 1-year range instead of hairline-thin daily bars', () => {
     const r = range(0, 365 * 86_400_000); // 1 year
-    expect(calcBucketInterval(r)).toBe(86_400);
+    // 365d / 60 buckets ≈ 6.08d/bucket target -> first step >= that is 10 days.
+    expect(calcBucketInterval(r)).toBe(10 * 86_400);
+  });
+
+  it('scales past the largest fixed step for a multi-year range', () => {
+    const r = range(0, 5 * 365 * 86_400_000); // 5 years
+    // 5y / 60 buckets ≈ 30.4d/bucket target -> first step >= that is 90 days.
+    expect(calcBucketInterval(r)).toBe(90 * 86_400);
+  });
+
+  it('falls back to whole-year steps beyond the step table for very long ranges', () => {
+    const r = range(0, 200 * 365 * 86_400_000); // 200 years
+    // 200y / 60 buckets ≈ 3.33y/bucket target -> rounds up to whole years.
+    expect(calcBucketInterval(r)).toBe(4 * 365 * 86_400);
   });
 
   it('picks the smallest step for a short range', () => {

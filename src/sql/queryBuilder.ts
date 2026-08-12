@@ -30,16 +30,24 @@ export const CORE_ALIAS = {
  * projection) counterpart — used by LogsExplorer to attach full-row data (Map attribute columns,
  * "All fields", JSON) to the detail drawer without depending on row offset/order, which
  * ClickHouse doesn't guarantee to be stable across two separate queries when sort keys tie.
- * Built only from the `__`-aliased core values both projections always emit identically, so it
- * needs no knowledge of which columns are mapped — unmapped ones are simply `undefined` on both
- * sides and still compare equal.
+ *
+ * Grid rows always carry the `__`-aliased core values (buildLogsQuery's grid projection still
+ * emits them). Full/detail rows no longer do — they're a bare `SELECT *`, so the same value is
+ * only reachable under its real mapped column name (see H2 in the audit plan: aliasing an already-
+ * selected column a second time just to have a fixed key name was pure duplicate cost). `config`
+ * (optional — omit it for tests/callers that only ever compare same-shaped rows) lets this read
+ * either shape and land on the same key either way: `row[CORE_ALIAS.timestamp] ?? row[config
+ * .columns.timestamp]` finds the value whichever query produced the row.
  */
-export function logRowKey(row: Record<string, unknown>): string {
+export function logRowKey(row: Record<string, unknown>, config?: SourceConfig): string {
+  const c = config?.columns;
+  const read = (alias: string, raw: string | undefined) =>
+    row[alias] ?? (raw !== undefined ? row[raw] : undefined) ?? null;
   return JSON.stringify([
-    row[CORE_ALIAS.timestamp] ?? null,
-    row[CORE_ALIAS.body] ?? null,
-    row[CORE_ALIAS.severity] ?? null,
-    row[CORE_ALIAS.serviceName] ?? null,
+    read(CORE_ALIAS.timestamp, c?.timestamp),
+    read(CORE_ALIAS.body, c?.body),
+    read(CORE_ALIAS.severity, c?.severity),
+    read(CORE_ALIAS.serviceName, c?.serviceName),
   ]);
 }
 
@@ -159,9 +167,11 @@ export function tableRef(config: SourceConfig, table: string): string {
  * aliased here — groupAttributes() (schema.ts) already reads them by their raw mapped column name
  * via SELECT *, so a fixed alias was dead weight.
  *
- * Shared by buildLogsQuery and buildLogDetailQuery — both project the exact same core aliases so a
- * row fetched by either one produces the same logRowKey(), and this is the single place that
- * mapping has to stay right.
+ * Grid-projection only. A `SELECT *` projection (buildLogsQuery's 'full', buildLogDetailQuery)
+ * already returns each mapped column under its own real name — aliasing it again would just select
+ * it a second time (see H2 in the audit plan) — so those callers no longer use this. Grid has no
+ * `*` to fall back on, so it's the one projection that still needs a fixed, collision-proof name
+ * here; logRowKey() bridges the two shapes by also checking the raw name when the alias is absent.
  */
 function buildCoreSelectAliases(c: ColumnMapping): string[] {
   return [
@@ -322,12 +332,29 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
 
 export interface BuildLogsQueryOpts {
   /**
-   * 'full' (default): SELECT * plus the core/extra aliases — every column, needed by the log
-   * detail drawer (Resource/Log/Scope/Span Attributes, "All fields", JSON tab all read the raw
-   * row). 'grid': omit the `*` — only the core/extra aliases the results grid actually renders.
+   * 'full' (default): bare SELECT * — every real column, needed by the log detail drawer
+   * (Resource/Log/Scope/Span Attributes, "All fields", JSON tab all read the raw row). No core
+   * aliasing here: `*` already includes each mapped column under its own real name, so aliasing
+   * Timestamp/Body/etc a second time (the old behavior) just sent them twice — see H2 in the audit
+   * plan. 'grid': omit the `*` — only the core aliases + extra columns the results grid actually
+   * renders (still aliased, since this is the one projection that has no `*` to fall back on).
    * Callers that don't pass this get the historical SELECT * behavior unchanged.
    */
   projection?: 'grid' | 'full';
+}
+
+/** Maps a CORE_ALIAS name back to the real column it was standing in for, so a sort column chosen
+ *  against the grid projection (which is always aliased) still resolves against a non-grid
+ *  projection (bare SELECT *, no aliases) — see buildLogsQuery's sortCol handling below. */
+function coreAliasToRawColumn(alias: string, c: ColumnMapping): string | undefined {
+  switch (alias) {
+    case CORE_ALIAS.timestamp: return c.timestamp;
+    case CORE_ALIAS.body: return c.body;
+    case CORE_ALIAS.severity: return c.severity;
+    case CORE_ALIAS.serviceName: return c.serviceName;
+    case CORE_ALIAS.traceId: return c.traceId;
+    default: return undefined;
+  }
 }
 
 export function buildLogsQuery(
@@ -339,23 +366,35 @@ export function buildLogsQuery(
 ): string {
   const c = config.columns;
   const tbl = tableRef(config, config.logsTable);
+  const isGrid = opts?.projection === 'grid';
 
-  const coreSelect = buildCoreSelectAliases(c);
-
-  // Extra SELECT for user-added non-core columns
+  // Extra SELECT for user-added non-core columns — kept in every projection, including the bare
+  // SELECT * one: a user-added column's sqlExpr can be an arbitrary expression (a Map accessor, a
+  // JSON path, a function call), not necessarily a real column `*` would already cover.
   const extraSelect = (state.columns ?? [])
     .filter((col) => !col.isCore)
     .map((col) => `${col.sqlExpr} AS ${col.key}`);
 
-  // Grid projection only ever omits `*` when there's at least one aliased/extra column to take
-  // its place — an arbitrary table with nothing mapped and no user-added columns would otherwise
-  // produce an empty (invalid) SELECT list, so fall back to `*` in that case.
+  // Grid projection has no `*` to fall back on, so it still needs the core columns aliased
+  // in — that's the one thing this projection's own SELECT list has to provide. Grid projection
+  // only ever omits `*` when there's at least one aliased/extra column to take its place — an
+  // arbitrary table with nothing mapped and no user-added columns would otherwise produce an
+  // empty (invalid) SELECT list, so fall back to `*` in that case.
+  const coreSelect = isGrid ? buildCoreSelectAliases(c) : [];
   const gridSelect = [...coreSelect, ...extraSelect];
-  const selectParts =
-    opts?.projection === 'grid' && gridSelect.length > 0 ? gridSelect : ['*', ...coreSelect, ...extraSelect];
+  const selectParts = isGrid && gridSelect.length > 0 ? gridSelect : ['*', ...extraSelect];
   const conditions = buildWhereConditions(config, state, index);
 
-  const sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);
+  let sortCol = state.sort?.col ?? (c.timestamp ? CORE_ALIAS.timestamp : null);
+  if (sortCol && !isGrid) {
+    // A sort column carried over from the grid (either the default above, or a value the user
+    // picked by clicking a grid column header — those are always CORE_ALIAS names, since that's
+    // what the grid's own SELECT list exposes) has nothing to resolve against in a bare SELECT *
+    // query, which emits no such alias. Translate it back to the real column name `*` already
+    // provides. Anything else — an extraSelect column's own key, or an already-raw name — passes
+    // through unchanged; extraSelect's aliases are still emitted in every projection.
+    sortCol = coreAliasToRawColumn(sortCol, c) ?? sortCol;
+  }
   const sortDir = (state.sort?.dir ?? 'desc').toUpperCase();
 
   return withSettings(
@@ -427,6 +466,11 @@ function coerceEpochMs(value: unknown): number | null {
  * rows as identical throughout this codebase — a match found this way is exactly as "correct" as
  * what hydratePage's whole-page fetch would have matched by content key. Returns '' (no query) if
  * no timestamp is mapped or the row's timestamp can't be parsed — caller falls back to hydratePage.
+ *
+ * Bare `SELECT *` — no core aliasing. `*` already returns each mapped column under its own real
+ * name, so the fetched row still produces the same logRowKey() as the grid row it's replacing in
+ * `hydratedRows`, as long as logRowKey() is given `config` to read those raw names by (see H2 in
+ * the audit plan and logRowKey's own doc comment).
  */
 export function buildLogDetailQuery(
   config: SourceConfig,
@@ -442,11 +486,6 @@ export function buildLogDetailQuery(
     return '';
   }
   const tbl = tableRef(config, config.logsTable);
-
-  // Same core aliasing as buildLogsQuery's coreSelect — the fetched row must produce the same
-  // logRowKey() as the narrow grid row it's replacing in `hydratedRows`. c.timestamp is guaranteed
-  // truthy here (guarded above), so buildCoreSelectAliases always includes it.
-  const coreSelect = buildCoreSelectAliases(c);
 
   const conditions = [
     `${c.timestamp} >= fromUnixTimestamp64Milli(${tsMs})`,
@@ -468,7 +507,7 @@ export function buildLogDetailQuery(
 
   return withSettings(
     [
-      `SELECT *, ${coreSelect.join(', ')}`,
+      `SELECT *`,
       `FROM ${tbl}`,
       `WHERE ${conditions.join(' AND ')}`,
       `LIMIT 1`,

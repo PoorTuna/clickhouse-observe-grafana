@@ -37,20 +37,38 @@ export interface ResolvedInterval {
   intervalMs: number;
 }
 
+const DAY_SEC = 86_400;
+
 function formatDuration(sec: number): string {
   if (sec < 60)    {return `${sec} second${sec !== 1 ? 's' : ''}`;}
   if (sec < 3_600) {return `${sec / 60} minute${sec / 60 !== 1 ? 's' : ''}`;}
-  if (sec < 86_400) {return `${sec / 3_600} hour${sec / 3_600 !== 1 ? 's' : ''}`;}
-  return `${sec / 86_400} day${sec / 86_400 !== 1 ? 's' : ''}`;
+  if (sec < DAY_SEC) {return `${sec / 3_600} hour${sec / 3_600 !== 1 ? 's' : ''}`;}
+  const days = sec / DAY_SEC;
+  if (days % 365 === 0) {return `${days / 365} year${days / 365 !== 1 ? 's' : ''}`;}
+  if (days % 30 === 0 && days >= 30) {return `${days / 30} month${days / 30 !== 1 ? 's' : ''}`;}
+  if (days % 7 === 0 && days >= 7) {return `${days / 7} week${days / 7 !== 1 ? 's' : ''}`;}
+  return `${days} day${days !== 1 ? 's' : ''}`;
 }
 
-/** Calculate bucket interval in seconds to target ~60 buckets over the time range. */
+/** Calculate bucket interval in seconds to target ~60 buckets over the time range. The step
+ *  table used to top out at 86400 (1 day) — for anything wider than ~60 days, that floor meant
+ *  auto mode kept bucketing by day regardless of range, so a multi-year range produced hundreds
+ *  of daily buckets instead of ~60, and every bar collapsed to a hairline. Extending the table out
+ *  to yearly steps (and falling back to whole-year multiples beyond that) keeps the target
+ *  bucket count roughly constant no matter how wide the range is. */
 export function calcBucketInterval(timeRange: TimeRange): number {
   const spanMs = timeRange.to.valueOf() - timeRange.from.valueOf();
   const targetBuckets = 60;
   const rawSec = Math.ceil(spanMs / 1000 / targetBuckets);
-  const steps = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, 86400];
-  return steps.find((s) => s >= rawSec) ?? 86400;
+  const steps = [
+    10, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600, DAY_SEC,
+    2 * DAY_SEC, 5 * DAY_SEC, 10 * DAY_SEC, 30 * DAY_SEC, 90 * DAY_SEC, 180 * DAY_SEC, 365 * DAY_SEC,
+  ];
+  const found = steps.find((s) => s >= rawSec);
+  if (found) {
+    return found;
+  }
+  return Math.ceil(rawSec / (365 * DAY_SEC)) * 365 * DAY_SEC;
 }
 
 /** Resolve an IntervalMode + time range into concrete SQL interval + display label. */

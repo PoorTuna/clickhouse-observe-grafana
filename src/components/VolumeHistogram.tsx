@@ -27,6 +27,17 @@ export {
 /** Minimum rendered height (px) for any non-zero stacked segment — see the render loop below. */
 const MIN_SEGMENT_PX = 2;
 
+/** Height (px) reserved below the plot for x-axis tick labels (4px gap + ~20px label band).
+ *  `height` prop is the *total* block height; the plotted SVG gets `height - X_AXIS_BAND`. */
+const X_AXIS_BAND = 24;
+
+/** Clear space (px) above the topmost gridline, so the tallest bar never touches the block's top
+ *  edge. */
+const TOP_HEADROOM = 14;
+
+/** Target px pitch between x-axis tick labels. */
+const X_TICK_TARGET_PX = 110;
+
 export type HistogramColorMode = 'single' | 'severity' | 'breakdown';
 
 interface VolumeHistogramProps {
@@ -106,7 +117,7 @@ function niceYTicks(max: number, targetTicks = 5): number[] {
 export function VolumeHistogram({
   data,
   timeRange,
-  height = 64,
+  height = 120,
   colorMode,
   bucketMs,
   loading,
@@ -115,10 +126,14 @@ export function VolumeHistogram({
 }: VolumeHistogramProps) {
   const styles = useStyles2(getStyles);
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   // Legend interaction: click a series to isolate it (hide the rest); ctrl/cmd-
   // click to toggle just that one series without touching the others. Purely a client-side view
   // filter — doesn't affect the underlying query or the "N events" total shown elsewhere.
   const [hiddenLevels, setHiddenLevels] = useState<Set<string>>(new Set());
+  // Hovering a legend row dims every other series' bars. Independent of hiddenLevels
+  // (isolate/toggle): a series can be hovered while others are already hidden.
+  const [hoveredLevel, setHoveredLevel] = useState<string | null>(null);
   const [breakdownPopover, setBreakdownPopover] = useState<BreakdownClickPopover | null>(null);
   // dragStart holds the live drag-anchor value used by the imperative mouse-move math below.
   // isDragging mirrors "is a drag in progress" into state so the render below (hover band
@@ -131,6 +146,29 @@ export function VolumeHistogram({
   // its content-driven width (level names, counts) isn't known until it's actually painted.
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const [tooltipWidth, setTooltipWidth] = useState(0);
+  // Tracked so bars can be laid out in whole px (1px gap) instead of the coarser % math that
+  // used to leave uneven-looking gaps at odd container widths. 0 until the first
+  // ResizeObserver callback fires, at which point the render loop below falls back to % math for
+  // that single frame.
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) {
+      return;
+    }
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) {
+        setContainerWidth(w);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const svgHeight = Math.max(0, height - X_AXIS_BAND);
+  const plotHeight = Math.max(0, svgHeight - TOP_HEADROOM);
 
   const { bars, maxTotal, allLevels, colorMap } = useMemo(() => {
     if (!data.length) {
@@ -228,14 +266,20 @@ export function VolumeHistogram({
   // Round-number y-axis (0/1/2, 0/5/10/15/20, …) instead of raw min/mid/max —
   // niceMax (the last tick) is what bar heights actually scale against, so bars and gridlines
   // always agree. Tick *count* is capped by how much vertical room there actually is. A label's
-  // own line-height needs ~20px of clearance, not just its font-size, or adjacent ticks collide —
-  // at our 32px default histogram height that means exactly 2 ticks (0 and max), not 3+.
-  const maxTicksForHeight = Math.max(2, Math.min(5, Math.floor(height / 20)));
+  // own line-height needs ~18px of clearance, not just its font-size, or adjacent ticks collide.
+  const maxTicksForHeight = Math.max(2, Math.min(5, Math.floor(plotHeight / 18)));
   const yTicks = useMemo(
     () => niceYTicks(visibleMaxTotal, maxTicksForHeight),
     [visibleMaxTotal, maxTicksForHeight]
   );
   const niceMax = yTicks[yTicks.length - 1] || 0;
+
+  /** y (px, from the block's top) for a given y-axis value — shared by gridlines, y-tick labels,
+   *  and the bar-stacking math below so they can never drift apart. */
+  function yForValue(value: number): number {
+    return niceMax > 0 ? TOP_HEADROOM + plotHeight - (value / niceMax) * plotHeight : TOP_HEADROOM + plotHeight;
+  }
+  const baselineY = TOP_HEADROOM + plotHeight;
 
   const onLegendClick = (level: string, e: React.MouseEvent) => {
     // Shift-click a legend entry to filter by it — previously the legend only ever isolated/hid
@@ -263,17 +307,51 @@ export function VolumeHistogram({
     });
   };
 
-  // A handful of evenly-spaced x-axis tick labels (first/last/quartiles) so the chart reads as a
-  // real timeline instead of two bare endpoint labels. Computed before the early return below so
-  // hook order stays stable across renders.
+  // Width-aware x-axis ticks — one label roughly every X_TICK_TARGET_PX, first/last always
+  // included. Computed before the early return below so hook order stays stable across renders.
   const xTicks = useMemo(() => {
     if (bars.length === 0) {
       return [];
     }
     const n = bars.length;
-    const idxs = Array.from(new Set([0, Math.floor(n / 4), Math.floor(n / 2), Math.floor((3 * n) / 4), n - 1]));
-    return idxs.map((i) => ({ time: bars[i].time, label: dateTime(bars[i].time).format('MMM D, HH:mm') }));
-  }, [bars]);
+    const approxCount = containerWidth > 0 ? Math.max(2, Math.floor(containerWidth / X_TICK_TARGET_PX)) : 5;
+    const count = Math.min(n, approxCount);
+    // A constant index step (rather than rounding i/(count-1) * (n-1) per-tick) keeps both the
+    // time delta *and* the pixel gap between labels uniform — proportional rounding jitters
+    // between adjacent step sizes whenever (n-1) doesn't divide evenly by (count-1), which reads
+    // as "Jul 16, Aug 15, Oct 14, …" (30 then 60 then 30 days) instead of one consistent cadence.
+    const step = Math.max(1, Math.round(n / count));
+    const idxs: number[] = [];
+    for (let i = 0; i < n; i += step) {
+      idxs.push(i);
+    }
+    // Always label the last bucket (so the chart's right edge is dated), but only as an *added*
+    // tick when it falls a full step away from the previous one — otherwise replace that last
+    // regular tick instead, so the final two labels don't crowd/overlap each other.
+    const lastRegular = idxs[idxs.length - 1];
+    if (lastRegular !== n - 1) {
+      if (n - 1 - lastRegular < step / 2 && idxs.length > 1) {
+        idxs[idxs.length - 1] = n - 1;
+      } else {
+        idxs.push(n - 1);
+      }
+    }
+    // Day-or-coarser buckets (day/week/month/year interval modes) all land on the same
+    // wall-clock time of day, so "HH:mm" is either constant or meaningless across ticks — show
+    // the date instead. Sub-day buckets show "HH:mm", with the date as a secondary line only on
+    // the first tick, since the individual times already disambiguate.
+    const showDate = bucketMs >= 24 * 3_600_000;
+    return idxs.map((i, tickIdx) => ({
+      time: bars[i].time,
+      idx: i,
+      label: showDate ? dateTime(bars[i].time).format('MMM D') : dateTime(bars[i].time).format('HH:mm'),
+      dateLabel: !showDate && tickIdx === 0 ? dateTime(bars[i].time).format('MMM D, YYYY') : null,
+      // First tick left-anchored, last right-anchored, everything else centered — keeps every
+      // label's text inside the axis's own width instead of the end ticks overflowing into the
+      // y-axis gutter (first) or the legend (last).
+      anchor: tickIdx === 0 ? 'start' : i === n - 1 ? 'end' : 'center',
+    })) as Array<{ time: number; idx: number; label: string; dateLabel: string | null; anchor: 'start' | 'center' | 'end' }>;
+  }, [bars, containerWidth, bucketMs]);
 
   // A hovered bucket index is only meaningful against the `bars` array it was computed from.
   // Auto-refresh (or any new data prop) can reflow buckets under an unmoved cursor — the sliding
@@ -390,13 +468,13 @@ export function VolumeHistogram({
       return null;
     }
     const relY = clientY - svg.getBoundingClientRect().top;
-    let yOffset = height;
+    let yOffset = baselineY;
     for (const level of visibleLevels) {
       const count = bar.levels[level] ?? 0;
       if (!count) {
         continue;
       }
-      const rawH = niceMax > 0 ? (count / niceMax) * (height - 2) : 0;
+      const rawH = niceMax > 0 ? (count / niceMax) * plotHeight : 0;
       const barH = Math.max(rawH, MIN_SEGMENT_PX);
       yOffset -= barH;
       if (relY >= yOffset && relY <= yOffset + barH) {
@@ -442,6 +520,8 @@ export function VolumeHistogram({
   }
 
   const hasLegend = (colorMode === 'breakdown' || colorMode === 'severity') && allLevels.length > 0;
+  const usePxBars = containerWidth > 0;
+  const barPitch = usePxBars ? containerWidth / bars.length : 0;
 
   return (
     <div className={styles.wrapper}>
@@ -456,21 +536,18 @@ export function VolumeHistogram({
       )}
       {/* SVG bar chart, with a y-axis gutter to its left for scale reference */}
       <div className={styles.chartRow}>
-        <div className={styles.yAxis} style={{ height }}>
+        <div className={styles.yAxis} style={{ height: svgHeight }}>
           {[...yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              style={{ top: `${niceMax > 0 ? (1 - tick / niceMax) * 100 : 100}%` }}
-            >
+            <span key={tick} style={{ top: `${yForValue(tick)}px` }}>
               {formatCompact(tick)}
             </span>
           ))}
         </div>
-        <div className={styles.container} style={{ height }}>
+        <div className={styles.container} style={{ height: svgHeight }} ref={containerRef}>
         <svg
           ref={svgRef}
           width="100%"
-          height={height}
+          height={svgHeight}
           className={`${styles.svg} ${onSelectRange ? styles.svgZoomable : ''}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -481,35 +558,50 @@ export function VolumeHistogram({
             setHovered(null);
           }}
         >
-          {/* One gridline per round-number y-axis tick, so bars visually line up with the scale
-              they're actually plotted against (niceMax), not an arbitrary 3-line split. */}
+          {/* One horizontal gridline per round-number y-axis tick, so bars visually line up with
+              the scale they're actually plotted against (niceMax), not an arbitrary split. */}
           {yTicks.map((tick) => (
             <line
               key={tick}
               x1="0%"
               x2="100%"
-              y1={niceMax > 0 ? height - (tick / niceMax) * height : height}
-              y2={niceMax > 0 ? height - (tick / niceMax) * height : height}
+              y1={yForValue(tick)}
+              y2={yForValue(tick)}
               className={styles.gridline}
             />
           ))}
+
+          {/* Light vertical gridlines under each x-axis tick. */}
+          {xTicks.map((tick) => (
+            <line
+              key={`v-${tick.idx}`}
+              x1={`${(tick.idx / bars.length) * 100}%`}
+              x2={`${(tick.idx / bars.length) * 100}%`}
+              y1={TOP_HEADROOM}
+              y2={baselineY}
+              className={styles.gridline}
+            />
+          ))}
+
+          {/* Y-axis domain line — the solid left edge of the plot area. */}
+          <line x1={0} x2={0} y1={TOP_HEADROOM} y2={baselineY} className={styles.domainLine} />
 
           {/* Hover highlight band — sits behind bars, hidden during drag */}
           {hovered !== null && !isDragging && (
             <rect
               x={`${(hovered.index / bars.length) * 100}%`}
-              y={0}
+              y={TOP_HEADROOM}
               width={`${(1 / bars.length) * 100}%`}
-              height={height}
+              height={plotHeight}
               className={styles.highlightBand}
               style={{ pointerEvents: 'none' }}
             />
           )}
 
           {bars.map((d, i) => {
-            const x = (i / bars.length) * 100;
-            const w = (1 / bars.length) * 100 - 0.15;
-            let yOffset = height;
+            const x = usePxBars ? i * barPitch : (i / bars.length) * 100;
+            const w = usePxBars ? Math.max(1, barPitch - 1) : (1 / bars.length) * 100 - 0.15;
+            let yOffset = baselineY;
 
             return (
               <g key={d.time}>
@@ -518,7 +610,7 @@ export function VolumeHistogram({
                   if (!count) {
                     return null;
                   }
-                  const rawH = niceMax > 0 ? (count / niceMax) * (height - 2) : 0;
+                  const rawH = niceMax > 0 ? (count / niceMax) * plotHeight : 0;
                   // Any non-zero segment gets floored to MIN_SEGMENT_PX so a handful of errors
                   // stacked against tens of thousands of info logs still render as a visible
                   // sliver instead of rounding to a sub-pixel — and disappearing — segment.
@@ -528,15 +620,17 @@ export function VolumeHistogram({
                   const barH = Math.max(rawH, MIN_SEGMENT_PX);
                   yOffset -= barH;
                   const color = colorMap[level] ?? OTHER_COLOR;
+                  const dimmed = hoveredLevel !== null && level !== hoveredLevel;
                   return (
                     <rect
                       key={level}
-                      x={`${x}%`}
+                      x={usePxBars ? x : `${x}%`}
                       y={yOffset}
-                      width={`${w}%`}
+                      width={usePxBars ? w : `${w}%`}
                       height={barH}
                       fill={color}
-                      opacity={1}
+                      opacity={dimmed ? 0.25 : 1}
+                      className={styles.bar}
                     />
                   );
                 })}
@@ -547,12 +641,10 @@ export function VolumeHistogram({
           <rect
             ref={selectionRef}
             x="0%"
-            y={0}
+            y={TOP_HEADROOM}
             width="0%"
-            height={height}
-            fill="rgba(255,255,255,0.15)"
-            stroke="rgba(255,255,255,0.5)"
-            strokeWidth={1}
+            height={plotHeight}
+            className={styles.selectionRect}
             display="none"
             style={{ pointerEvents: 'none' }}
           />
@@ -560,13 +652,23 @@ export function VolumeHistogram({
         </div>
       </div>
 
-      {/* x-axis ticks — evenly spaced reference points across the selected time range, offset by
+      {/* x-axis ticks — width-aware reference points across the selected time range, offset by
           the same gutter width as the y-axis so they stay aligned under the bars. */}
       <div className={styles.axisRow}>
         <div className={styles.yAxisSpacer} />
         <div className={styles.axis}>
           {xTicks.map((tick) => (
-            <span key={tick.time}>{tick.label}</span>
+            <span
+              key={tick.time}
+              className={styles.axisTick}
+              style={{
+                left: `${(tick.idx / bars.length) * 100}%`,
+                transform: `translateX(${tick.anchor === 'start' ? '0' : tick.anchor === 'end' ? '-100%' : '-50%'})`,
+              }}
+            >
+              {tick.dateLabel && <span className={styles.axisTickDate}>{tick.dateLabel}</span>}
+              {tick.label}
+            </span>
           ))}
         </div>
       </div>
@@ -575,7 +677,7 @@ export function VolumeHistogram({
       {/* Legend — severity mode and field-breakdown mode both benefit from it; 'single' has
           only one color so a legend would add nothing (color-not-only is still satisfied via
           the numeric tooltip, which never depends on color alone). Click a series to isolate it,
-          ctrl/cmd-click to toggle just that one. */}
+          ctrl/cmd-click to toggle just that one; hover dims every other series' bars. */}
       {hasLegend && (
         <div className={styles.legend}>
           {allLevels.map((level) => {
@@ -585,6 +687,8 @@ export function VolumeHistogram({
                 key={level}
                 className={cx(styles.legendItem, isHidden && styles.legendItemHidden)}
                 onClick={(e) => onLegendClick(level, e)}
+                onMouseEnter={() => setHoveredLevel(level)}
+                onMouseLeave={() => setHoveredLevel((prev) => (prev === level ? null : prev))}
                 // Level name first — the narrower legend column (see styles.legend) truncates
                 // longer values more readily now, so the full value needs to be recoverable on
                 // hover, not just the click-behavior hint that used to be the whole tooltip.
@@ -596,10 +700,12 @@ export function VolumeHistogram({
                     : 'Click to isolate, ctrl/cmd-click to toggle'
                 }`}
               >
-                <span
-                  className={styles.legendSwatch}
-                  style={{ background: colorMap[level] ?? OTHER_COLOR }}
-                />
+                <span className={styles.legendSwatchSlot}>
+                  <span
+                    className={styles.legendSwatch}
+                    style={{ background: colorMap[level] ?? OTHER_COLOR }}
+                  />
+                </span>
                 <span className={styles.legendLabel}>{level || '(empty)'}</span>
               </button>
             );
@@ -739,7 +845,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 2px;
     flex: 1;
     min-width: 0;
   `,
@@ -756,37 +861,30 @@ const getStyles = (theme: GrafanaTheme2) => ({
   chartRow: css`
     display: flex;
     align-items: stretch;
-    gap: ${theme.spacing(0.5)};
   `,
   // Fixed width (not content-sized: children below are position:absolute, out of flow, so an
   // "auto" width here would just collapse to 0). Sized for the widest label formatCompact can
-  // realistically produce ("999.9 K", "1.5 M", …) — the old 36px only fit up to 3 plain digits
-  // and let anything wider (thousands/millions abbreviations) overflow past the column's left
-  // edge instead of just wrapping/clipping inside it. yAxisSpacer must match exactly so the axis
-  // row below stays aligned with the bars above it (a stray 2px gap here used to throw that off).
+  // realistically produce ("999.9 K", "1.5 M", …) plus a deliberate gap before the plot area —
+  // labels sitting nearly flush against the axis line reads as cramped, so this pads it out.
+  // yAxisSpacer must match exactly so the axis row below stays aligned with the bars above it.
   yAxis: css`
     position: relative;
-    width: 52px;
+    width: 56px;
     flex-shrink: 0;
     text-align: right;
-    font-size: 12px;
+    padding-right: ${theme.spacing(1.5)};
+    font-size: 11px;
     color: ${theme.colors.text.disabled};
     font-variant-numeric: tabular-nums;
     & > span {
       position: absolute;
-      right: 0;
+      right: ${theme.spacing(1.5)};
       transform: translateY(-50%);
       white-space: nowrap;
     }
-    & > span:first-of-type {
-      transform: translateY(0);
-    }
-    & > span:last-of-type {
-      transform: translateY(-100%);
-    }
   `,
   yAxisSpacer: css`
-    width: 52px;
+    width: 56px;
     flex-shrink: 0;
   `,
   container: css`
@@ -802,38 +900,60 @@ const getStyles = (theme: GrafanaTheme2) => ({
     stroke-width: 1;
     shape-rendering: crispEdges;
   `,
+  domainLine: css`
+    stroke: ${theme.colors.border.medium};
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+  `,
   highlightBand: css`
     fill: ${theme.colors.action.hover};
+  `,
+  bar: css`
+    transition: opacity 80ms ease;
+  `,
+  selectionRect: css`
+    fill: ${theme.colors.primary.transparent};
+    stroke: ${theme.colors.primary.border};
+    stroke-width: 1;
   `,
   svgZoomable: css`
     cursor: crosshair;
     user-select: none;
   `,
+  // No border — sits flush next to the chart, separated only by whitespace.
   legend: css`
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
-    gap: ${theme.spacing(0.5)};
-    width: 140px;
+    align-self: flex-start;
+    width: 200px;
+    max-width: 30%;
     max-height: 100%;
     overflow-y: auto;
-    padding: 2px ${theme.spacing(1)};
-    border-left: 1px solid ${theme.colors.border.weak};
+    padding: ${theme.spacing(1.25)} ${theme.spacing(1)} ${theme.spacing(1.25)} 0;
   `,
   axisRow: css`
     display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
+    align-items: flex-start;
   `,
   axis: css`
-    display: flex;
-    justify-content: space-between;
+    position: relative;
     flex: 1;
     min-width: 0;
-    padding: 0 2px;
-    font-size: 12px;
+    height: ${X_AXIS_BAND}px;
+    font-size: 11px;
     color: ${theme.colors.text.disabled};
     font-variant-numeric: tabular-nums;
+  `,
+  axisTick: css`
+    position: absolute;
+    top: ${theme.spacing(0.5)};
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap;
+  `,
+  axisTickDate: css`
+    font-size: 11px;
   `,
   legendItem: css`
     display: flex;
@@ -842,7 +962,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 1px ${theme.spacing(0.5)};
+    padding: 2px 0;
     border-radius: ${theme.shape.radius.default};
     text-align: left;
     &:hover { background: ${theme.colors.action.hover}; }
@@ -850,15 +970,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
   legendItemHidden: css`
     opacity: 0.4;
   `,
+  legendSwatchSlot: css`
+    width: 16px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  `,
   legendSwatch: css`
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     flex-shrink: 0;
   `,
   legendLabel: css`
-    font-size: 13px;
-    color: ${theme.colors.text.secondary};
+    font-size: 12px;
+    color: ${theme.colors.text.primary};
     flex: 1;
     min-width: 0;
     overflow: hidden;

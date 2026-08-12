@@ -7,12 +7,16 @@ import React, { useMemo } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Modal, useStyles2 } from '@grafana/ui';
-import { LogRow } from '../types';
+import { LogRow, SourceConfig } from '../types';
 import { formatTimestamp } from './LogsTable';
 import { CORE_ALIAS } from '../sql/queryBuilder';
 
 interface CompareLogsModalProps {
   rows: LogRow[];
+  /** Needed to find the timestamp value on a row: a hydrated (full-projection) row no longer
+   *  carries CORE_ALIAS.timestamp — see H2 in the audit plan — only its real mapped column name,
+   *  which only `config.columns.timestamp` tells us. */
+  config: SourceConfig;
   onDismiss: () => void;
 }
 
@@ -23,8 +27,15 @@ function cellText(v: unknown): string {
   return typeof v === 'object' ? JSON.stringify(v) : String(v);
 }
 
-export function CompareLogsModal({ rows, onDismiss }: CompareLogsModalProps) {
+/** Reads a row's timestamp value regardless of which projection produced it — grid rows carry
+ *  CORE_ALIAS.timestamp, hydrated (SELECT *) rows only carry the real mapped column. */
+function timestampOf(row: LogRow, timestampCol: string | undefined): unknown {
+  return row[CORE_ALIAS.timestamp] ?? (timestampCol ? row[timestampCol] : undefined);
+}
+
+export function CompareLogsModal({ rows, config, onDismiss }: CompareLogsModalProps) {
   const styles = useStyles2(getStyles);
+  const timestampCol = config.columns.timestamp;
 
   const fieldKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -37,15 +48,17 @@ export function CompareLogsModal({ rows, onDismiss }: CompareLogsModalProps) {
     }
     // Timestamp first, then the rest alphabetically — a stable, readable order.
     return [...keys].sort((a, b) => {
-      if (a === CORE_ALIAS.timestamp) {
+      const aIsTimestamp = a === CORE_ALIAS.timestamp || a === timestampCol;
+      const bIsTimestamp = b === CORE_ALIAS.timestamp || b === timestampCol;
+      if (aIsTimestamp) {
         return -1;
       }
-      if (b === CORE_ALIAS.timestamp) {
+      if (bIsTimestamp) {
         return 1;
       }
       return a.localeCompare(b);
     });
-  }, [rows]);
+  }, [rows, timestampCol]);
 
   return (
     <Modal title={`Compare ${rows.length} logs`} isOpen onDismiss={onDismiss}>
@@ -56,7 +69,7 @@ export function CompareLogsModal({ rows, onDismiss }: CompareLogsModalProps) {
               <th className={styles.fieldHeader}>Field</th>
               {rows.map((row, i) => (
                 <th key={i} className={styles.rowHeader}>
-                  {formatTimestamp(row[CORE_ALIAS.timestamp]) || `Log ${i + 1}`}
+                  {formatTimestamp(timestampOf(row, timestampCol)) || `Log ${i + 1}`}
                 </th>
               ))}
             </tr>

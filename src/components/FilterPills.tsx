@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { useStyles2, Icon, Portal } from '@grafana/ui';
@@ -40,11 +40,15 @@ function pillText(f: FilterPill): { notPrefix: boolean; fieldPart: string | null
   };
 }
 
+interface OpenMenu {
+  id: string;
+  rect: DOMRect;
+}
+
 export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps) {
   const styles = useStyles2(getStyles);
-  const [menuForId, setMenuForId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const pillRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [editing, setEditing] = useState<OpenMenu | null>(null);
 
   if (filters.length === 0) {
     return null;
@@ -62,9 +66,6 @@ export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps)
         return (
           <span
             key={f.id}
-            ref={(el) => {
-              pillRefs.current[f.id] = el;
-            }}
             className={cx(
               styles.pill,
               negated && styles.pillNegated,
@@ -72,7 +73,10 @@ export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps)
             )}
             title={filterLabel(f)}
           >
-            <button className={styles.pillBody} onClick={() => setMenuForId(f.id)}>
+            <button
+              className={styles.pillBody}
+              onClick={(e) => setMenu({ id: f.id, rect: e.currentTarget.getBoundingClientRect() })}
+            >
               {notPrefix && <span className={styles.notPart}>NOT </span>}
               {fieldPart && (
                 <span className={negated ? undefined : styles.fieldPart}>{fieldPart}</span>
@@ -87,41 +91,39 @@ export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps)
               <Icon name="times" size="xs" />
             </button>
 
-            {menuForId === f.id && (
+            {menu?.id === f.id && (
               <FilterPillMenu
-                anchorRef={pillRefs}
-                pillId={f.id}
+                anchorRect={menu.rect}
                 pill={f}
-                onClose={() => setMenuForId(null)}
+                onClose={() => setMenu(null)}
                 onEdit={() => {
-                  setMenuForId(null);
-                  setEditingId(f.id);
+                  setEditing(menu);
+                  setMenu(null);
                 }}
                 onToggleNegate={() => {
                   onChange(updateFilter(filters, f.id, negateFilter(f)));
-                  setMenuForId(null);
+                  setMenu(null);
                 }}
                 onToggleDisabled={() => {
                   onChange(toggleDisabled(filters, f.id));
-                  setMenuForId(null);
+                  setMenu(null);
                 }}
                 onDelete={() => {
                   onRemove(f.id);
-                  setMenuForId(null);
+                  setMenu(null);
                 }}
               />
             )}
 
-            {editingId === f.id && (
+            {editing?.id === f.id && (
               <FilterPillEditPopover
-                anchorRef={pillRefs}
-                pillId={f.id}
+                anchorRect={editing.rect}
                 pill={f}
                 loadValues={loadValues}
-                onCancel={() => setEditingId(null)}
+                onCancel={() => setEditing(null)}
                 onSubmit={(patched) => {
                   onChange(updateFilter(filters, f.id, patched));
-                  setEditingId(null);
+                  setEditing(null);
                 }}
               />
             )}
@@ -140,11 +142,11 @@ export function FilterPills({ filters, onChange, loadValues }: FilterPillsProps)
 // ── Context menu ─────────────────────────────────────────────────────────────
 
 interface FilterPillMenuProps {
-  /** Ref map populated by FilterPills' pill spans, keyed by pill id — read in a layout effect
-   *  below (never during render, which would make the render impure/unmemoizable) to position
-   *  this popover against the pill it belongs to. */
-  anchorRef: React.RefObject<Record<string, HTMLElement | null>>;
-  pillId: string;
+  /** Bounding rect of the pill button, captured at click time — see FilterPills' onClick. Reading
+   *  the rect synchronously up front (rather than chasing a ref in a layout effect after mount)
+   *  sidesteps React re-attaching callback refs mid-commit, which previously left this popover
+   *  reading an unset ref and rendering at the viewport origin (0,0). */
+  anchorRect: DOMRect;
   pill: FilterPill;
   onClose: () => void;
   onEdit: () => void;
@@ -153,17 +155,16 @@ interface FilterPillMenuProps {
   onDelete: () => void;
 }
 
-function FilterPillMenu({ anchorRef, pillId, pill, onClose, onEdit, onToggleNegate, onToggleDisabled, onDelete }: FilterPillMenuProps) {
+const MENU_HEIGHT_ESTIMATE = 180;
+
+function FilterPillMenu({ anchorRect, pill, onClose, onEdit, onToggleNegate, onToggleDisabled, onDelete }: FilterPillMenuProps) {
   const styles = useStyles2(getStyles);
   const negated = NEGATED_OPS.has(pill.op);
-  // Positioned after mount, not during render — the anchor pill's ref is only guaranteed
-  // populated by the time this popover's own effects run (it was attached by a sibling's callback
-  // ref in an earlier commit), and reading ref.current during render is unsafe regardless.
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  useLayoutEffect(() => {
-    const rect = anchorRef.current?.[pillId]?.getBoundingClientRect();
-    setPos({ top: (rect?.bottom ?? 0) + 6, left: rect?.left ?? 0 });
-  }, [anchorRef, pillId]);
+  const flipUp = anchorRect.bottom + 6 + MENU_HEIGHT_ESTIMATE > window.innerHeight;
+  const pos = {
+    top: flipUp ? Math.max(8, anchorRect.top - 6 - MENU_HEIGHT_ESTIMATE) : anchorRect.bottom + 6,
+    left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - 220 - 8)),
+  };
 
   return (
     <Portal>
@@ -193,9 +194,8 @@ function FilterPillMenu({ anchorRef, pillId, pill, onClose, onEdit, onToggleNega
 // ── Edit popover ──────────────────────────────────────────────────────────────
 
 interface FilterPillEditPopoverProps {
-  /** Same anchorRef/pillId pattern as FilterPillMenu — see its doc comment for why. */
-  anchorRef: React.RefObject<Record<string, HTMLElement | null>>;
-  pillId: string;
+  /** Same anchorRect pattern as FilterPillMenu — see its doc comment for why. */
+  anchorRect: DOMRect;
   pill: FilterPill;
   loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
   onCancel: () => void;
@@ -204,16 +204,12 @@ interface FilterPillEditPopoverProps {
 
 const EDIT_PANEL_W = 760;
 
-function FilterPillEditPopover({ anchorRef, pillId, pill, loadValues, onCancel, onSubmit }: FilterPillEditPopoverProps) {
+function FilterPillEditPopover({ anchorRect, pill, loadValues, onCancel, onSubmit }: FilterPillEditPopoverProps) {
   const styles = useStyles2(getStyles);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  useLayoutEffect(() => {
-    const rect = anchorRef.current?.[pillId]?.getBoundingClientRect();
-    setPos({
-      top: (rect?.bottom ?? 0) + 6,
-      left: Math.max(8, Math.min(rect?.left ?? 0, window.innerWidth - EDIT_PANEL_W - 8)),
-    });
-  }, [anchorRef, pillId]);
+  const pos = {
+    top: anchorRect.bottom + 6,
+    left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - EDIT_PANEL_W - 8)),
+  };
 
   const stop = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
 

@@ -5,6 +5,7 @@ import { Icon, useStyles2 } from '@grafana/ui';
 import { BreakdownSel } from '../../types';
 import { useFields } from '../FieldsContext';
 import { SourceConfigContext } from '../App/App';
+import { getToolbarButtonStyles } from './_toolbarButton';
 
 interface Props {
   value: BreakdownSel;
@@ -25,6 +26,7 @@ function triggerLabel(sel: BreakdownSel): string {
 
 export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
   const styles = useStyles2(getStyles);
+  const toolbarStyles = useStyles2(getToolbarButtonStyles);
   const { fields, loading } = useFields();
   const config = useContext(SourceConfigContext);
   const [open, setOpen] = useState(false);
@@ -76,11 +78,10 @@ export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
   const activeFieldId = value.kind === 'field' ? value.field.id : null;
 
   return (
-    <div className={styles.wrapper} ref={wrapperRef}>
-      <button className={styles.trigger} onClick={() => setOpen((v) => !v)}>
-        <Icon name={'chart-bar' as any} size="sm" />
+    <div className={toolbarStyles.wrapper} ref={wrapperRef}>
+      <button className={toolbarStyles.trigger} onClick={() => setOpen((v) => !v)}>
         <span className={styles.triggerLabel}>{triggerLabel(value)}</span>
-        <Icon name={open ? 'angle-up' : 'angle-down'} size="sm" />
+        <Icon name={open ? 'angle-up' : 'angle-down'} size="md" />
       </button>
 
       {open && (
@@ -155,26 +156,6 @@ export function BreakdownPicker({ value, onChange, hasSeverity }: Props) {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  wrapper: css`
-    position: relative;
-    flex-shrink: 0;
-  `,
-  trigger: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    cursor: pointer;
-    color: ${theme.colors.text.primary};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    max-width: 220px;
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
-  `,
   triggerLabel: css`
     overflow: hidden;
     text-overflow: ellipsis;

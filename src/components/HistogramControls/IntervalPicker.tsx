@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { css } from '@emotion/css';
-import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Icon, useStyles2 } from '@grafana/ui';
+import { useStyles2, Icon } from '@grafana/ui';
+import { TimeRange } from '@grafana/data';
 import { IntervalMode } from '../../types';
 import { estimateBucketCount } from '../VolumeHistogram';
+import { getToolbarButtonStyles } from './_toolbarButton';
 
 interface Props {
   value: IntervalMode;
@@ -35,7 +35,7 @@ function triggerLabel(mode: IntervalMode): string {
 }
 
 export function IntervalPicker({ value, onChange, timeRange }: Props) {
-  const styles = useStyles2(getStyles);
+  const styles = useStyles2(getToolbarButtonStyles);
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -59,9 +59,8 @@ export function IntervalPicker({ value, onChange, timeRange }: Props) {
   return (
     <div className={styles.wrapper} ref={wrapperRef}>
       <button className={styles.trigger} onClick={() => setOpen((v) => !v)}>
-        <Icon name="clock-nine" size="sm" />
         <span>{triggerLabel(value)}</span>
-        <Icon name={open ? 'angle-up' : 'angle-down'} size="sm" />
+        <Icon name={open ? 'angle-up' : 'angle-down'} size="md" />
       </button>
 
       {open && (
@@ -91,78 +90,3 @@ export function IntervalPicker({ value, onChange, timeRange }: Props) {
     </div>
   );
 }
-
-const getStyles = (theme: GrafanaTheme2) => ({
-  wrapper: css`
-    position: relative;
-    flex-shrink: 0;
-  `,
-  trigger: css`
-    display: flex;
-    align-items: center;
-    gap: ${theme.spacing(0.5)};
-    padding: ${theme.spacing(0.5)} ${theme.spacing(1)};
-    background: ${theme.colors.background.secondary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    cursor: pointer;
-    color: ${theme.colors.text.primary};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    white-space: nowrap;
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
-  `,
-  dropdown: css`
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 200px;
-    background: ${theme.colors.background.primary};
-    border: 1px solid ${theme.colors.border.medium};
-    border-radius: ${theme.shape.radius.default};
-    box-shadow: ${theme.shadows.z2};
-    z-index: 200;
-    overflow: hidden;
-  `,
-  menuHeader: css`
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1.5)};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    font-weight: ${theme.typography.fontWeightMedium};
-    color: ${theme.colors.text.primary};
-    border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  item: css`
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1.5)};
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: ${theme.colors.text.primary};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    text-align: left;
-    &:hover {
-      background: ${theme.colors.action.hover};
-    }
-  `,
-  itemActive: css`
-    color: ${theme.colors.primary.text};
-  `,
-  itemDisabled: css`
-    opacity: 0.4;
-    cursor: not-allowed;
-    &:hover {
-      background: transparent;
-    }
-  `,
-  itemCheck: css`
-    width: 16px;
-    margin-right: ${theme.spacing(0.5)};
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    color: ${theme.colors.primary.text};
-  `,
-});

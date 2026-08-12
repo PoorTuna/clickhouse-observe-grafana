@@ -1,9 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Icon, useStyles2, Portal } from '@grafana/ui';
+import { Icon, useStyles2, useTheme2, Portal } from '@grafana/ui';
 import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
+import { fieldTypeColor } from './fieldTypeColors';
 import { FieldStatsPopover } from './FieldStatsPopover';
 import { FilterPill, LogsQueryState } from '../../types';
 import { makeFilter } from '../../sql/filters';
@@ -27,6 +28,7 @@ export function FieldItem({
   onAddFilter,
 }: FieldItemProps) {
   const styles = useStyles2(getStyles);
+  const theme = useTheme2();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
   const rowRef = useRef<HTMLDivElement>(null);
@@ -66,7 +68,12 @@ export function FieldItem({
           e.dataTransfer.effectAllowed = 'copy';
         }}
       >
-        <Icon name={icon as any} size="xs" className={styles.typeIcon} />
+        <Icon
+          name={icon as any}
+          size="xs"
+          className={styles.typeIcon}
+          style={{ color: fieldTypeColor(theme, field.type) }}
+        />
         <span className={`${styles.name} field-item-name`}>{field.displayName}</span>
         <div className={`${styles.actions} field-item-actions`}>
           <button
@@ -163,7 +170,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   typeIcon: css`
     flex-shrink: 0;
-    color: ${theme.colors.text.secondary};
   `,
   name: css`
     flex: 1;

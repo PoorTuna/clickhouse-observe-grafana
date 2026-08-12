@@ -1,14 +1,17 @@
 /**
  * Volume-histogram panel for LogsExplorer's results pane: interval/breakdown pickers, the chart
- * itself (or an empty/loading placeholder), and the "N documents / interval: X" meta line.
+ * itself (or an empty/loading placeholder), and the "N rows / interval: X" meta line.
  * Split out of LogsExplorer.tsx purely to keep that page's file size down — no behavior change,
  * same props the inline block already closed over. Renders nothing when `hasTime` is false (no
  * timestamp column mapped — same gate the inline block used at its call site).
+ *
+ * Panel is framed with a top/bottom rule (not a boxed card), generously padded, with the meta
+ * caption centered under the chart rather than crammed into the toolbar row.
  */
 import React from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { useStyles2 } from '@grafana/ui';
+import { IconButton, useStyles2 } from '@grafana/ui';
 import { BreakdownSel, IntervalMode, VolumeDataPoint } from '../types';
 import { VolumeHistogram, ResolvedInterval, HistogramColorMode } from './VolumeHistogram';
 import { IntervalPicker } from './HistogramControls/IntervalPicker';
@@ -28,6 +31,10 @@ interface LogsHistogramPanelProps {
   resolvedInterval: ResolvedInterval;
   onSelectRange: (fromMs: number, toMs: number) => void;
   onBreakdownFilter: (value: string, op: '=' | '!=') => void;
+  /** Collapses the chart down to just the toolbar row (interval/breakdown pickers stay reachable)
+   *  without unmounting them, so the query state they hold isn't lost while collapsed. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 function colorModeFor(breakdown: BreakdownSel): HistogramColorMode {
@@ -54,6 +61,8 @@ export function LogsHistogramPanel({
   resolvedInterval,
   onSelectRange,
   onBreakdownFilter,
+  collapsed,
+  onToggleCollapsed,
 }: LogsHistogramPanelProps) {
   const styles = useStyles2(getStyles);
 
@@ -64,41 +73,50 @@ export function LogsHistogramPanel({
   return (
     <div className={styles.histogramPanel}>
       <div className={styles.histogramHeader}>
+        <IconButton
+          name={collapsed ? 'angle-down' : 'angle-up'}
+          size="sm"
+          tooltip={collapsed ? 'Show histogram' : 'Hide histogram'}
+          aria-expanded={!collapsed}
+          onClick={onToggleCollapsed}
+        />
         <IntervalPicker value={intervalMode} onChange={onIntervalModeChange} timeRange={timeRange} />
         <BreakdownPicker value={breakdown} onChange={onBreakdownChange} hasSeverity={hasSeverity} />
-        <div className={styles.histogramHeaderSpacer} />
-        {volumeData.length > 0 && (
-          <span className={styles.histogramMeta}>
-            {totalEvents.toLocaleString()} documents (count) &middot; interval: {resolvedInterval.label}
-          </span>
-        )}
       </div>
-      {volumeData.length > 0 ? (
-        <VolumeHistogram
-          data={volumeData}
-          timeRange={timeRange}
-          height={110}
-          loading={volLoading}
-          onSelectRange={onSelectRange}
-          onBreakdownFilter={onBreakdownFilter}
-          colorMode={colorModeFor(breakdown)}
-          bucketMs={resolvedInterval.intervalMs}
-        />
-      ) : (
-        <div className={styles.histogramEmpty}>{volLoading ? 'Loading…' : 'No events in selected time range'}</div>
-      )}
+      {!collapsed &&
+        (volumeData.length > 0 ? (
+          <>
+            <VolumeHistogram
+              data={volumeData}
+              timeRange={timeRange}
+              height={120}
+              loading={volLoading}
+              onSelectRange={onSelectRange}
+              onBreakdownFilter={onBreakdownFilter}
+              colorMode={colorModeFor(breakdown)}
+              bucketMs={resolvedInterval.intervalMs}
+            />
+            <span className={styles.histogramMeta}>
+              {totalEvents.toLocaleString()} rows (count) &middot; interval: {resolvedInterval.label}
+            </span>
+          </>
+        ) : (
+          <div className={styles.histogramEmpty}>{volLoading ? 'Loading…' : 'No events in selected time range'}</div>
+        ))}
     </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
   histogramPanel: css`
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    background: ${theme.colors.background.primary};
+    display: flex;
+    flex-direction: column;
+    padding: ${theme.spacing(1)};
+    border-top: 1px solid ${theme.colors.border.weak};
+    border-bottom: 1px solid ${theme.colors.border.weak};
   `,
   histogramEmpty: css`
-    height: 32px;
+    height: 120px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -109,16 +127,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: flex;
     align-items: center;
     gap: ${theme.spacing(1)};
-    padding: ${theme.spacing(0.75)} ${theme.spacing(1)};
-    border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  histogramHeaderSpacer: css`
-    flex: 1;
+    padding-bottom: ${theme.spacing(1)};
   `,
   histogramMeta: css`
-    font-size: 13px;
-    color: ${theme.colors.text.disabled};
+    font-size: 12px;
+    line-height: 16px;
+    text-align: center;
+    padding: 0 ${theme.spacing(1)};
+    color: ${theme.colors.text.secondary};
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   `,
 });

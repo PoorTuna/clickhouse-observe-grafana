@@ -303,6 +303,7 @@ export function LogsExplorer() {
   });
   const [showSqlInspect, setShowSqlInspect] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
+  const [histogramCollapsed, setHistogramCollapsed] = useState(false);
   // Multi-select for the "Compare" action — indices into `pageRows`. Cleared whenever the page
   // of rows changes (new query, sort, or pagination) since indices from a prior page are
   // meaningless against a new one.
@@ -404,7 +405,7 @@ export function LogsExplorer() {
     // setSelectedRow below re-points at it by the same key. Keep just that one entry; everything
     // else is dropped as before.
     setHydratedRows((prev) => {
-      const key = selectedRowRef.current ? logRowKey(selectedRowRef.current) : null;
+      const key = selectedRowRef.current ? logRowKey(selectedRowRef.current, config) : null;
       const surviving = key ? prev.get(key) : undefined;
       return surviving ? new Map([[key as string, surviving]]) : new Map();
     });
@@ -444,8 +445,8 @@ export function LogsExplorer() {
         if (!prev) {
           return prev;
         }
-        const key = logRowKey(prev);
-        return logRows.find((r) => logRowKey(r) === key) ?? null;
+        const key = logRowKey(prev, config);
+        return logRows.find((r) => logRowKey(r, config) === key) ?? null;
       });
     } catch (err) {
       if (runRef.current === runId) {
@@ -600,12 +601,12 @@ export function LogsExplorer() {
         setHydratedRows((prev) => {
           const next = new Map(prev);
           for (const r of fullRows) {
-            next.set(logRowKey(r), r);
+            next.set(logRowKey(r, config), r);
           }
           return next;
         });
         hydratedPagesRef.current.add(pageIndex);
-        return targetKey ? fullRows.some((r) => logRowKey(r) === targetKey) : true;
+        return targetKey ? fullRows.some((r) => logRowKey(r, config) === targetKey) : true;
       } catch (e) {
         // Leave the page unmarked as hydrated so the next drawer-open on this page retries,
         // rather than permanently degrading to summary-only after one transient failure.
@@ -630,7 +631,7 @@ export function LogsExplorer() {
       if (queryState.useRawSql || !config.datasourceUid) {
         return;
       }
-      const key = logRowKey(targetRow);
+      const key = logRowKey(targetRow, config);
       if (hydratedRowsRef.current.has(key) || hydratingRowKeysRef.current.has(key)) {
         return;
       }
@@ -677,7 +678,7 @@ export function LogsExplorer() {
         }
         setHydratedRows((prev) => {
           const next = new Map(prev);
-          next.set(logRowKey(fullRows[0]), fullRows[0]);
+          next.set(logRowKey(fullRows[0], config), fullRows[0]);
           return next;
         });
       } catch (e) {
@@ -955,8 +956,8 @@ export function LogsExplorer() {
     if (queryState.useRawSql) {
       return selectedRow;
     }
-    return hydratedRows.get(logRowKey(selectedRow));
-  }, [selectedRow, hydratedRows, queryState.useRawSql]);
+    return hydratedRows.get(logRowKey(selectedRow, config));
+  }, [selectedRow, hydratedRows, queryState.useRawSql, config]);
 
   return (
     <FieldsContext.Provider value={fieldsState}>
@@ -1123,6 +1124,8 @@ export function LogsExplorer() {
                   resolvedInterval={resolvedInterval}
                   onSelectRange={onHistogramSelectRange}
                   onBreakdownFilter={onHistogramBreakdownFilter}
+                  collapsed={histogramCollapsed}
+                  onToggleCollapsed={() => setHistogramCollapsed((v) => !v)}
                 />
                 <div className={styles.tableToolbar}>
                   {compareSelection.size >= 2 && (
@@ -1201,7 +1204,7 @@ export function LogsExplorer() {
                         if (!selectedRow) {
                           return;
                         }
-                        const key = logRowKey(selectedRow);
+                        const key = logRowKey(selectedRow, config);
                         hydratedRowsRef.current.delete(key);
                         hydratingRowKeysRef.current.delete(key);
                         setDetailError(null);
@@ -1239,7 +1242,8 @@ export function LogsExplorer() {
             rows={[...compareSelection]
               .sort((a, b) => a - b)
               .map((i) => pageRows[i])
-              .map((row) => hydratedRows.get(logRowKey(row)) ?? row)}
+              .map((row) => hydratedRows.get(logRowKey(row, config)) ?? row)}
+            config={config}
             onDismiss={() => setCompareOpen(false)}
           />
         )}
@@ -1325,6 +1329,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     position: relative;
     display: flex;
     flex-direction: column;
+    /* A touch lighter than the field sidebar (which stays on the page's canvas bg) — the tonal
+       split reads as a distinct panel without needing a border. */
+    background: ${theme.colors.background.primary};
   `,
   tableToolbar: css`
     display: flex;

@@ -10,6 +10,45 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.4.11] — 2026-08-12
+
+### Changed
+
+- Reworked the Logs Explorer histogram section: borderless toolbar buttons with a trailing chevron
+  only, panel framed with a top/bottom rule instead of a boxed card, meta caption centered under
+  the chart, wider y-axis gutter, px-accurate bar gaps, and a full vertical+horizontal gridline
+  layout.
+- Histogram legend now dims every non-hovered series' bars on hover.
+- Added a chart collapse toggle to the histogram toolbar — collapses the chart while keeping the
+  interval/breakdown pickers and their state.
+- The results pane (histogram + table) now sits on a subtly different background than the fields
+  sidebar, giving the two areas a clearer visual split.
+- Field-type icons in the sidebar are now color-coded by type (time/number/string/boolean/map/
+  json/etc.) instead of one flat gray, using Grafana's own visualization palette.
+- Histogram meta line now reads "rows" instead of "documents" — this is ClickHouse, not
+  Elasticsearch.
+
+### Fixed
+
+- **`SELECT *` was being double-selected.** The log-detail ("full") query aliased every mapped
+  column a second time on top of its own `SELECT *`, duplicating the fetch cost for no reason —
+  `logRowKey()` now reads either the grid's aliased shape or the full row's raw column names, so
+  the full projection no longer needs the redundant aliases.
+- **Auto-interval histogram bucketing collapsed to hairline bars on wide time ranges.** The
+  bucket-size step table topped out at 1 day, so a multi-year range still bucketed by day (hundreds
+  of near-empty bars) instead of scaling toward the ~60-bucket target; extended the step table out
+  to yearly steps.
+- **Histogram x-axis tick labels had inconsistent spacing** (and could duplicate/overlap into the
+  legend) — ticks were picked by rounding a proportional index per label, which jitters between
+  step sizes whenever the bucket count doesn't divide evenly; switched to a constant index step
+  with edge-aware label anchoring.
+- **Filter-pill context menu rendered at the viewport origin instead of under the clicked pill** —
+  it read the anchor element's position from a ref in a layout effect, but the ref's callback
+  identity changed every render and hadn't reattached yet on the mount that opened the menu. Now
+  captures the pill's bounding rect at click time instead.
+
+---
+
 ## [0.4.10] — 2026-08-09
 
 ### Fixed

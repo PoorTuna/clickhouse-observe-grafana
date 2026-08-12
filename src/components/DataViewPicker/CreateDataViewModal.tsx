@@ -369,22 +369,22 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     }));
   }
 
-  // Shared by the basic (timestamp+body) and advanced (full non-trace set) "Guess with AI"
-  // buttons — only the target field list and how the result is applied differ.
-  async function runAiGuess(targets: Array<keyof ColumnMapping>, applyBasicFields: boolean) {
+  // Single "Guess with AI" entry point — guesses every COL_FIELDS key (timestamp, body,
+  // severity, traceId, serviceName, spanAttributes) in one shot, so the button visible in the
+  // basic step is never weaker than the one that used to be hidden inside Advanced.
+  async function runAiGuess() {
     if (!aiCfg || aiBusy || tableColumns.length === 0) {
       return;
     }
     setAiBusy(true);
     setError('');
     try {
+      const targets = COL_FIELDS.map((f) => f.key);
       const guessed = await guessColumnMapping(aiCfg, { table: logsTable, columns: tableColumns, targets });
       setMapping((prev) => {
         const next = { ...prev, ...guessed };
-        if (applyBasicFields) {
-          setTimestampField(next.timestamp || NO_TIME_VALUE);
-          setBodyField(next.body || NO_BODY_VALUE);
-        }
+        setTimestampField(next.timestamp || NO_TIME_VALUE);
+        setBodyField(next.body || NO_BODY_VALUE);
         return next;
       });
     } catch (e) {
@@ -569,7 +569,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                     size="sm"
                     icon={aiBusy ? undefined : 'ai'}
                     disabled={aiBusy}
-                    onClick={() => runAiGuess(['timestamp', 'body'], true)}
+                    onClick={() => runAiGuess()}
                   >
                     {aiBusy ? (
                       <>
@@ -579,6 +579,9 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                       'Guess with AI'
                     )}
                   </Button>
+                  <span className={styles.aiGuessHint}>
+                    Fills timestamp, body, severity, trace ID, service name, and span attributes — including the fields under Advanced.
+                  </span>
                 </div>
               )}
 
@@ -635,12 +638,6 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                         setBodyField(updated.body || NO_BODY_VALUE);
                       }}
                       columnOptions={allColumnOptions}
-                      onAiGuess={
-                        aiOn
-                          ? () => runAiGuess(COL_FIELDS.map((f) => f.key), true)
-                          : undefined
-                      }
-                      aiBusy={aiBusy}
                     />
                   )}
 
@@ -782,6 +779,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   blockSpacing: css`
     margin-bottom: ${theme.spacing(1.5)};
+  `,
+  aiGuessHint: css`
+    margin-left: ${theme.spacing(1)};
+    color: ${theme.colors.text.secondary};
+    font-size: 0.8em;
   `,
   blockSpacingLg: css`
     margin-bottom: ${theme.spacing(2)};

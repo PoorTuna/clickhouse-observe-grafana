@@ -3,6 +3,7 @@ import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import {
   useStyles2,
+  useTheme2,
   Icon,
   IconButton,
   ClipboardButton,
@@ -23,6 +24,7 @@ import { CORE_ALIAS } from '../sql/queryBuilder';
 import { formatTimestamp } from './LogsTable';
 import { makeColumnKey, fieldToColumn } from './FieldSidebar/FieldSidebar';
 import { FIELD_TYPE_ICONS } from './FieldSidebar/fieldIcons';
+import { fieldTypeColor } from './FieldSidebar/fieldTypeColors';
 import { JsonTree, allContainerPaths } from './JsonTree';
 
 interface FlatAttrRow {
@@ -59,7 +61,11 @@ function flattenRowEntries(
       const leaves = flattenJson(parseJsonColumnValue(v));
       if (leaves.length > 0) {
         for (const leaf of leaves) {
-          flat.push({ key: `${k}.${leaf.key}`, value: leaf.value, sqlExpr: `${k}.${leaf.key}`, type: 'string' });
+          const sqlExpr = `${k}.${leaf.key}`;
+          // Resolve through discovered fields instead of hard-coding 'string' — a JSON leaf can
+          // be numeric/boolean/etc, and painting every leaf as 'string' made its type icon (and,
+          // now, its color) lie about what's actually in the column.
+          flat.push({ key: sqlExpr, value: leaf.value, sqlExpr, type: resolveType(sqlExpr) });
         }
         continue;
       }
@@ -176,6 +182,7 @@ export function LogDetailDrawer({
   navLabel,
 }: LogDetailDrawerProps) {
   const styles = useStyles2(getStyles);
+  const theme = useTheme2();
   const [searchAttr, setSearchAttr] = useState('');
   const [activeTab, setActiveTab] = useState<DrawerTab>('table');
   const [selectedOnly, setSelectedOnly] = useState(false);
@@ -325,7 +332,12 @@ export function LogDetailDrawer({
     return (
       <div key={field} className={styles.attrRow}>
         <span className={styles.attrKey} title={field}>
-          <Icon className={styles.attrTypeIcon} name={FIELD_TYPE_ICONS[type] as any} size="sm" />
+          <Icon
+            className={styles.attrTypeIcon}
+            name={FIELD_TYPE_ICONS[type] as any}
+            size="sm"
+            style={{ color: fieldTypeColor(theme, type) }}
+          />
           {field}
         </span>
         {traceHref ? (
@@ -669,7 +681,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   attrTypeIcon: css`
     flex-shrink: 0;
     margin-top: 3px;
-    color: ${theme.colors.text.secondary};
   `,
   attrValue: css`
     font-family: ${theme.typography.fontFamilyMonospace};

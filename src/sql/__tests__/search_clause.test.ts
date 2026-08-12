@@ -60,18 +60,20 @@ describe('buildWhereConditions — search clause', () => {
     expect(conds[1]).toContain(') AND (');
   });
 
-  // ── Parse error → legacy fallback (never throws) ─────────────────────────
+  // ── Parse error → propagates, no silent legacy fallback ──────────────────
+  // buildSearchClause used to swallow any KqlSyntaxError and quietly re-tokenize into an ANDed
+  // body ILIKE chain — a query that means something different from what was typed. It now lets
+  // the error propagate; callers (SearchBar.commit(), LogsExplorer's fetch effects) are
+  // responsible for catching it and showing the parse error instead of silently searching
+  // something else. See queryBuilder.ts's buildSearchClause doc comment.
 
-  it('malformed KQL: lone AND → falls back, does not throw', () => {
-    expect(() => conditions('AND')).not.toThrow();
-    // Legacy fallback searches body for the literal token
-    const conds = conditions('level:error AND');
-    // Should not throw; parser will either handle it or fall back
-    expect(conds.length).toBeGreaterThanOrEqual(1);
+  it('malformed KQL: lone AND → throws KqlSyntaxError', () => {
+    expect(() => conditions('AND')).toThrow();
+    expect(() => conditions('level:error AND')).toThrow();
   });
 
-  it('empty parens () → falls back or handles gracefully, does not throw', () => {
-    expect(() => conditions('()')).not.toThrow();
+  it('empty parens () → throws KqlSyntaxError', () => {
+    expect(() => conditions('()')).toThrow();
   });
 
   // ── Filters are also included ─────────────────────────────────────────────

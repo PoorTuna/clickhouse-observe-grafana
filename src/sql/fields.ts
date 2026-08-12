@@ -26,11 +26,17 @@ export interface FieldIndex {
   bySqlExpr: Map<string, FieldModel>;
   /** Keyed by lowercased name/displayName — catches a field typed by name in KQL/filter shorthand. */
   byName: Map<string, FieldModel>;
+  /** Keyed by lowercased displayName only (the source-column-prefixed form, e.g.
+   *  "ResourceAttributes.k8s.namespace.name") — unlike `byName`, this resolves Map fields too,
+   *  since a full displayName names its source column explicitly and isn't the "guess which Map
+   *  a bare key came from" case `byName` deliberately refuses for Map (see resolveField below). */
+  byDisplayName: Map<string, FieldModel>;
 }
 
 export function buildFieldIndex(fields: FieldModel[]): FieldIndex {
   const bySqlExpr = new Map<string, FieldModel>();
   const byName = new Map<string, FieldModel>();
+  const byDisplayName = new Map<string, FieldModel>();
   for (const field of fields) {
     bySqlExpr.set(field.sqlExpr, field);
     byName.set(field.name.toLowerCase(), field);
@@ -38,8 +44,11 @@ export function buildFieldIndex(fields: FieldModel[]): FieldIndex {
     if (!byName.has(dn)) {
       byName.set(dn, field);
     }
+    if (!byDisplayName.has(dn)) {
+      byDisplayName.set(dn, field);
+    }
   }
-  return { bySqlExpr, byName };
+  return { bySqlExpr, byName, byDisplayName };
 }
 
 function kindForField(field: FieldModel, config: SourceConfig): FieldKind {
@@ -69,14 +78,21 @@ export function resolveField(rawField: string, config: SourceConfig, index?: Fie
     if (bySqlExpr) {
       return { sqlExpr: bySqlExpr.sqlExpr, kind: kindForField(bySqlExpr, config) };
     }
+    // Full displayName match ("ResourceAttributes.http.method") — unlike a bare key, this names
+    // its source column explicitly, so it resolves for every source including Map. This is what
+    // autocomplete now inserts verbatim (see suggest.ts's fieldSuggestions), so accepting a
+    // suggestion always resolves back to the same field it showed.
+    const byDisplayName = index.byDisplayName.get(f);
+    if (byDisplayName) {
+      return { sqlExpr: byDisplayName.sqlExpr, kind: kindForField(byDisplayName, config) };
+    }
     const byName = index.byName.get(f);
-    // Map fields are deliberately excluded from name-based resolution — typing a bare/dotted
+    // Map fields are deliberately excluded from bare-name resolution — typing a bare/dotted
     // key ("http.method") used to resolve it by matching FieldModel.name, which reads as
     // shorthand syntax but is really just a coincidence of indexing. Explicit bracket syntax
-    // (Col['key'], handled below) or picking the field from autocomplete/sidebar (which now
-    // inserts the real sqlExpr, not the bare name — see suggest.ts) are the only ways to resolve
-    // a Map field. JSON/column fields keep name-based resolution — JSON's dotted sqlExpr already
-    // matches what a user would naturally type, so it's not a guess in the same sense.
+    // (Col['key'], handled below) or the full displayName (handled above) are the only ways to
+    // resolve a Map field. JSON/column fields keep name-based resolution — JSON's dotted sqlExpr
+    // already matches what a user would naturally type, so it's not a guess in the same sense.
     if (byName && byName.source !== 'map') {
       return { sqlExpr: byName.sqlExpr, kind: kindForField(byName, config) };
     }

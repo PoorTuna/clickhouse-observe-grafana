@@ -753,13 +753,26 @@ export function LogsExplorer() {
   };
 
   const logsLoadValues = useCallback(
-    (sqlExpr: string) =>
-      loadFieldValues(config, sqlExpr, {
+    (sqlExpr: string) => {
+      // queryState.search is normally already-validated (SearchBar only commits a query that
+      // parsed — see SearchBar.commit()), but a saved search or URL-restored query hasn't been
+      // re-validated yet. buildWhereConditions now throws KqlSyntaxError instead of silently
+      // degrading (see buildSearchClause), so this best-effort value lookup drops the search term
+      // rather than rejecting — a stale value list is harmless; an unhandled promise rejection on
+      // every keystroke of the value dropdown is not.
+      let conditions: string[];
+      try {
+        conditions = buildWhereConditions(config, queryState, fieldIndex);
+      } catch {
+        conditions = buildWhereConditions(config, { ...queryState, search: '' }, fieldIndex);
+      }
+      return loadFieldValues(config, sqlExpr, {
         table: config.logsTable,
-        conditions: buildWhereConditions(config, queryState, fieldIndex),
+        conditions,
         timeRange,
         cacheKey: JSON.stringify([queryState.search, queryState.filters]),
-      }),
+      });
+    },
     [config, queryState, timeRange, fieldIndex]
   );
 

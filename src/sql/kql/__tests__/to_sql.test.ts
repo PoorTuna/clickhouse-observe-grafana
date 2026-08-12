@@ -236,6 +236,15 @@ describe('kqlToSql', () => {
     expect(withoutIndex).not.toContain('LogAttributes');
   });
 
+  it('full source-prefixed displayName ("LogAttributes.http.method:GET") DOES resolve to the Map accessor', () => {
+    // Unlike the bare key above, a full displayName names its source column explicitly — this is
+    // what autocomplete now inserts verbatim (suggest.ts), so it must resolve back to the same
+    // field it displayed rather than being treated as an unknown direct column.
+    const result = kqlToSql(parseKql('LogAttributes.http.method:"GET"'), config, indexWithHttpMethod);
+    expect(result).toContain("LogAttributes['http.method']");
+    expect(result).toContain("= 'GET'");
+  });
+
   // ── Named field via mapped column — no alias resolution, no level vocab ───
   // (SeverityText is just an exact-kind field like any other mapped column;
   // severity synonym expansion was removed along with the hardcoded aliases.)

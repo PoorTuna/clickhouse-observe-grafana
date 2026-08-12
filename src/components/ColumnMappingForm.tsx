@@ -1,5 +1,5 @@
 import React, { ChangeEvent } from 'react';
-import { Button, Field, FieldSet, Input, Select, Spinner } from '@grafana/ui';
+import { Button, Field, FieldSet, Input, Select } from '@grafana/ui';
 import { SelectableValue } from '@grafana/data';
 import { ColumnMapping, OTEL_COLUMN_MAPPING } from '../types';
 import { COL_FIELDS } from '../columnFields';
@@ -17,11 +17,6 @@ interface ColumnMappingFormProps {
    * a plain text input. Omit to keep the old free-text behavior (e.g. AppConfig, which has no
    * live column list to offer). */
   columnOptions?: Array<SelectableValue<string>>;
-  /** When provided (and AI assist is configured/enabled), show a "Guess with AI" button that
-   * asks an LLM to fill this form's fields from the table's real columns. */
-  onAiGuess?: () => void;
-  /** True while an AI guess request is in flight — disables the button and shows a spinner. */
-  aiBusy?: boolean;
 }
 
 export function ColumnMappingForm({
@@ -30,8 +25,6 @@ export function ColumnMappingForm({
   onApplyOtelPreset,
   onClearMapping,
   columnOptions,
-  onAiGuess,
-  aiBusy,
 }: ColumnMappingFormProps) {
   const setField = (key: keyof ColumnMapping, v: string) => {
     onChange({ ...value, [key]: v });
@@ -39,19 +32,8 @@ export function ColumnMappingForm({
 
   return (
     <FieldSet label="Column Mapping">
-      {(onApplyOtelPreset || onClearMapping || onAiGuess) && (
+      {(onApplyOtelPreset || onClearMapping) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {onAiGuess && (
-            <Button variant="secondary" size="sm" icon={aiBusy ? undefined : 'ai'} onClick={onAiGuess} disabled={aiBusy}>
-              {aiBusy ? (
-                <>
-                  <Spinner inline size="sm" /> Guessing…
-                </>
-              ) : (
-                'Guess with AI'
-              )}
-            </Button>
-          )}
           {onApplyOtelPreset && (
             <Button variant="secondary" size="sm" onClick={onApplyOtelPreset}>
               Apply OTel preset

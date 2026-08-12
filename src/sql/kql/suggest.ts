@@ -13,6 +13,7 @@
 import { lex } from './_lexer';
 import { FieldModel } from '../fieldModel';
 import { FieldValue } from './_values';
+import { escapeKqlIdent } from './_escape';
 
 export type SuggestionType = 'field' | 'operator' | 'value' | 'conjunction';
 
@@ -102,10 +103,11 @@ export function getSuggestions(
   if (last.type === 'COLON' && prev?.type === 'IDENT') {
     const fieldName = prev.value;
     const sqlExpr = fieldSqlExpr(fieldName, fields);
+    const isNumeric = fieldTypeFor(fieldName, fields) === 'number';
     const valueCtx: ValueContext = { fieldName, sqlExpr, prefix: '', replaceStart: cursor, replaceEnd: cursor };
     const valueSugg = values
       .filter((v) => v.value !== '')
-      .map((v) => valueToSuggestion(v, cursor, cursor));
+      .map((v) => valueToSuggestion(v, cursor, cursor, isNumeric));
     return { suggestions: valueSugg, valueContext: valueCtx };
   }
 
@@ -118,11 +120,12 @@ export function getSuggestions(
     const prefix = last.value;
     const fieldName = prev2.value;
     const sqlExpr = fieldSqlExpr(fieldName, fields);
+    const isNumeric = fieldTypeFor(fieldName, fields) === 'number';
     const valueCtx: ValueContext = { fieldName, sqlExpr, prefix, replaceStart: last.start, replaceEnd: cursor };
     const lp = prefix.toLowerCase();
     const valueSugg = values
       .filter((v) => v.value !== '' && v.value.toLowerCase().includes(lp))
-      .map((v) => valueToSuggestion(v, last.start, cursor));
+      .map((v) => valueToSuggestion(v, last.start, cursor, isNumeric));
     return { suggestions: valueSugg, valueContext: valueCtx };
   }
 
@@ -212,16 +215,13 @@ function fieldSuggestions(
       // never reads like a standalone top-level column that was made up.
       text: f.displayName,
       description: f.type,
-      // Insert name + space — always the bare key, never the display prefix. What you
-      // type into a KQL field reference is the attribute key itself (resolved against the
-      // FieldIndex); inserting the prefixed display form would produce a field name that doesn't
-      // actually parse/resolve.
-      // Map fields are the one exception: resolveField no longer resolves a bare/dotted Map key
-      // by name (removed — silent wrong-column guessing), so picking one from this list must
-      // insert its real bracket-accessor sqlExpr (e.g. LogAttributes['http.method']) instead —
-      // the KQL lexer treats [, ], ' as ordinary IDENT characters, so this still lexes as one
-      // field token, and resolveField's Map-accessor passthrough resolves it directly.
-      insertText: (f.source === 'map' ? f.sqlExpr : f.name) + ' ',
+      // Insert exactly what's shown — the displayName, escaped so it round-trips through the
+      // lexer as one token (see _escape.ts). Previously this inserted the bare leaf key (or, for
+      // Map fields, the bracket-accessor sqlExpr) instead of the prefixed name the user typed and
+      // saw highlighted, silently deleting the "ResourceAttributes." / "Payload." prefix on
+      // accept. resolveField (fields.ts) now resolves a full displayName directly — including for
+      // Map fields, via its byDisplayName index — so no accessor rewrite is needed here anymore.
+      insertText: escapeKqlIdent(f.displayName) + ' ',
       replaceStart,
       replaceEnd,
     }));
@@ -260,14 +260,17 @@ function conjunctionSuggestions(cursor: number): Suggestion[] {
   }));
 }
 
-function valueToSuggestion(v: FieldValue, replaceStart: number, replaceEnd: number): Suggestion {
-  // Wrap in quotes + trailing space
-  const escaped = v.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+// Matches Kibana's value-suggestion quoting (kql_query_suggestion/value.ts): a string value is
+// always wrapped in quotes, a numeric value never is — and, same as Kibana, the *displayed*
+// suggestion text is the exact string that gets inserted (no separate unquoted label), so
+// accepting a suggestion never changes what was on screen.
+function valueToSuggestion(v: FieldValue, replaceStart: number, replaceEnd: number, isNumeric: boolean): Suggestion {
+  const inserted = isNumeric ? v.value : `"${v.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   return {
     type: 'value',
-    text: v.value,
+    text: inserted,
     description: String(v.count),
-    insertText: `"${escaped}" `,
+    insertText: `${inserted} `,
     replaceStart,
     replaceEnd,
   };
@@ -281,4 +284,12 @@ function fieldSqlExpr(fieldName: string, fields: FieldModel[]): string {
   const found =
     fields.find((f) => f.displayName === fieldName) ?? fields.find((f) => f.name === fieldName);
   return found?.sqlExpr ?? fieldName;
+}
+
+/** Look up a typed field's FieldType by the same name-resolution order fieldSqlExpr uses, so the
+ *  value-quoting decision (valueToSuggestion) matches whichever field the query will resolve to. */
+function fieldTypeFor(fieldName: string, fields: FieldModel[]): FieldModel['type'] | undefined {
+  const found =
+    fields.find((f) => f.displayName === fieldName) ?? fields.find((f) => f.name === fieldName);
+  return found?.type;
 }

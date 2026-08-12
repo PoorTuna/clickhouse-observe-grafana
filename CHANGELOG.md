@@ -10,6 +10,34 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.5.0] — 2026-08-12
+
+### Changed
+
+- Unified the two "Guess with AI" buttons in the data-view creation modal into one — it now fills
+  every mapped field (timestamp, body, severity, trace ID, service name, span attributes), not
+  just timestamp/body, so users who never open Advanced still get the full guess.
+- Search bar autocomplete now inserts exactly what the dropdown shows — accepting a suggestion for
+  a nested Map/JSON/Tuple field (e.g. `ResourceAttributes.k8s.namespace.name`) no longer silently
+  strips the source-column prefix down to the bare key.
+- Enter in the search bar always runs the search as typed; accepting a highlighted suggestion is
+  now Tab (or a mouse click) only, so Enter can no longer silently rewrite what was typed instead
+  of searching it.
+- Value suggestions now match Kibana's KQL behavior: quoted for string fields, unquoted for
+  numeric fields, and the dropdown label is exactly what gets inserted.
+- Field-type colors (time/number/string/boolean/map/json/etc.) now match the palette Kibana uses,
+  and are applied consistently across the fields sidebar, log detail drawer, and field-stats
+  popover — previously only the sidebar was color-coded, and the drawer's JSON-leaf rows were
+  always mislabeled as string type regardless of their real type.
+
+### Fixed
+
+- A KQL parse error in the search bar (e.g. from a stale saved search or URL-shared query) no
+  longer silently falls back to a different, unrelated free-text body search — it now surfaces the
+  parse error instead.
+
+---
+
 ## [0.4.11] — 2026-08-12
 
 ### Changed

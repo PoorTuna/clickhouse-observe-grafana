@@ -202,7 +202,11 @@ export function SearchBar({
       setHighlightIdx(-1);
       return;
     }
-    if ((e.key === 'Enter' || e.key === 'Tab') && highlightIdx >= 0) {
+    // Tab accepts the highlighted suggestion. Enter always runs the search as typed — it used to
+    // also accept a highlighted suggestion (after ArrowUp/ArrowDown), which silently rewrote the
+    // query text instead of searching it. Accepting a suggestion is still available via Tab or a
+    // mouse click on the dropdown item.
+    if (e.key === 'Tab' && highlightIdx >= 0) {
       e.preventDefault();
       applySuggestion(suggestions[highlightIdx]);
       return;

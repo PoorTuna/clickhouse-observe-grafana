@@ -1,9 +1,10 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Icon, useStyles2 } from '@grafana/ui';
+import { Icon, useStyles2, useTheme2 } from '@grafana/ui';
 import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
+import { fieldTypeColor } from './fieldTypeColors';
 import { buildWhereConditions } from '../../sql/queryBuilder';
 import { buildFieldIndex } from '../../sql/fields';
 import { buildValuesCacheKey, fetchFieldValuesWithTotal, valuesCache } from '../../sql/kql/_values';
@@ -51,6 +52,7 @@ export function FieldStatsPopover({
   isSelected,
 }: FieldStatsPopoverProps) {
   const styles = useStyles2(getStyles);
+  const theme = useTheme2();
   const config: SourceConfig = useContext(SourceConfigContext);
   // Same discovered-fields index every other WHERE-builder call site threads through (see
   // LogsExplorer's fieldIndex / hydratePage) — without it, a filter on a Map/JSON field falls
@@ -128,7 +130,12 @@ export function FieldStatsPopover({
       {/* Header: type icon + field name */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <Icon name={typeIcon as any} size="sm" className={styles.headerIcon} />
+          <Icon
+            name={typeIcon as any}
+            size="sm"
+            className={styles.headerIcon}
+            style={{ color: fieldTypeColor(theme, field.type) }}
+          />
           <span className={styles.fieldName}>{field.displayName}</span>
         </div>
         <button
@@ -219,7 +226,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   headerIcon: css`
     flex-shrink: 0;
-    color: ${theme.colors.text.secondary};
   `,
   fieldName: css`
     font-weight: ${theme.typography.fontWeightMedium};

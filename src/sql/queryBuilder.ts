@@ -267,46 +267,21 @@ function buildFilterClause(filter: FilterPill, config: SourceConfig, index?: Fie
  * Build the WHERE fragment for a search string, parsing it as KQL first.
  *
  * The live search bar (SearchBar.commit()) rejects an unparseable query before it ever reaches
- * here — same as Kibana, which never sends a query it couldn't parse client-side. The try/catch
- * below is a safety net for callers that don't go through that gate and can't afford to throw
- * mid-render: a restored saved search, a URL-shared query, or dashboard-panel export, any of which
- * may hold a query written before a syntax change like this one. Those fall back to a legacy
- * free-text body search rather than breaking the page.
+ * here — same as Kibana, which never sends a query it couldn't parse client-side. This used to
+ * fall back to a legacy free-text body search (tokenize + ILIKE) on any parse error, so a query
+ * that failed to parse would silently run as something else entirely instead of surfacing the
+ * error. Callers that build a WHERE clause from a search string (buildWhereConditions below) must
+ * now catch KqlSyntaxError themselves and show it — see SearchBar.commit(), which already gates
+ * typed queries this way, and LogsExplorer.tsx's query-building, which now does the same for
+ * restored saved searches / URL state / dashboard-panel export.
  */
 export function buildSearchClause(search: string, config: SourceConfig, index?: FieldIndex): string {
   const term = search.trim();
   if (!term) {
     return '';
   }
-
-  // Try to parse as KQL first.
-  try {
-    const ast = parseKql(term);
-    return kqlToSql(ast, config, index);
-  } catch {
-    // Fall back to legacy free-text body search on any parse error so existing
-    // queries and partial input never break a live result set.
-  }
-
-  // Legacy fallback: tokenize and ILIKE on body.
-  const c = config.columns;
-  // No body column mapped → can't do free-text search; skip rather than emit ILIKE(undefined,…).
-  if (!c.body) {
-    return '';
-  }
-  const terms = term.match(/"[^"]*"|'[^']*'|\S+/g) ?? [term];
-  const clauses = terms.map((t) => {
-    const clean = t.replace(/^["']|["']$/g, '');
-    // escapeLike so a literal % or _ in the raw text can't act as an ILIKE wildcard here — the
-    // KQL path (kql/toSql.ts's bareTermSql) already escapes it; this legacy fallback used to not.
-    // No hasToken() here — it throws BAD_ARGUMENTS on any needle containing a separator character
-    // (`-`, `.`, `:`, `/`, space — all common in log search terms like "req-59" or "1.2.3.4"), and
-    // is redundant even when it doesn't throw: everything a case-sensitive whole-token hasToken()
-    // match can find, the case-insensitive substring ILIKE below already finds too. See C3 in the
-    // audit plan.
-    return `${c.body} ILIKE ${quoteString('%' + escapeLike(clean) + '%')}`;
-  });
-  return clauses.length === 1 ? clauses[0] : clauses.map((cl) => `(${cl})`).join(' AND ');
+  const ast = parseKql(term);
+  return kqlToSql(ast, config, index);
 }
 
 /** Build the WHERE conditions shared across logs, volume, and field-stats queries. */

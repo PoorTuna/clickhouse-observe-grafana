@@ -72,7 +72,7 @@ export async function fetchFieldValuesWithTotal(
     limit,
     sampleSize: 500,
   });
-  const rows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange: opts.timeRange });
+  const rows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange: opts.timeRange, op: 'fieldValues' });
   const values: FieldValue[] = rows.map((r) => ({
     value: String(r['value'] ?? ''),
     count: Number(r['count'] ?? 0),

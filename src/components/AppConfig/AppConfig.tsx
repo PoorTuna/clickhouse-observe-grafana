@@ -187,7 +187,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
                 <Field
                   label="Additional query SETTINGS"
-                  description="Appended to every query for this view. Comma-separated. Overrides the defaults above."
+                  description="Appended to every query for this view. Comma-separated. Overrides the defaults above, except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
                 >
                   <Input
                     width={50}
@@ -196,6 +196,18 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                       patchView(v.id, { extraQuerySettings: e.target.value })
                     }
                     placeholder="max_replica_delay_for_distributed_queries = 30"
+                  />
+                </Field>
+
+                <Field
+                  label="Cluster name (for diagnostics)"
+                  description="Only used by the Inspect drawer's optional server-side enrichment tier (off by default — see the toggle in the drawer). When set, its system.query_log lookup reads via clusterAllReplicas(<name>, system.query_log) so it finds a query's stats regardless of which replica answered. Leave blank for a single node or a non-distributed setup."
+                >
+                  <Input
+                    width={30}
+                    value={v.clusterName ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => patchView(v.id, { clusterName: e.target.value.trim() })}
+                    placeholder="my_cluster"
                   />
                 </Field>
 

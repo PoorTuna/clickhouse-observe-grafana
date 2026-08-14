@@ -62,6 +62,7 @@ async function probeTraceLinkTemplate(
       sql: "SELECT '' AS traceID",
       timeRange,
       refId: 'ch-observe-tracelink',
+      op: 'traceLink',
     });
     const field = frames[0]?.fields?.[0];
     if (!field) {

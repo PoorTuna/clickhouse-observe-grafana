@@ -109,6 +109,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // multi-replica cluster with unusual latency/consistency needs.
   const [sequentialConsistency, setSequentialConsistency] = useState(true);
   const [extraQuerySettings, setExtraQuerySettings] = useState('');
+  const [clusterName, setClusterName] = useState('');
   const [showQuerySettings, setShowQuerySettings] = useState(false);
   // Single outer gate for all three "advanced" sub-disclosures below — a regular user creating a
   // view sees none of column mapping / pinned columns / query settings until they open this once.
@@ -190,6 +191,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       setPinnedIds((editingView.pinnedColumns ?? []).map((col) => col.id));
       setSequentialConsistency(editingView.sequentialConsistency ?? true);
       setExtraQuerySettings(editingView.extraQuerySettings ?? '');
+      setClusterName(editingView.clusterName ?? '');
       goToColumnsStepFor(editingView.datasourceUid, editingView.database, editingView.logsTable, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,6 +213,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         datasourceUid: uid,
         sql: buildDatabasesQuery(),
         timeRange: schemaTimeRange(),
+        op: 'wizardDatabases',
       });
       const opts = rows.map((r) => {
         const n = String(r['name'] ?? '');
@@ -238,6 +241,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         datasourceUid,
         sql: buildTablesQuery(db),
         timeRange: schemaTimeRange(),
+        op: 'wizardTables',
       });
       const opts = rows.map((r) => {
         const n = String(r['name'] ?? '');
@@ -268,6 +272,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         datasourceUid: uid,
         sql: buildColumnsQuery({ ...DEFAULT_SOURCE_CONFIG, datasourceUid: uid, database: db }, table),
         timeRange: schemaTimeRange(),
+        op: 'wizardColumns',
       });
       const typedRows = rows as Array<Record<string, unknown>>;
       const rawCols: TableColumn[] = typedRows
@@ -305,6 +310,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
               datasourceUid: uid,
               sql: buildJsonPathsQuery(scanCfg, jsonCol, table),
               timeRange: schemaTimeRange(),
+              op: 'wizardJsonPaths',
             });
             const paths = pathRows
               .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
@@ -439,6 +445,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         pinnedColumns: pinnedColumns.length > 0 ? pinnedColumns : undefined,
         sequentialConsistency,
         extraQuerySettings: extraQuerySettings.trim() || undefined,
+        clusterName: clusterName.trim() || undefined,
       };
       if (editingView) {
         updatePersonalView(editingView.id, values);
@@ -689,13 +696,25 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
 
                       <Field
                         label="Additional query SETTINGS"
-                        description="Appended to every query for this view. Comma-separated. Overrides the defaults above."
+                        description="Appended to every query for this view. Comma-separated. Overrides the defaults above, except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
                       >
                         <Input
                           width={50}
                           value={extraQuerySettings}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setExtraQuerySettings(e.target.value)}
                           placeholder="max_replica_delay_for_distributed_queries = 30"
+                        />
+                      </Field>
+
+                      <Field
+                        label="Cluster name (for diagnostics)"
+                        description="Only used by the Inspect drawer's optional server-side enrichment tier (off by default). When set, its system.query_log lookup reads via clusterAllReplicas(<name>, system.query_log) so it finds a query's stats regardless of which replica answered. Leave blank for a single node."
+                      >
+                        <Input
+                          width={30}
+                          value={clusterName}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setClusterName(e.target.value.trim())}
+                          placeholder="my_cluster"
                         />
                       </Field>
                     </>

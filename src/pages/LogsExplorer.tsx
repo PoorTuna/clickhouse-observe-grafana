@@ -19,8 +19,11 @@ import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
 import { SqlInspectorBar } from '../components/SqlInspectorBar';
+import { DiagnosticsDrawer } from '../components/Diagnostics/DiagnosticsDrawer';
 import { canCreateDashboards } from '../utils/permissions';
 import { runQueryRows } from '../data/runQuery';
+import { startAction } from '../diag/tracer';
+import { SpanHandle } from '../diag/types';
 import { buildLogsQuery, buildLogDetailQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
 import { buildFieldIndex } from '../sql/fields';
 import { loadFieldValues } from '../sql/kql/_values';
@@ -311,6 +314,7 @@ export function LogsExplorer() {
     onSizeChanged: (flexSize) => window.localStorage.setItem(DETAIL_SPLIT_KEY, String(flexSize)),
   });
   const [showSqlInspect, setShowSqlInspect] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [wrapLines, setWrapLines] = useState(false);
   const [histogramCollapsed, setHistogramCollapsed] = useState(false);
   // Multi-select for the "Compare" action — indices into `pageRows`. Cleared whenever the page
@@ -345,8 +349,25 @@ export function LogsExplorer() {
   // Separate cancellation token for the volume query, which now runs on its own effect/deps
   // (see fetchVolume) independent of the logs query's runRef.
   const volRunRef = useRef(0);
+  // AbortControllers paired 1:1 with each runRef/volRunRef generation. Aborting the previous
+  // controller when a new run starts does NOT stop ClickHouse from executing the abandoned query
+  // (see RunQueryOptions.signal's doc comment in data/runQuery.ts) — it only stops this tab from
+  // waiting on and decoding a response nobody will use. hydratePage/hydrateRow/ensureRows piggyback
+  // on the logs run's controller since they share runRef's generation.
+  const runAbortRef = useRef<AbortController | null>(null);
+  const volAbortRef = useRef<AbortController | null>(null);
+  // The diagnostics action fetchLogs/fetchVolume should attach their query spans under, if any.
+  // Set synchronously immediately before a paired fetchLogs()+fetchVolume() call (see executeQuery
+  // below) and cleared synchronously right after — safe because both functions read it at the very
+  // top of their body, before their own first `await`, so there's no async gap for another action
+  // to interleave and steal the wrong attribution. The independently-debounced single-fetch effects
+  // further down deliberately leave this unset: fetchLogs and fetchVolume re-fire on different
+  // triggers there (see their effects' own comments), so they're genuinely separate top-level
+  // activity entries, not one action's children — runQuery.ts's orphan-root fallback already names
+  // each correctly by its `op` when no trace is passed.
+  const actionRef = useRef<SpanHandle | null>(null);
   // Always tracks the latest executeQuery closure so deferred calls get fresh state.
-  const latestExecuteQuery = useRef<() => void>(() => {});
+  const latestExecuteQuery = useRef<(actionName?: string) => void>(() => {});
 
   // Effective columns: use state if set, else derive defaults from config
   const effectiveColumns = useMemo<SelectedColumn[]>(() => {
@@ -403,6 +424,13 @@ export function LogsExplorer() {
       return;
     }
     const runId = ++runRef.current;
+    runAbortRef.current?.abort();
+    const abortController = new AbortController();
+    runAbortRef.current = abortController;
+    // Snapshot now (still synchronous, before this function's first await) rather than reading
+    // actionRef.current again down at the runQueryRows call — see actionRef's declaration for why
+    // that matters.
+    const action = actionRef.current ?? undefined;
     setLoading(true);
     setError(null);
     // A new list query invalidates any previously hydrated detail rows/pages — they were
@@ -435,7 +463,15 @@ export function LogsExplorer() {
         ? queryState.rawSql || buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, undefined, fieldIndexRef.current)
         : buildLogsQuery(config, stateWithCols, { limit: INITIAL_FETCH, offset: 0 }, { projection: 'grid' }, fieldIndexRef.current);
 
-      const logRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange, refId: 'logs' });
+      const logRows = await runQueryRows({
+        datasourceUid: config.datasourceUid,
+        sql,
+        timeRange,
+        refId: 'logs',
+        signal: abortController.signal,
+        op: 'logs',
+        trace: action,
+      });
 
       if (runRef.current !== runId) {
         return;
@@ -480,6 +516,11 @@ export function LogsExplorer() {
       return;
     }
     const runId = ++volRunRef.current;
+    volAbortRef.current?.abort();
+    const abortController = new AbortController();
+    volAbortRef.current = abortController;
+    // See the matching comment in fetchLogs above.
+    const action = actionRef.current ?? undefined;
     setVolLoading(true);
     try {
       const resolved = resolveInterval(intervalMode, timeRange);
@@ -488,7 +529,15 @@ export function LogsExplorer() {
         breakdown: resolveVolumeBreakdown(breakdown, config),
       }, fieldIndexRef.current);
 
-      const volRows = await runQueryRows({ datasourceUid: config.datasourceUid, sql: volSql, timeRange, refId: 'vol' });
+      const volRows = await runQueryRows({
+        datasourceUid: config.datasourceUid,
+        sql: volSql,
+        timeRange,
+        refId: 'vol',
+        signal: abortController.signal,
+        op: 'volume',
+        trace: action,
+      });
 
       if (volRunRef.current !== runId) {
         return;
@@ -539,11 +588,36 @@ export function LogsExplorer() {
 
   // Combined re-run for call sites that mean "run the whole thing again" (manual refresh button,
   // auto-refresh interval, loading a saved search) — as opposed to the narrower per-effect fetches
-  // below that only fire the query actually affected by what changed.
-  const executeQuery = useCallback(() => {
-    fetchLogs();
-    fetchVolume();
-  }, [fetchLogs, fetchVolume]);
+  // below that only fire the query actually affected by what changed. `actionName` distinguishes
+  // those three triggers in the diagnostics drawer's activity list — see each call site below.
+  // actionRef is set synchronously right before, and cleared synchronously right after, the two
+  // fetch calls it wraps — see actionRef's declaration for why that ordering is what makes it safe.
+  const executeQuery = useCallback(
+    (actionName?: string) => {
+      // Defensive, not just stylistic: RefreshPicker's onRefresh is typed () => void, but at
+      // least one real build called it as a click handler and passed the SyntheticEvent through —
+      // a default parameter alone doesn't catch that (defaults only apply to `undefined`, and an
+      // event object is truthy), so `startAction` received the event as `name` and React error #31
+      // fired the moment the rail tried to render it as text. Every caller now passes an explicit
+      // literal (see each call site), but this guard means a future caller forgetting to can never
+      // put a non-string back into the span tree.
+      const name = typeof actionName === 'string' && actionName ? actionName : 'Refresh';
+      const action = startAction(name);
+      actionRef.current = action;
+      const logsPromise = fetchLogs();
+      const volumePromise = fetchVolume();
+      actionRef.current = null;
+      // fetchLogs/fetchVolume catch their own errors internally (they setError, not throw), so
+      // this never rejects — it only exists to know when both have settled so the action root can
+      // leave 'running'. Its own status reflects whether either child query ended in error, since
+      // nothing else would ever close this span otherwise (see actionRef's declaration).
+      Promise.allSettled([logsPromise, volumePromise]).then(() => {
+        const hasError = action.span.children.some((child) => child.status === 'error');
+        action.end(hasError ? 'error' : 'ok');
+      });
+    },
+    [fetchLogs, fetchVolume]
+  );
 
   // One-shot reconcile: fetchLogs/fetchVolume no longer depend on fieldIndex (see fieldIndexRef
   // above), so a cold mount runs each exactly once instead of waiting on/re-running after field
@@ -600,6 +674,8 @@ export function LogsExplorer() {
           sql,
           timeRange,
           refId: 'detail',
+          signal: runAbortRef.current?.signal,
+          op: 'detailPage',
         });
         // Discard if a new list query (executeQuery) started while this was in flight — its
         // reset already cleared hydratedRows, so writing into it here would resurrect stale
@@ -618,8 +694,13 @@ export function LogsExplorer() {
         return targetKey ? fullRows.some((r) => logRowKey(r, config) === targetKey) : true;
       } catch (e) {
         // Leave the page unmarked as hydrated so the next drawer-open on this page retries,
-        // rather than permanently degrading to summary-only after one transient failure.
-        setDetailError(errMsg(e));
+        // rather than permanently degrading to summary-only after one transient failure. Gated on
+        // runId, same as every other setError in this file — otherwise a page fetch that a newer
+        // search superseded (and which now rejects as an AbortError, see runAbortRef above) would
+        // flash a phantom error for a request nobody cares about anymore.
+        if (runRef.current === runId) {
+          setDetailError(errMsg(e));
+        }
         return false;
       } finally {
         hydratingPagesRef.current.delete(pageIndex);
@@ -667,6 +748,8 @@ export function LogsExplorer() {
           sql,
           timeRange,
           refId: 'detail-row',
+          signal: runAbortRef.current?.signal,
+          op: 'detailRow',
         });
         if (runRef.current !== runId) {
           return;
@@ -691,7 +774,10 @@ export function LogsExplorer() {
           return next;
         });
       } catch (e) {
-        setDetailError(errMsg(e));
+        // Gated on runId — see the matching comment in hydratePage's catch block above.
+        if (runRef.current === runId) {
+          setDetailError(errMsg(e));
+        }
       } finally {
         hydratingRowKeysRef.current.delete(key);
         if (runRef.current === runId) {
@@ -718,7 +804,7 @@ export function LogsExplorer() {
     if (!ms) {
       return;
     }
-    const id = window.setInterval(() => latestExecuteQuery.current(), ms);
+    const id = window.setInterval(() => latestExecuteQuery.current('Auto-refresh'), ms);
     return () => window.clearInterval(id);
   }, [refreshInterval]);
 
@@ -820,7 +906,7 @@ export function LogsExplorer() {
     // useLayoutEffect keeps latestExecuteQuery.current in sync with every render,
     // so by the time this microtask fires React has committed the new state and
     // the ref holds the fresh closure — guaranteeing results load without a manual click.
-    queueMicrotask(() => latestExecuteQuery.current());
+    queueMicrotask(() => latestExecuteQuery.current('Load saved search'));
   };
 
   const onHistogramSelectRange = (fromMs: number, toMs: number) => {
@@ -874,7 +960,13 @@ export function LogsExplorer() {
           { projection: 'grid' },
           fieldIndex
         );
-        const chunk = await runQueryRows({ datasourceUid: config.datasourceUid, sql, timeRange });
+        const chunk = await runQueryRows({
+          datasourceUid: config.datasourceUid,
+          sql,
+          timeRange,
+          signal: runAbortRef.current?.signal,
+          op: 'loadMore',
+        });
         if (runRef.current !== runId) {
           return currentRows;
         }
@@ -1025,7 +1117,7 @@ export function LogsExplorer() {
               />
             )}
             <RefreshPicker
-              onRefresh={executeQuery}
+              onRefresh={() => executeQuery('Refresh')}
               onIntervalChanged={setRefreshInterval}
               value={refreshInterval}
               isLoading={loading}
@@ -1061,7 +1153,9 @@ export function LogsExplorer() {
           onRawSqlDraftChange={setRawSqlDraft}
           onRunRawSql={runRawSql}
           builderSql={builderSql}
+          onOpenDiagnostics={() => setShowDiagnostics(true)}
         />
+        {showDiagnostics && <DiagnosticsDrawer onClose={() => setShowDiagnostics(false)} />}
 
         {/* Error banner */}
         {error && (

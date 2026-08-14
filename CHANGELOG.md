@@ -10,6 +10,42 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.6.0] — 2026-08-14
+
+### Added
+
+- **Inspect drawer**: a single diagnostics entry point next to "Inspect SQL" showing, per user
+  action, a live waterfall of every query it fired (including the eight that previously had no SQL
+  visibility at all — histogram, field discovery, presence, detail hydration, load-more, the setup
+  wizard), builder vs. post-macro executed SQL, and a Warnings tab that surfaces truncated results,
+  dangerous `overflow_mode` settings, and errors the page itself deliberately swallows (load-more,
+  sidebar presence, trace-link lookup) — all without changing that by-design silence in the page UI.
+- **Server-side query stats** (off by default): an opt-in toggle tags queries with a correlation id
+  and reads real ClickHouse execution stats — duration, rows/bytes read, memory, selected
+  marks/parts — back out of `system.query_log`, shown in a new Stats tab. Degrades explicitly for
+  missing grants, `readonly` mode, or disabled query logging, rather than a generic error.
+- **Copy diagnostics bundle**: one button copies a redacted JSON bundle (span tree, timings, SQL,
+  warnings, stats) for sharing — table/database names, `extraQuerySettings`, and SQL literal values
+  are stripped.
+- New "Additional query SETTINGS" override protection: `timeout_overflow_mode`, `read_overflow_mode`,
+  `result_overflow_mode`, and `group_by_overflow_mode` can no longer be silently overridden by a
+  view's advanced settings — those four keys govern whether a capped query fails loudly or
+  truncates silently, and a builder's own choice there now always wins.
+- New "Cluster name" advanced view setting, used by the Stats tab's `system.query_log` lookup on
+  distributed deployments.
+
+### Fixed
+
+- Every `max_execution_time` guardrail was missing `timeout_before_checking_execution_speed = 0`,
+  so an advertised N-second cap was actually enforced ~10s later than shown.
+- `hydratePage`/`hydrateRow` (log detail drawer) could flash a phantom error banner for a request a
+  newer search had already superseded.
+- The manual refresh button could crash the page (React error #31): the underlying widget invoked
+  a `() => void`-typed callback with its click event anyway, and that event ended up rendered
+  directly as text one layer up.
+
+---
+
 ## [0.5.1] — 2026-08-12
 
 ### Fixed

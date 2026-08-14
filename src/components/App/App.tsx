@@ -1,4 +1,5 @@
-import React, { createContext, Suspense, useCallback, useMemo, useRef, useState } from 'react';
+import React, { createContext, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { startAutoEnrichment } from '../../diag/autoEnrich';
 import { AppRootProps } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
 import {
@@ -152,6 +153,24 @@ function App(props: AppRootProps<AppJsonData>) {
 
   // The active view (a DataView) is assignable to SourceConfig — existing consumers unchanged.
   const sourceConfig: SourceConfig = activeView ?? DEFAULT_SOURCE_CONFIG;
+
+  // Diagnostics' server-side enrichment tier (see diag/autoEnrich.ts) is wired once here, at the
+  // top of the app, rather than inside LogsExplorer — capture must happen regardless of which page
+  // is mounted or whether the diagnostics drawer is open (see the diagnostics plan's "Capture
+  // scope"). The context getter reads a ref, not `sourceConfig` directly, since
+  // startAutoEnrichment subscribes exactly once (see its own idempotency doc comment) and the
+  // closure it's given must still see the *current* active view on every later call, not the one
+  // that was active at mount.
+  const sourceConfigRef = useRef(sourceConfig);
+  useLayoutEffect(() => {
+    sourceConfigRef.current = sourceConfig;
+  });
+  useEffect(() => {
+    return startAutoEnrichment(() => {
+      const config = sourceConfigRef.current;
+      return config.datasourceUid ? { datasourceUid: config.datasourceUid, config } : undefined;
+    });
+  }, []);
 
   const handleTraceViewChoice = useCallback(
     (view: DataView, remember: boolean) => {

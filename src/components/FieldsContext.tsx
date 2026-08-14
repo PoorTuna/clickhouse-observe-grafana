@@ -145,6 +145,7 @@ export function useFieldDiscovery(
           datasourceUid: config.datasourceUid,
           sql: buildColumnsQuery(config, resolvedTable),
           timeRange,
+          op: 'columns',
         });
         columns = rows
           .filter((r) => String(r['name'] ?? '').length > 0)
@@ -193,6 +194,7 @@ export function useFieldDiscovery(
           datasourceUid: config.datasourceUid,
           sql: buildMapKeysQuery(config, mapCol, resolvedTable),
           timeRange,
+          op: 'mapKeys',
         });
         const keys = rows.map((r) => String(r['k'] ?? '')).filter(Boolean);
         mapKeyCache.set(mKey, keys);
@@ -217,6 +219,7 @@ export function useFieldDiscovery(
           datasourceUid: config.datasourceUid,
           sql: buildJsonPathsQuery(config, jsonCol, resolvedTable),
           timeRange,
+          op: 'jsonPaths',
         });
         const paths = rows
           .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))

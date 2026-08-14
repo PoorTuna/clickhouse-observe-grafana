@@ -8,7 +8,7 @@
  * silently surfaced as an empty/partial result instead of a catchable error — no `catch` block
  * anywhere in this codebase ever fired for a ClickHouse query error.
  */
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { DataFrame, DataQueryResponse, LoadingState, TimeRange, dateTime } from '@grafana/data';
 import { runQuery, runQueryRows } from '../runQuery';
 
@@ -26,7 +26,7 @@ const timeRange: TimeRange = {
   raw: { from: 'now-1h', to: 'now' },
 };
 
-const baseOptions = { datasourceUid: 'ds-uid-1', sql: 'SELECT 1', timeRange };
+const baseOptions = { datasourceUid: 'ds-uid-1', sql: 'SELECT 1', timeRange, op: 'logs' as const };
 
 describe('runQuery — surfacing DataQueryResponse.error/.errors', () => {
   beforeEach(() => {
@@ -95,5 +95,56 @@ describe('runQuery — surfacing DataQueryResponse.error/.errors', () => {
     );
 
     await expect(runQueryRows(baseOptions)).rejects.toThrow('Timeout exceeded');
+  });
+});
+
+// See runQuery.ts's RunQueryOptions.signal doc comment: this does NOT cancel the query on
+// ClickHouse (verified against Grafana core — the standard fetch() path isn't wired to an
+// AbortController on unsubscribe). It only makes runQuery() stop waiting on / decoding a response
+// nobody will use, and lets the caller mark its span cancelled promptly instead of hanging.
+describe('runQuery — abort signal (client-side only, does not reach ClickHouse)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('rejects immediately with an AbortError if the signal is already aborted', async () => {
+    mockQuery.mockReturnValue(of<DataQueryResponse>({ data: [], state: LoadingState.Done }));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(runQuery({ ...baseOptions, signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    // Never even calls into the datasource once already aborted.
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('unsubscribes and rejects with an AbortError when aborted mid-flight', async () => {
+    let unsubscribed = false;
+    const never = new Observable<DataQueryResponse>(() => {
+      // Never emits/completes on its own — simulates a slow in-flight request.
+      return () => {
+        unsubscribed = true;
+      };
+    });
+    mockQuery.mockReturnValue(never);
+
+    const controller = new AbortController();
+    const promise = runQuery({ ...baseOptions, signal: controller.signal });
+    // runQuery awaits getDataSourceSrv().get(...) before subscribing, so give that microtask a
+    // turn to resolve before aborting — otherwise the abort listener isn't registered yet.
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(unsubscribed).toBe(true);
+  });
+
+  it('resolves normally when never aborted', async () => {
+    const frame = { refId: 'A', fields: [], length: 0 } as unknown as DataFrame;
+    mockQuery.mockReturnValue(of<DataQueryResponse>({ data: [frame], state: LoadingState.Done }));
+    const controller = new AbortController();
+
+    await expect(runQuery({ ...baseOptions, signal: controller.signal })).resolves.toEqual([frame]);
   });
 });

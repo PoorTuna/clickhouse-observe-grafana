@@ -58,6 +58,14 @@ export interface SourceConfig {
    *  "max_replica_delay_for_distributed_queries = 30". Overrides builder/sequentialConsistency
    *  defaults on key collision (see sql/settings.ts's withSettings). */
   extraQuerySettings?: string;
+  /** Advanced: cluster name for the diagnostics drawer's server-side enrichment tier (see
+   *  diag/serverStats.ts) — when set, the tier reads `system.query_log` via
+   *  `clusterAllReplicas(<name>, system.query_log)` instead of the local table, so stats for a
+   *  query answered by any replica are found, not just the one this browser happened to hit.
+   *  Unset means single-node or non-distributed `system.query_log` reads. Unrelated to the query
+   *  builders' own `select_sequential_consistency` — that's about read consistency, this is about
+   *  where diagnostics looks for a query's own log row afterward. */
+  clusterName?: string;
 }
 
 export const DEFAULT_SOURCE_CONFIG: SourceConfig = {

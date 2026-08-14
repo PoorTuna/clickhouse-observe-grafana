@@ -11,6 +11,9 @@ import { GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Button, ClipboardButton, Icon, useStyles2 } from '@grafana/ui';
 import { LogsQueryState, SavedSearch } from '../types';
 import { SavedSearchMenu } from './SavedSearches/SavedSearchMenu';
+import { useDiagnostics } from '../diag/DiagContext';
+import { formatDurationMs } from '../diag/formatDuration';
+import { computeWarnings } from '../diag/warnings';
 
 interface SqlInspectorBarProps {
   queryState: LogsQueryState;
@@ -31,6 +34,10 @@ interface SqlInspectorBarProps {
   /** Builder-generated SQL — always current, used both for the "Inspect SQL" preview/copy and as
    *  the caller's seed value when switching into raw-SQL mode. */
   builderSql: string;
+
+  /** Opens the diagnostics drawer (see components/Diagnostics/DiagnosticsDrawer.tsx) — additive to
+   *  "Inspect SQL" above, not a replacement: that toggle stays exactly as it is. */
+  onOpenDiagnostics: () => void;
 }
 
 export function SqlInspectorBar({
@@ -47,8 +54,21 @@ export function SqlInspectorBar({
   onRawSqlDraftChange,
   onRunRawSql,
   builderSql,
+  onOpenDiagnostics,
 }: SqlInspectorBarProps) {
   const styles = useStyles2(getStyles);
+  const { roots } = useDiagnostics();
+  // Most recently *ended* root — a still-running one is deliberately skipped here so the button's
+  // duration doesn't flicker mid-query; the live number belongs in the drawer's waterfall, not the
+  // toolbar. Muted secondary text, not a badge: a duration isn't something requiring action.
+  const lastEnded = [...roots].reverse().find((r) => r.endMs != null);
+  // Not spanDurationMs here — that helper's third argument is only a fallback for a still-running
+  // span, and lastEnded is picked specifically because it has ended, so endMs is already the
+  // whole answer. Avoids calling the impure performance.now() during render for no reason.
+  const lastDuration = lastEnded ? lastEnded.endMs! - lastEnded.startMs : null;
+  // Non-'info' findings only — a query using SAMPLE is worth a look in the drawer, but isn't worth
+  // making the toolbar itself look alarmed over.
+  const lastWarnings = lastEnded ? computeWarnings(lastEnded).filter((w) => w.severity !== 'info') : [];
 
   return (
     <div className={styles.sqlRow}>
@@ -73,6 +93,19 @@ export function SqlInspectorBar({
           >
             <Icon name={showSqlInspect ? 'angle-down' : 'angle-right'} size="xs" />
             {showSqlInspect ? 'Hide SQL' : 'Inspect SQL'}
+          </button>
+          <button
+            className={styles.sqlToggle}
+            onClick={onOpenDiagnostics}
+            title={
+              lastWarnings.length > 0
+                ? `${lastWarnings.length} issue(s) found — ${lastWarnings[0].message}`
+                : 'Timings, SQL, and warnings for every query behind recent actions on this page'
+            }
+          >
+            <Icon name={lastWarnings.length > 0 ? 'exclamation-triangle' : 'stopwatch'} size="xs" className={lastWarnings.length > 0 ? styles.inspectWarningIcon : undefined} />
+            Inspect
+            {lastDuration != null && <span className={styles.inspectDuration}>{formatDurationMs(lastDuration)}</span>}
           </button>
         </div>
         <div className={styles.sqlActionsRight}>
@@ -169,6 +202,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     text-align: left;
     padding: 0;
     &:hover { color: ${theme.colors.text.primary}; }
+  `,
+  inspectDuration: css`
+    font-family: ${theme.typography.fontFamilyMonospace};
+    font-variant-numeric: tabular-nums;
+    color: ${theme.colors.text.disabled};
+  `,
+  inspectWarningIcon: css`
+    color: ${theme.colors.warning.text};
   `,
   sqlInspect: css`
     position: relative;

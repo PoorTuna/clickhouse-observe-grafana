@@ -78,7 +78,7 @@ export function useFieldPresence(
     const runId = ++runRef.current;
     setPresence((prev) => ({ ...prev, loading: true }));
 
-    runQueryRows({ datasourceUid: config.datasourceUid, sql: query.sql, timeRange, refId: 'presence' })
+    runQueryRows({ datasourceUid: config.datasourceUid, sql: query.sql, timeRange, refId: 'presence', op: 'presence' })
       .then((rows) => {
         if (runRef.current !== runId) {
           return;

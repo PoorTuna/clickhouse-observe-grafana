@@ -10,7 +10,13 @@ export function formatDurationMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-/** ms elapsed so far for a still-running span, or its final duration once ended. */
+/**
+ * ms elapsed so far for a still-running span, or its final duration once ended. Clamped to zero —
+ * a span whose end() call raced against something else (e.g. a reconstructed child span, or a
+ * cleanup path closing a span slightly out of order under fast successive re-renders) should never
+ * surface as a negative duration to the user; that reads as a bug in the tool, not a real timing
+ * fact, so zero (rather than the literal negative delta) is what a caller should ever see.
+ */
 export function spanDurationMs(startMs: number, endMs: number | null, nowMs: number): number {
-  return (endMs ?? nowMs) - startMs;
+  return Math.max(0, (endMs ?? nowMs) - startMs);
 }

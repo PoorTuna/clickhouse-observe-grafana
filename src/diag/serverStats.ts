@@ -1,19 +1,23 @@
 /**
- * Reads real ClickHouse execution stats back out of `system.query_log` for one action's queries,
- * correlated via the `log_comment` tag every query gets when enrichment is on (see
+ * Reads real ClickHouse execution stats back out of `system.query_log` for one or more actions'
+ * queries, correlated via the `log_comment` tag every query gets when enrichment is on (see
  * diag/logComment.ts / diag/enrichment.ts). This is the piece that actually answers "was it
  * ClickHouse or everything else" — see the diagnostics plan's Phase 2.
  *
  * `system.query_log` flushes asynchronously (`flush_interval_milliseconds`, default 7500ms), so a
- * lookup immediately after a query finishes usually finds nothing yet. `fetchServerStats` polls
- * with backoff instead of issuing `SYSTEM FLUSH LOGS` (privileged, cluster-wide — not something a
- * dashboard viewer's query should ever trigger).
+ * lookup immediately after a query finishes usually finds nothing yet. This module does exactly one
+ * query attempt per call — the polling-with-backoff loop that rides out the flush delay lives in
+ * diag/autoEnrich.ts, one level up, because it now also has to coalesce *multiple* roots into a
+ * single shared poll cycle (see the B3 finding this batching fixes: before it, every ended root ran
+ * its own independent 3-attempt poll cycle, which under auto-refresh could mean ~18 extra
+ * `system.query_log` scans per tick — the debugger measurably loading the server it exists to
+ * debug). `SYSTEM FLUSH LOGS` is never issued either way — it's privileged and cluster-wide, not
+ * something a dashboard viewer's query should ever trigger.
  */
 import { dateTime } from '@grafana/data';
 import { SourceConfig } from '../types';
 import { quoteIdentifier, quoteString } from '../sql/queryBuilder';
 import { runQueryUntracedRows } from '../data/runQuery';
-import { logCommentPrefixForTrace } from './logComment';
 
 /**
  * The lookup's own WHERE clause is relative to `now()`, not the dashboard's time range — a
@@ -29,6 +33,9 @@ function unusedTimeRange() {
 }
 
 export interface ServerStatsRow {
+  /** Which root (action/orphan) this row belongs to — `rootId` in tracer.ts's terms. Needed now
+   *  that one lookup can cover many roots at once; a single-root caller can ignore it. */
+  traceId: string;
   spanId: string;
   queryId: string;
   type: string;
@@ -49,41 +56,27 @@ export type ServerStatsUnavailableReason = 'no-grant' | 'readonly' | 'error';
 
 export type ServerStatsResult =
   | { status: 'ok'; rows: ServerStatsRow[] }
-  /** Every poll attempt succeeded but returned zero rows — could be `log_queries = 0`, a
+  /** This attempt succeeded but returned zero rows — could be `log_queries = 0`, a
    *  `system.query_log` TTL shorter than the lookup window, or the flush genuinely hasn't happened
-   *  yet. These are indistinguishable from a single client-side lookup, so this is reported as
-   *  "nothing arrived," not as a specific diagnosis — see the module doc comment and the
-   *  diagnostics plan's Phase 2 constraints. */
+   *  yet. These are indistinguishable from a single lookup, so this is reported as "nothing
+   *  arrived," not as a specific diagnosis — see the module doc comment and the diagnostics plan's
+   *  Phase 2 constraints. */
   | { status: 'no-data' }
   | { status: 'unavailable'; reason: ServerStatsUnavailableReason; detail: string };
 
-const POLL_DELAYS_MS = [1000, 3000, 8000];
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new DOMException('Aborted', 'AbortError'));
-      },
-      { once: true }
-    );
-  });
-}
-
-function buildServerStatsQuery(config: SourceConfig, traceId: string): string {
+function buildServerStatsQuery(config: SourceConfig, traceIds: readonly string[]): string {
   const table = config.clusterName
     ? `clusterAllReplicas(${quoteIdentifier(config.clusterName)}, system.query_log)`
     : 'system.query_log';
-  const prefix = logCommentPrefixForTrace(traceId);
+  // A single query covers every root currently pending enrichment (see autoEnrich.ts's batching) —
+  // one startsWith('chobs|') prefilter plus an IN() on the parsed trace id, rather than one
+  // separate query per root. `ORDER BY event_time DESC` makes which 200 rows survive the LIMIT
+  // deterministic once this can span many traces/many queries at once, instead of whatever order
+  // ClickHouse happened to produce them in.
+  const traceIdList = traceIds.map(quoteString).join(', ');
   return [
     `SELECT`,
+    `  splitByChar('|', log_comment)[2] AS trace_id,`,
     `  splitByChar('|', log_comment)[3] AS span_id,`,
     `  query_id, type, query_duration_ms,`,
     `  read_rows, read_bytes, result_rows, memory_usage,`,
@@ -98,8 +91,10 @@ function buildServerStatsQuery(config: SourceConfig, traceId: string): string {
     `WHERE event_date >= today() - 1`,
     `  AND event_time >= now() - INTERVAL 10 MINUTE`,
     `  AND log_comment != ''`,
-    `  AND startsWith(log_comment, ${quoteString(prefix)})`,
+    `  AND startsWith(log_comment, 'chobs|')`,
+    `  AND splitByChar('|', log_comment)[2] IN (${traceIdList})`,
     `  AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')`,
+    `ORDER BY event_time DESC`,
     `LIMIT 200`,
     `SETTINGS max_execution_time = 10,`,
     `         timeout_before_checking_execution_speed = 0,`,
@@ -114,12 +109,14 @@ function toNumber(value: unknown): number {
 }
 
 function parseRow(row: Record<string, unknown>): ServerStatsRow | null {
+  const traceId = typeof row.trace_id === 'string' && row.trace_id ? row.trace_id : null;
   const spanId = typeof row.span_id === 'string' && row.span_id ? row.span_id : null;
-  if (!spanId) {
+  if (!traceId || !spanId) {
     return null;
   }
   const optionalNumber = (key: string): number | undefined => (row[key] != null ? toNumber(row[key]) : undefined);
   return {
+    traceId,
     spanId,
     queryId: String(row.query_id ?? ''),
     type: String(row.type ?? ''),
@@ -155,44 +152,39 @@ function classifyError(message: string): ServerStatsUnavailableReason {
 }
 
 /**
- * Polls `system.query_log` for every query tagged under `traceId`, backing off across
- * POLL_DELAYS_MS to ride out the log's async flush. Resolves once real rows arrive, once polling
- * is exhausted with nothing, or immediately on a definite error (no retry — a permission/readonly
- * failure won't fix itself between attempts).
+ * Runs exactly one `system.query_log` lookup attempt for every trace id in `traceIds` — a single
+ * query covering however many roots are currently pending, not one query per root (see the module
+ * doc comment and the B3 finding). The caller (diag/autoEnrich.ts) owns polling-with-backoff across
+ * multiple calls to ride out `system.query_log`'s async flush; this function itself never sleeps or
+ * retries, so it stays trivial to reason about and to test as a single request/response shape. A
+ * definite error (permission/readonly) is still just returned once, same as before — it's the
+ * caller's job to decide not to retry it.
  */
 export async function fetchServerStats(
   datasourceUid: string,
   config: SourceConfig,
-  traceId: string,
+  traceIds: readonly string[],
   signal?: AbortSignal
 ): Promise<ServerStatsResult> {
-  const sql = buildServerStatsQuery(config, traceId);
-  for (const delay of POLL_DELAYS_MS) {
-    try {
-      await sleep(delay, signal);
-    } catch {
-      return { status: 'no-data' }; // aborted mid-wait — treat like "nothing arrived", not an error
-    }
-    try {
-      const rows = await runQueryUntracedRows({
-        datasourceUid,
-        sql,
-        timeRange: unusedTimeRange(),
-        op: 'serverStatsLookup',
-        signal,
-      });
-      const parsed = rows.map(parseRow).filter((r): r is ServerStatsRow => r !== null);
-      if (parsed.length > 0) {
-        return { status: 'ok', rows: parsed };
-      }
-      // Zero rows this attempt — keep polling; the flush may just not have happened yet.
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return { status: 'no-data' };
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      return { status: 'unavailable', reason: classifyError(message), detail: message };
-    }
+  if (traceIds.length === 0) {
+    return { status: 'no-data' };
   }
-  return { status: 'no-data' };
+  const sql = buildServerStatsQuery(config, traceIds);
+  try {
+    const rows = await runQueryUntracedRows({
+      datasourceUid,
+      sql,
+      timeRange: unusedTimeRange(),
+      op: 'serverStatsLookup',
+      signal,
+    });
+    const parsed = rows.map(parseRow).filter((r): r is ServerStatsRow => r !== null);
+    return parsed.length > 0 ? { status: 'ok', rows: parsed } : { status: 'no-data' };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { status: 'no-data' };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { status: 'unavailable', reason: classifyError(message), detail: message };
+  }
 }

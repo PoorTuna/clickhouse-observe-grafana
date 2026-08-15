@@ -257,7 +257,13 @@ export async function runQueryRows(
     if (!frames || frames.length === 0) {
       return [];
     }
+    // A real, measured child span (as opposed to the 'transport'/'clickhouse' split in
+    // diag/autoEnrich.ts, which is reconstructed after the fact from system.query_log stats that
+    // land seconds later) — this one is cheap to time live since dataFrameToRows runs synchronously
+    // right here.
+    const decodeSpan = span.child('decode', 'decode');
     const rows = dataFrameToRows(frames[0]);
+    decodeSpan.end('ok');
     // truncated is undefined (not false) when options.sql has no LIMIT at all — "not applicable"
     // and "confirmed not truncated" are different facts the Warnings tab shouldn't conflate. See
     // diag/sqlIntegrity.ts's detectTruncation doc comment.

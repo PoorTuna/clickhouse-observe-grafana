@@ -35,3 +35,35 @@ export function querySpans(root: Span): Span[] {
     .map((row) => row.span)
     .filter((span) => typeof span.attrs.sql === 'string');
 }
+
+/**
+ * The latest `endMs` anywhere in `root`'s tree, `root.endMs` included — never just `root.endMs`
+ * alone. A root can end (e.g. LogsExplorer.tsx's executeQuery closes the action once logs+volume
+ * settle) before a child it caused finishes (the `render` span, closed on the next rAF after
+ * commit) — see the diagnostics plan's B4 finding. A displayed "how long did this take" should
+ * cover everything the action caused, not just the moment its own span happened to close, or the
+ * number under-reports and any waterfall scaled to it clips its own last bar.
+ *
+ * Returns `null` while any span in the tree is still running (`endMs == null`) — "duration so far"
+ * for a live tree is the caller's job (see useLiveNow), this only ever answers the finished case.
+ */
+export function treeEndMs(root: Span): number | null {
+  let latest: number | null = null;
+  for (const { span } of flattenSpanTree(root)) {
+    if (span.endMs == null) {
+      return null;
+    }
+    if (latest == null || span.endMs > latest) {
+      latest = span.endMs;
+    }
+  }
+  return latest;
+}
+
+/** True if any span anywhere in `root`'s tree is still `running` — not just the root itself. A
+ *  child (e.g. a `render` span outliving the action that spawned it, see `treeEndMs`) can still be
+ *  live under an already-ended root; a live-tick decision keyed on `root.status` alone would freeze
+ *  that child's bar at a stale timestamp instead of growing it. */
+export function hasRunningSpan(root: Span): boolean {
+  return flattenSpanTree(root).some(({ span }) => span.status === 'running');
+}

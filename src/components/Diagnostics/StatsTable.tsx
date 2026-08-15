@@ -8,31 +8,29 @@
 import React from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Icon, useStyles2 } from '@grafana/ui';
+import { useStyles2 } from '@grafana/ui';
 import { Span } from '../../diag/types';
 import { querySpans } from '../../diag/spanTree';
 import { isEnrichmentEnabled } from '../../diag/enrichment';
+import { DiagEmptyState } from './DiagEmptyState';
+import { formatBytes, formatCount } from './formatNumbers';
+import { labelForKind } from './phaseColors';
 
 interface StatsTableProps {
   root: Span;
 }
 
-function formatCount(n: unknown): string {
-  return typeof n === 'number' ? n.toLocaleString() : '—';
-}
-
-function formatBytes(n: unknown): string {
-  if (typeof n !== 'number') {
-    return '—';
+/** `result_rows / read_rows` as a percentage — a low ratio is the schema-pk-filter-on-orderby
+ *  diagnosis made visible: the query read far more rows than it returned, which usually means its
+ *  filters aren't hitting the table's sort key. `undefined` when either number is missing/zero, so
+ *  a 0% row never gets manufactured out of absent data. */
+function readEfficiency(span: { attrs: Record<string, unknown> }): number | undefined {
+  const read = span.attrs.serverReadRows;
+  const result = span.attrs.serverResultRows;
+  if (typeof read !== 'number' || typeof result !== 'number' || read <= 0) {
+    return undefined;
   }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = n;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  return (result / read) * 100;
 }
 
 export function StatsTable({ root }: StatsTableProps) {
@@ -40,10 +38,11 @@ export function StatsTable({ root }: StatsTableProps) {
 
   if (!isEnrichmentEnabled()) {
     return (
-      <div className={styles.empty}>
-        <Icon name="info-circle" size="lg" />
-        <div>Server-side stats are off. Enable them below to see ClickHouse execution details for future actions.</div>
-      </div>
+      <DiagEmptyState
+        icon="info-circle"
+        title="Server-side stats are off"
+        description="Enable them below to see ClickHouse execution details for future actions."
+      />
     );
   }
 
@@ -57,35 +56,31 @@ export function StatsTable({ root }: StatsTableProps) {
   // misleading "still waiting" for something that was never attempted.
   if (status == null || status === 'not-tagged') {
     return (
-      <div className={styles.empty}>
-        <Icon name="info-circle" size="lg" />
-        <div>
-          This action ran before server-side stats were turned on, so its queries were never tagged — nothing will
-          arrive for it. Enable the toggle below and run the action again.
-        </div>
-      </div>
+      <DiagEmptyState
+        icon="info-circle"
+        title="This action's queries were never tagged"
+        description="It ran before server-side stats were turned on, so nothing will arrive for it. Enable the toggle below and run the action again."
+      />
     );
   }
 
   if (status === 'pending') {
     return (
-      <div className={styles.empty}>
-        <Icon name="hourglass" size="lg" />
-        <div>Waiting for ClickHouse&apos;s query log to flush — this can take a few seconds.</div>
-      </div>
+      <DiagEmptyState
+        icon="hourglass"
+        title="Waiting for ClickHouse's query log to flush"
+        description="This can take a few seconds."
+      />
     );
   }
 
   if (status === 'no-data') {
     return (
-      <div className={styles.empty}>
-        <Icon name="info-circle" size="lg" />
-        <div>
-          No matching rows showed up in <code>system.query_log</code>. Possible causes: the log hasn&apos;t flushed yet
-          (its default flush interval is 7.5s), <code>log_queries</code> is disabled for this user, or the table&apos;s
-          retention is shorter than the lookup window.
-        </div>
-      </div>
+      <DiagEmptyState
+        icon="info-circle"
+        title="No matching rows showed up in system.query_log"
+        description="Possible causes: the log hasn't flushed yet (its default flush interval is 7.5s), log_queries is disabled for this user, or the table's retention is shorter than the lookup window."
+      />
     );
   }
 
@@ -99,21 +94,19 @@ export function StatsTable({ root }: StatsTableProps) {
           ? 'This ClickHouse user is in readonly mode, which also blocks the SETTINGS tag diagnostics needs to correlate queries.'
           : 'The stats lookup itself failed.';
     return (
-      <div className={styles.empty}>
-        <Icon name="exclamation-triangle" size="lg" className={styles.warnIcon} />
-        <div>{message}</div>
-        {detail && <div className={styles.detail}>{detail}</div>}
-      </div>
+      <DiagEmptyState
+        icon="exclamation-triangle"
+        tone="warning"
+        title={message}
+        description={detail}
+      />
     );
   }
 
   const spans = querySpans(root).filter((span) => typeof span.attrs.serverDurationMs === 'number');
   if (spans.length === 0) {
     return (
-      <div className={styles.empty}>
-        <Icon name="info-circle" size="lg" />
-        <div>No queries in this action matched yet.</div>
-      </div>
+      <DiagEmptyState icon="info-circle" title="No queries in this action matched yet" />
     );
   }
 
@@ -127,24 +120,31 @@ export function StatsTable({ root }: StatsTableProps) {
             <th>Rows read</th>
             <th>Bytes read</th>
             <th>Result rows</th>
+            <th>Efficiency</th>
             <th>Memory</th>
             <th>Marks</th>
             <th>Parts</th>
           </tr>
         </thead>
         <tbody>
-          {spans.map((span) => (
-            <tr key={span.id}>
-              <td>{span.name}</td>
-              <td className={styles.num}>{formatCount(span.attrs.serverDurationMs)} ms</td>
-              <td className={styles.num}>{formatCount(span.attrs.serverReadRows)}</td>
-              <td className={styles.num}>{formatBytes(span.attrs.serverReadBytes)}</td>
-              <td className={styles.num}>{formatCount(span.attrs.serverResultRows)}</td>
-              <td className={styles.num}>{formatBytes(span.attrs.serverMemoryUsage)}</td>
-              <td className={styles.num}>{formatCount(span.attrs.serverSelectedMarks)}</td>
-              <td className={styles.num}>{formatCount(span.attrs.serverSelectedParts)}</td>
-            </tr>
-          ))}
+          {spans.map((span, i) => {
+            const efficiency = readEfficiency(span);
+            return (
+              <tr key={span.id} className={i % 2 === 1 ? styles.zebra : undefined}>
+                <td>{labelForKind(span.kind, span.name)}</td>
+                <td className={styles.num}>{formatCount(span.attrs.serverDurationMs)} ms</td>
+                <td className={styles.num}>{formatCount(span.attrs.serverReadRows)}</td>
+                <td className={styles.num}>{formatBytes(span.attrs.serverReadBytes)}</td>
+                <td className={styles.num}>{formatCount(span.attrs.serverResultRows)}</td>
+                <td className={`${styles.num} ${efficiency != null && efficiency < 1 ? styles.efficiencyLow : ''}`}>
+                  {efficiency != null ? `${efficiency < 0.1 ? '<0.1' : efficiency.toFixed(1)}%` : '—'}
+                </td>
+                <td className={styles.num}>{formatBytes(span.attrs.serverMemoryUsage)}</td>
+                <td className={styles.num}>{formatCount(span.attrs.serverSelectedMarks)}</td>
+                <td className={styles.num}>{formatCount(span.attrs.serverSelectedParts)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -152,25 +152,6 @@ export function StatsTable({ root }: StatsTableProps) {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  empty: css`
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    color: ${theme.colors.text.secondary};
-    padding: ${theme.spacing(4)} ${theme.spacing(2)};
-    text-align: center;
-    max-width: 480px;
-    margin: 0 auto;
-  `,
-  warnIcon: css`
-    color: ${theme.colors.warning.text};
-  `,
-  detail: css`
-    font-family: ${theme.typography.fontFamilyMonospace};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    color: ${theme.colors.text.disabled};
-  `,
   tableWrap: css`
     overflow-x: auto;
   `,
@@ -191,10 +172,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
       color: ${theme.colors.text.secondary};
       font-weight: ${theme.typography.fontWeightMedium};
     }
+
+    tbody tr:hover {
+      background: ${theme.colors.action.hover};
+    }
   `,
   num: css`
     font-family: ${theme.typography.fontFamilyMonospace};
     font-variant-numeric: tabular-nums;
     text-align: right;
+  `,
+  zebra: css`
+    background: ${theme.colors.background.secondary};
+  `,
+  efficiencyLow: css`
+    color: ${theme.colors.warning.text};
   `,
 });

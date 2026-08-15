@@ -14,25 +14,46 @@ import pluginJson from '../plugin.json';
 import { SourceConfig } from '../types';
 import { Span } from './types';
 import { computeWarnings, Warning } from './warnings';
+import { stripLiterals } from './sqlIntegrity';
 
 /**
- * SETTINGS-clause keyword values kept even under redaction — a small, fixed, non-exhaustive set of
- * ClickHouse enum values this codebase's own query builders emit (see sql/queryBuilder.ts,
- * sql/settings.ts), never user-entered data. Keeping them is what lets a shared bundle still show
- * *why* a query was slow (e.g. `timeout_overflow_mode = 'break'` — see diag/warnings.ts) instead of
- * redacting the one detail that finding depends on. Everything else quoted is user data and gets
- * replaced unconditionally — this is a strict allowlist, not a denylist of "things that look
- * sensitive", precisely so nothing new slips through unredacted by default.
+ * Redacts every single-quoted string literal (and comment) in `sql` except a small keyword
+ * allowlist of ClickHouse SETTINGS values this codebase's own query builders emit — see
+ * sqlIntegrity.ts's `stripLiterals` doc comment for the allowlist and why it's shared with that
+ * module's own text-level integrity checks rather than duplicated here. Keeping those specific
+ * values (e.g. `timeout_overflow_mode = 'break'`) is what lets a shared bundle still show *why* a
+ * query was slow (see diag/warnings.ts) instead of redacting the one detail that finding depends
+ * on. Everything else quoted is user data and gets replaced unconditionally — a strict allowlist,
+ * not a denylist of "things that look sensitive", precisely so nothing new slips through
+ * unredacted by default.
  */
-const SAFE_STRING_LITERALS = new Set(['throw', 'break', 'any', 'browser', 'dashboard', 'sql', 'Table']);
+export const redactSql = stripLiterals;
 
-const STRING_LITERAL_RE = /'((?:[^'\\]|\\.)*)'/g;
+/**
+ * Redacts bare (unquoted) occurrences of the data view's own database/table name — `redactSql`
+ * only strips quoted string literals, so `FROM internal_prod_db.customer_events` sailed through
+ * untouched even though `redactConfig` was carefully stripping the same names from the config
+ * object sitting right next to it. Whole-word matched so a name that happens to be a short common
+ * token doesn't over-redact unrelated text.
+ */
+function redactIdentifiers(text: string, identifiers: readonly string[]): string {
+  let out = text;
+  for (const id of identifiers) {
+    if (!id) {
+      continue;
+    }
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(`\\b${escaped}\\b`, 'g'), '<redacted>');
+  }
+  return out;
+}
 
-/** Redacts every single-quoted string literal in `sql` except the small keyword allowlist above. */
-export function redactSql(sql: string): string {
-  return sql.replace(STRING_LITERAL_RE, (match, inner: string) =>
-    SAFE_STRING_LITERALS.has(inner) ? match : `'<redacted>'`
-  );
+/** Full text redaction pipeline for anything that might carry SQL or a schema name — quoted
+ *  literals via `redactSql`, then bare database/table identifiers via `redactIdentifiers`. Used for
+ *  every free-text field the bundle exports: query SQL, error strings, and warning messages all
+ *  echo user data or schema names the same way (see the module doc comment). */
+function redactText(text: string, identifiers: readonly string[]): string {
+  return redactIdentifiers(redactSql(text), identifiers);
 }
 
 export interface RedactedConfig {
@@ -74,10 +95,15 @@ export interface RedactedSpan {
   children: RedactedSpan[];
 }
 
-function redactSpan(span: Span): RedactedSpan {
+// Attrs whose value is free text that can carry the same user data / schema names as `sql` —
+// `serverException` is ClickHouse's own `system.query_log.exception` column (diag/autoEnrich.ts),
+// which routinely echoes the failing query verbatim, exactly like a client-side error string does.
+const TEXT_ATTR_KEYS = new Set(['sql', 'executedSql', 'serverException']);
+
+function redactSpan(span: Span, identifiers: readonly string[]): RedactedSpan {
   const attrs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(span.attrs)) {
-    attrs[key] = (key === 'sql' || key === 'executedSql') && typeof value === 'string' ? redactSql(value) : value;
+    attrs[key] = TEXT_ATTR_KEYS.has(key) && typeof value === 'string' ? redactText(value, identifiers) : value;
   }
   return {
     id: span.id,
@@ -89,10 +115,21 @@ function redactSpan(span: Span): RedactedSpan {
     endMs: span.endMs,
     durationMs: span.endMs != null ? span.endMs - span.startMs : null,
     status: span.status,
-    error: span.error,
+    // span.error is formatDataQueryError's output (runQuery.ts) — for a ClickHouse exception this
+    // routinely echoes the failing query back verbatim (e.g. "...while processing query: 'SELECT
+    // ... WHERE body LIKE '%someone@example.com%''"), so it needs the same redaction as sql/
+    // executedSql, not a pass-through. See the module doc comment.
+    error: span.error ? redactText(span.error, identifiers) : span.error,
     attrs,
-    children: span.children.map(redactSpan),
+    children: span.children.map((child) => redactSpan(child, identifiers)),
   };
+}
+
+/** Same redaction as `redactSpan`'s `error` field, for warnings.ts's `Warning.message` — several
+ *  of those messages embed `span.error` or ClickHouse's own exception text verbatim (see
+ *  warnings.ts's serverException and FAILED findings), so they carry the identical leak risk. */
+function redactWarning(warning: Warning, identifiers: readonly string[]): Warning {
+  return { ...warning, message: redactText(warning.message, identifiers) };
 }
 
 export interface DiagnosticsBundle {
@@ -104,11 +141,15 @@ export interface DiagnosticsBundle {
 }
 
 export function buildDiagnosticsBundle(root: Span, config: SourceConfig): DiagnosticsBundle {
+  // The database/table names redactConfig strips from the config object are the same names that
+  // can appear unquoted inside SQL text (FROM/JOIN) or an echoed-back error string — redact them
+  // there too rather than only in the structured config field sitting next to it.
+  const identifiers = [config.database, config.logsTable].filter((s): s is string => Boolean(s && s.trim()));
   return {
     generatedAt: new Date().toISOString(),
     pluginVersion: pluginJson.info.version,
-    root: redactSpan(root),
-    warnings: computeWarnings(root),
+    root: redactSpan(root, identifiers),
+    warnings: computeWarnings(root).map((w) => redactWarning(w, identifiers)),
     config: redactConfig(config),
   };
 }

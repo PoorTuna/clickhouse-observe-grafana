@@ -10,6 +10,64 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.7.0] — 2026-08-15
+
+### Changed
+
+- **Inspect drawer visual overhaul**: the Timeline tab now has a time ruler with gridlines, a
+  "Where the time went" phase-breakdown bar (ClickHouse/network/decode/render, colored and
+  legended), and phase-colored waterfall bars instead of every bar reading identically. A new
+  summary card (name, wall-clock time, duration, query count, rows/bytes read) sits above every
+  tab. The activity rail now shows a magnitude micro-bar and relative time per row, a left accent
+  border on the selected entry, and distinguishes action roots from background/orphan roots.
+  Empty states across all four tabs are now one shared component instead of four bespoke ones.
+- **`transport`/`clickhouse`/`decode`/`render` labels are now plain-language** ("decode (parse
+  response)", "transport (network round-trip)", etc.) with hover tooltips explaining what each
+  phase actually measures. A query span still waiting on (or never receiving) its server-side
+  split now shows an explicit reserved-space placeholder explaining why, instead of silently
+  showing nothing.
+- **The Queries tab collapses long SQL blocks** behind a "Show N more lines" toggle so one query's
+  full SETTINGS clause no longer pushes every other query below the fold.
+- **The Stats tab gained a `result_rows / read_rows` "Efficiency" column**, tinted when a query
+  read far more rows than it returned — the `schema-pk-filter-on-orderby` diagnosis ("filters
+  aren't hitting the sort key") made visible without leaving the drawer.
+- **The two independently-debounced logs/volume fetches now share one named action** ("Time
+  range", "Filters", "Search", "Sort", "Columns") when they're responding to the same user change,
+  instead of appearing as two unrelated-looking rail entries.
+
+### Fixed
+
+- **Copy diagnostics bundle leaked unredacted query text** through a span's `error` string (which
+  routinely echoes a failing query verbatim), through `system.query_log`'s own `exception` column,
+  and through Warnings tab messages built from either — only `sql`/`executedSql` were redacted
+  before. Bare (unquoted) database/table identifiers in SQL text are now redacted too, matching
+  what the config redaction already stripped.
+- **The Warnings & Errors badge was permanently lit by a benign condition**: the logs grid is
+  paginated by design, so a full page of results always tripped the "results were capped" finding.
+  That check now only fires for ops with no pagination UI of their own (field discovery, presence,
+  autocomplete) — a healthy search now shows zero warnings instead of a permanent false positive.
+- **Server-side stats enrichment could fire up to ~18 extra `system.query_log` scans per
+  auto-refresh tick** — every ended action/root ran its own independent 3-attempt poll cycle. A
+  shared, debounced batch poller now covers every root ending together with one query per round,
+  and keeps polling a given root only until every one of its queries is matched (previously a fast
+  round could match some queries and silently leave others unexplained).
+- **A `render` span outliving its action** (the common case — `executeQuery` ends the action once
+  logs+volume settle, but `render` closes on the next paint) made the action's own reported
+  duration shorter than work it actually caused, and clipped the render bar off the right edge of
+  the waterfall. Durations and the waterfall's scale now cover the whole span tree.
+- A still-running child span under an already-ended root (the case above) no longer freezes its
+  live-updating bar — the waterfall's live tick now checks the whole tree, not just the root.
+- `SAMPLE` and `LIMIT` text-level checks could be fooled by a searched value that happened to
+  contain those words inside a quoted string (e.g. `Body LIKE '%sample%'`), and a query with a
+  subquery could report the subquery's `LIMIT` as the whole query's cap. Both checks now run
+  against literal-and-comment-stripped SQL and take the last top-level `LIMIT`.
+- A raw-SQL-mode query with a `SETTINGS` clause wrapped across multiple lines could get a second,
+  invalid `SETTINGS` clause appended when tagged for enrichment — now detected and skipped.
+- `startAutoEnrichment`'s disposer was a no-op after the first call, so an in-flight poll cycle
+  could keep mutating spans and re-rendering after `clearRoots()` or a hot reload.
+- The drawer's warnings computation ran twice per rail row per render (once for grouping, once per
+  row) on every tracer mutation; now computed once per root per version and shared.
+
 ## [0.6.0] — 2026-08-14
 
 ### Added

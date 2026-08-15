@@ -121,6 +121,67 @@ describe('buildDiagnosticsBundle', () => {
     expect(bundle.pluginVersion.length).toBeGreaterThan(0);
   });
 
+  // Regression (B1): formatDataQueryError (runQuery.ts) routinely echoes the failing query back
+  // verbatim inside .message for a ClickHouse exception, and warnings.ts's FAILED finding
+  // re-embeds that same string — both bypassed redaction entirely before this fix, leaking exactly
+  // the data the bundle exists to redact.
+  it('redacts a searched literal that appears inside a span error, not just inside sql/executedSql', () => {
+    const action = startAction('Search submit');
+    const logs = action.child('logs', 'logs');
+    logs.setAttrs({ sql: `SELECT * FROM t WHERE Body LIKE '%secret-value%'` });
+    logs.setError(`DB::Exception: while processing query: SELECT * FROM t WHERE Body LIKE '%secret-value%'`);
+    logs.end('error');
+    action.end('error');
+
+    const bundle = buildDiagnosticsBundle(action.span, config);
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain('secret-value');
+  });
+
+  it('redacts a searched literal that appears inside a warning message', () => {
+    const action = startAction('Search submit');
+    const logs = action.child('logs', 'logs');
+    logs.setAttrs({ sql: 'SELECT 1' });
+    logs.setError(`ClickHouse exception near 'super-secret-token'`);
+    logs.end('error');
+    action.end('error');
+
+    const bundle = buildDiagnosticsBundle(action.span, config);
+    const messages = bundle.warnings.map((w) => w.message).join(' ');
+    expect(messages).not.toContain('super-secret-token');
+  });
+
+  it('redacts the ClickHouse-recorded exception text (serverException attr), not just the client error', () => {
+    const action = startAction('a');
+    const q = action.child('logs', 'logs');
+    q.setAttrs({
+      sql: 'SELECT 1',
+      serverExceptionCode: 60,
+      serverException: `Code: 60. DB::Exception: while executing SELECT * WHERE x = 'leaked-server-side'`,
+    });
+    q.end('ok'); // client-side status stayed 'ok' — this is exactly the "hid a ClickHouse exception" case
+    action.end('ok');
+
+    const bundle = buildDiagnosticsBundle(action.span, config);
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain('leaked-server-side');
+  });
+
+  // Related fix, same finding: redactConfig strips the database/table name from the config object,
+  // but the SQL sitting next to it still said `FROM internal_prod_db.customer_events` in plain text.
+  it('redacts bare (unquoted) database/table identifiers inside SQL text, not just quoted literals', () => {
+    const action = startAction('a');
+    const q = action.child('logs', 'logs');
+    q.setAttrs({ sql: `SELECT * FROM internal_prod_db.customer_events WHERE x = 1` });
+    q.end('ok');
+    action.end('ok');
+
+    const bundle = buildDiagnosticsBundle(action.span, config);
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain('internal_prod_db');
+    expect(serialized).not.toContain('customer_events');
+  });
+
   it('is valid JSON end to end (no cycles, no undefined-breaking values)', () => {
     const action = startAction('a');
     const q = action.child('logs', 'logs');

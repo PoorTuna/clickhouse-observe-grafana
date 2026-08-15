@@ -89,7 +89,9 @@ describe('StatsTable', () => {
     });
     action.setAttrs({ serverStatsStatus: 'ok' });
     render(<StatsTable root={action.span} />);
-    expect(screen.getByText('logs')).toBeInTheDocument();
+    // The 'logs' query op renders as its plain-language label ("Log rows"), not the raw op string
+    // — see phaseColors.ts's QUERY_OP_LABELS.
+    expect(screen.getByText('Log rows')).toBeInTheDocument();
     expect(screen.getByText('840 ms')).toBeInTheDocument();
     expect(screen.getByText('12,400,000')).toBeInTheDocument();
   });

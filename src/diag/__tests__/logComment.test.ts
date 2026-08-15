@@ -44,6 +44,15 @@ describe('appendLogComment', () => {
     expect(result).toBe("SELECT 1 FROM t\nSETTINGS log_comment = 'chobs|t|s|logs'");
   });
 
+  // Regression (B9): a raw-SQL-mode query with a SETTINGS clause wrapped across multiple lines
+  // (continuation-indented past the SETTINGS keyword, not starting on the query's last line) would
+  // previously get a SECOND `SETTINGS` clause appended — a ClickHouse syntax error. Skipping the
+  // tag for this one query is the safe outcome, not a crash or invalid SQL.
+  it('skips tagging (returns sql unchanged) when an existing SETTINGS clause spans multiple lines', () => {
+    const sql = "SELECT 1\nSETTINGS max_execution_time = 10,\n  timeout_overflow_mode = 'throw'";
+    expect(appendLogComment(sql, 'chobs|t|s|logs')).toBe(sql);
+  });
+
   it('escapes single quotes and backslashes in the tag', () => {
     const result = appendLogComment('SELECT 1', "chobs|t|s|logs");
     expect(result).toContain("log_comment = 'chobs|t|s|logs'");

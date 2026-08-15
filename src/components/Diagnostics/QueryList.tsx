@@ -7,23 +7,36 @@
  * field discovery, detail hydration, load-more, the setup wizard) has never been inspectable
  * before this drawer.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { ClipboardButton, Icon, Spinner, useStyles2 } from '@grafana/ui';
+import { Button, ClipboardButton, Icon, Spinner, useStyles2 } from '@grafana/ui';
 import { Span, SpanStatus } from '../../diag/types';
 import { querySpans } from '../../diag/spanTree';
+import { DiagEmptyState } from './DiagEmptyState';
+import { labelForKind } from './phaseColors';
 
 interface QueryListProps {
   root: Span;
 }
+
+// A SQL block taller than this collapses behind an expand toggle — a single logs query with a
+// full SETTINGS clause could otherwise dominate the whole tab and push every other query below
+// the fold (see the "looks bare"/overhaul feedback this is part of).
+const COLLAPSED_LINE_COUNT = 6;
 
 export function QueryList({ root }: QueryListProps) {
   const styles = useStyles2(getStyles);
   const spans = querySpans(root);
 
   if (spans.length === 0) {
-    return <div className={styles.empty}>No queries recorded for this action yet.</div>;
+    return (
+      <DiagEmptyState
+        icon="database"
+        title="No queries recorded yet"
+        description="Queries appear here as soon as this action issues them."
+      />
+    );
   }
 
   return (
@@ -39,7 +52,7 @@ export function QueryList({ root }: QueryListProps) {
           <div key={span.id} className={styles.entry}>
             <div className={styles.entryHeader}>
               <StatusDot status={span.status} />
-              <span className={styles.entryName}>{span.name}</span>
+              <span className={styles.entryName}>{labelForKind(span.kind, span.name)}</span>
               {span.error && <span className={styles.entryError}>{span.error}</span>}
             </div>
             <SqlBlock label="SQL" sql={sql} styles={styles} />
@@ -52,6 +65,10 @@ export function QueryList({ root }: QueryListProps) {
 }
 
 function SqlBlock({ label, sql, styles }: { label: string; sql: string; styles: ReturnType<typeof getStyles> }) {
+  const lineCount = sql.split('\n').length;
+  const collapsible = lineCount > COLLAPSED_LINE_COUNT;
+  const [expanded, setExpanded] = useState(false);
+  const shown = collapsible && !expanded ? sql.split('\n').slice(0, COLLAPSED_LINE_COUNT).join('\n') : sql;
   return (
     <div className={styles.sqlBlock}>
       <div className={styles.sqlBlockHeader}>
@@ -60,7 +77,15 @@ function SqlBlock({ label, sql, styles }: { label: string; sql: string; styles: 
           Copy
         </ClipboardButton>
       </div>
-      <pre className={styles.sqlPre}>{sql}</pre>
+      <pre className={styles.sqlPre}>
+        {shown}
+        {collapsible && !expanded && '\n…'}
+      </pre>
+      {collapsible && (
+        <Button size="sm" variant="secondary" fill="text" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? `Show less` : `Show ${lineCount - COLLAPSED_LINE_COUNT} more lines`}
+        </Button>
+      )}
     </div>
   );
 }
@@ -80,11 +105,6 @@ function StatusDot({ status }: { status: SpanStatus }) {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  empty: css`
-    color: ${theme.colors.text.secondary};
-    padding: ${theme.spacing(2)};
-    text-align: center;
-  `,
   container: css`
     display: flex;
     flex-direction: column;

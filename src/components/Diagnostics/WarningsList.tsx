@@ -8,6 +8,7 @@ import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, IconName, useStyles2 } from '@grafana/ui';
 import { Warning, WarningSeverity } from '../../diag/warnings';
+import { DiagEmptyState } from './DiagEmptyState';
 
 interface WarningsListProps {
   warnings: Warning[];
@@ -18,10 +19,12 @@ export function WarningsList({ warnings }: WarningsListProps) {
 
   if (warnings.length === 0) {
     return (
-      <div className={styles.empty}>
-        <Icon name="check-circle" size="lg" className={styles.emptyIcon} />
-        <div>No integrity issues found for this action.</div>
-      </div>
+      <DiagEmptyState
+        icon="check-circle"
+        tone="success"
+        title="No integrity issues found"
+        description="Every query in this action came back clean — no truncation, no overflow-mode data loss, no server-side exceptions the page missed."
+      />
     );
   }
 
@@ -50,18 +53,6 @@ function SeverityIcon({ severity }: { severity: WarningSeverity }) {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  empty: css`
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: ${theme.spacing(1)};
-    color: ${theme.colors.text.secondary};
-    padding: ${theme.spacing(4)} ${theme.spacing(2)};
-    text-align: center;
-  `,
-  emptyIcon: css`
-    color: ${theme.colors.success.text};
-  `,
   list: css`
     list-style: none;
     margin: 0;

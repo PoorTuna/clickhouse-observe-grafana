@@ -1,4 +1,4 @@
-import { checkSqlIntegrity, detectTruncation, extractLimit } from '../sqlIntegrity';
+import { checkSqlIntegrity, detectTruncation, extractLimit, stripLiterals } from '../sqlIntegrity';
 
 describe('extractLimit', () => {
   it('extracts a plain LIMIT', () => {
@@ -11,6 +11,34 @@ describe('extractLimit', () => {
 
   it('returns undefined when there is no LIMIT', () => {
     expect(extractLimit('SELECT 1 FROM t')).toBeUndefined();
+  });
+
+  // Regression (B8): queryBuilder.ts's field-value sampler nests an inner `LIMIT sampleSize`
+  // before its own outer `LIMIT limit` — the FIRST match belongs to the subquery, not the whole
+  // query's real cap.
+  it('takes the last LIMIT, not the first, when a subquery has its own', () => {
+    const sql = `SELECT v FROM (SELECT v FROM t LIMIT 500) sub GROUP BY v ORDER BY count() DESC LIMIT 10`;
+    expect(extractLimit(sql)).toBe(10);
+  });
+
+  it('ignores a LIMIT-shaped number that only appears inside a quoted string literal', () => {
+    expect(extractLimit(`SELECT 1 FROM t WHERE msg = 'LIMIT 999'`)).toBeUndefined();
+  });
+});
+
+describe('stripLiterals', () => {
+  it('replaces an arbitrary string literal with a placeholder', () => {
+    expect(stripLiterals(`WHERE x = 'super-secret'`)).toBe(`WHERE x = '<redacted>'`);
+  });
+
+  it('keeps the small allowlist of ClickHouse keyword values untouched', () => {
+    const sql = `SETTINGS timeout_overflow_mode = 'throw', group_by_overflow_mode = 'any'`;
+    expect(stripLiterals(sql)).toBe(sql);
+  });
+
+  it('strips line and block comments', () => {
+    expect(stripLiterals('SELECT 1 -- trailing comment\nFROM t')).not.toContain('trailing comment');
+    expect(stripLiterals('SELECT /* inline */ 1 FROM t')).not.toContain('inline');
   });
 });
 
@@ -52,6 +80,13 @@ describe('checkSqlIntegrity', () => {
   it('flags SAMPLE usage', () => {
     const findings = checkSqlIntegrity('SELECT count() FROM t SAMPLE 0.1');
     expect(findings.map((f) => f.kind)).toContain('sample');
+  });
+
+  // Regression (B8): searching for the literal word "sample" (e.g. Body LIKE '%sample%') must not
+  // be mistaken for the SQL SAMPLE clause — the word only means something as unquoted SQL syntax.
+  it('does not flag the word "sample" when it only appears inside a quoted string literal', () => {
+    const findings = checkSqlIntegrity(`SELECT * FROM t WHERE Body LIKE '%sample%'`);
+    expect(findings.map((f) => f.kind)).not.toContain('sample');
   });
 
   it('returns no findings for an unremarkable query', () => {

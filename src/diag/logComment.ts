@@ -7,6 +7,8 @@
  * `JSONExtractString` would parse JSON on every surviving row for no benefit over `splitByChar`.
  */
 
+import { stripLiterals } from './sqlIntegrity';
+
 const TAG_PREFIX = 'chobs';
 
 /** Builds the tag for one query span — `chobs|<traceId>|<spanId>|<op>`. `traceId` is a span's
@@ -22,6 +24,7 @@ export function logCommentPrefixForTrace(traceId: string): string {
 }
 
 const TRAILING_SETTINGS_RE = /^\s*SETTINGS\b/i;
+const SETTINGS_WORD_RE = /\bSETTINGS\b/i;
 
 /**
  * Appends `log_comment = '<tag>'` to a query's SETTINGS clause — or adds one if it has none (raw
@@ -30,6 +33,15 @@ const TRAILING_SETTINGS_RE = /^\s*SETTINGS\b/i;
  * codebase emits one (see settings.ts's withSettings) — deliberately not a bare substring search
  * for "SETTINGS" anywhere in the text, since raw-SQL mode is arbitrary user SQL that could contain
  * that word in a comment or string literal without it being a real trailing clause.
+ *
+ * If the query already carries a SETTINGS clause that *isn't* simply "starts on the last line" —
+ * e.g. raw SQL mode with a clause wrapped across multiple lines, continuation-indented past the
+ * `SETTINGS` keyword itself — appending a second `SETTINGS` clause here would be a ClickHouse
+ * syntax error, and safely merging into an unknown-shaped existing clause needs real SQL parsing
+ * this module doesn't have. `stripLiterals` first, so the check can't be fooled by the word
+ * appearing inside a comment or string literal (see the test for exactly that case). Detected this
+ * way: skip tagging entirely rather than risk emitting invalid SQL — the query just runs one
+ * action untagged, which only costs that action's diagnostics detail, not correctness.
  */
 export function appendLogComment(sql: string, tag: string): string {
   const fragment = `log_comment = '${tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
@@ -42,6 +54,9 @@ export function appendLogComment(sql: string, tag: string): string {
   if (TRAILING_SETTINGS_RE.test(lastLine)) {
     lines[lines.length - 1] = `${lastLine}, ${fragment}`;
     return lines.join('\n');
+  }
+  if (SETTINGS_WORD_RE.test(stripLiterals(trimmed))) {
+    return sql;
   }
   return `${trimmed}\nSETTINGS ${fragment}`;
 }

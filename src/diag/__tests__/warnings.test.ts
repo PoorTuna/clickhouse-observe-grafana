@@ -37,9 +37,9 @@ describe('computeWarnings', () => {
     expect(computeWarnings(action.span)).toHaveLength(1);
   });
 
-  it('flags a truncated query as info', () => {
+  it('flags a truncated query as info for an op with no pagination UI of its own', () => {
     const action = startAction('a');
-    const q = action.child('logs', 'logs');
+    const q = action.child('mapKeys', 'mapKeys');
     q.setAttrs({ sql: 'SELECT 1 LIMIT 100', truncated: true });
     q.end('ok');
 
@@ -51,8 +51,29 @@ describe('computeWarnings', () => {
 
   it('does not flag a query explicitly marked not truncated', () => {
     const action = startAction('a');
-    const q = action.child('logs', 'logs');
+    const q = action.child('mapKeys', 'mapKeys');
     q.setAttrs({ sql: 'SELECT 1 LIMIT 100', truncated: false });
+    q.end('ok');
+
+    expect(computeWarnings(action.span)).toEqual([]);
+  });
+
+  // Regression (B2): the logs grid is paginated (an explicit "load more" affordance), so returning
+  // exactly LIMIT rows is the expected steady state of a healthy fetch, not missing data. Before
+  // this fix a full page permanently lit the Warnings & Errors badge on every search.
+  it('does not flag a truncated "logs" query — it has its own pagination UI, a full page is expected', () => {
+    const action = startAction('a');
+    const q = action.child('logs', 'logs');
+    q.setAttrs({ sql: 'SELECT 1 LIMIT 50', truncated: true });
+    q.end('ok');
+
+    expect(computeWarnings(action.span)).toEqual([]);
+  });
+
+  it('does not flag a truncated "loadMore" query for the same reason', () => {
+    const action = startAction('a');
+    const q = action.child('loadMore', 'loadMore');
+    q.setAttrs({ sql: 'SELECT 1 LIMIT 50', truncated: true });
     q.end('ok');
 
     expect(computeWarnings(action.span)).toEqual([]);
@@ -80,7 +101,7 @@ describe('computeWarnings', () => {
 
   it('sorts errors before warnings before info', () => {
     const action = startAction('a');
-    const info = action.child('logs', 'logs');
+    const info = action.child('mapKeys', 'mapKeys');
     info.setAttrs({ sql: 'SELECT 1 LIMIT 1', truncated: true });
     info.end('ok');
     const warn = action.child('volume', 'volume');

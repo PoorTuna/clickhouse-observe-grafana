@@ -20,9 +20,21 @@
  * for the second) — left as a follow-up rather than shipped as a half-correct check that could
  * produce a false positive on a warnings surface, where trust is the entire point.
  */
-import { Span } from './types';
+import { QueryOp, Span } from './types';
 import { flattenSpanTree, querySpans } from './spanTree';
 import { checkSqlIntegrity } from './sqlIntegrity';
+
+/**
+ * Ops where hitting a query's own LIMIT really does mean data is missing from what the page shows
+ * — a sidebar field-discovery/presence/autocomplete query has no pagination UI, so a capped result
+ * silently under-represents the truth. `logs`/`loadMore` are deliberately excluded: the log grid
+ * has an explicit "load more" affordance, so returning exactly LIMIT rows is the *expected* steady
+ * state of a healthy paginated fetch, not an anomaly — see the B2 finding this fixes. Before this,
+ * a full page of logs permanently lit the Warnings & Errors badge on every single search, which
+ * trains a reader to ignore the one tab meant to matter more than "slow" (see the module doc
+ * comment on ranking).
+ */
+const TRUNCATION_MATTERS_FOR: ReadonlySet<QueryOp> = new Set(['mapKeys', 'jsonPaths', 'fieldValues', 'presence', 'columns']);
 
 export type WarningSeverity = 'error' | 'warning' | 'info';
 
@@ -49,7 +61,7 @@ export function computeWarnings(root: Span): Warning[] {
         message: `${span.name}: ${finding.message}`,
       });
     }
-    if (span.attrs.truncated === true) {
+    if (span.attrs.truncated === true && TRUNCATION_MATTERS_FOR.has(span.kind as QueryOp)) {
       warnings.push({
         id: `${span.id}:truncated`,
         spanId: span.id,
@@ -65,7 +77,10 @@ export function computeWarnings(root: Span): Warning[] {
         spanId: span.id,
         spanName: span.name,
         severity: 'error',
-        message: `${span.name}: ClickHouse recorded an exception (code ${span.attrs.serverExceptionCode}) for this query that the page never surfaced as an error${detail}.`,
+        // Deliberately blunt (see the Warnings & Errors tab rename): this is a query ClickHouse
+        // itself recorded as failing, which the page quietly reported as fine. That's a wrong
+        // answer, not a slow one, and the wording should not read as gentler than that.
+        message: `${span.name}: HID A CLICKHOUSE EXCEPTION (code ${span.attrs.serverExceptionCode}) — the page reported this query as OK when it actually failed server-side${detail}.`,
       });
     }
   }
@@ -81,7 +96,7 @@ export function computeWarnings(root: Span): Warning[] {
         spanId: span.id,
         spanName: span.name,
         severity: 'error',
-        message: span.error ? `${span.name} failed: ${span.error}` : `${span.name} failed.`,
+        message: span.error ? `${span.name} FAILED: ${span.error}` : `${span.name} FAILED.`,
       });
     }
   }

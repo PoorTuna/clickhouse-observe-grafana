@@ -26,4 +26,14 @@ describe('spanDurationMs', () => {
   it('falls back to "now" for a still-running span', () => {
     expect(spanDurationMs(100, null, 350)).toBe(250);
   });
+
+  // Regression: a real render span was seen displaying "-11ms" live — endMs raced slightly before
+  // startMs under fast successive re-renders. A negative duration must never reach the user.
+  it('clamps a negative delta (endMs before startMs) to zero rather than a negative number', () => {
+    expect(spanDurationMs(1000, 989, 999)).toBe(0);
+  });
+
+  it('clamps a negative "still running" delta to zero as well', () => {
+    expect(spanDurationMs(1000, null, 989)).toBe(0);
+  });
 });

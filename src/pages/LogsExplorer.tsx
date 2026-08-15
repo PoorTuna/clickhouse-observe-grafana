@@ -366,13 +366,125 @@ export function LogsExplorer() {
   // activity entries, not one action's children — runQuery.ts's orphan-root fallback already names
   // each correctly by its `op` when no trace is passed.
   const actionRef = useRef<SpanHandle | null>(null);
+  // A 'render' child span, opened right before setRows(logRows) and closed by the useLayoutEffect
+  // below once the resulting DOM commit has actually painted — see that effect for why two RAF-ish
+  // steps are needed instead of just one. Answers this whole feature's founding question for the
+  // render-side case: "was it ClickHouse, or was it us?" (see the diagnostics plan's Context
+  // section) — without it, render time was invisible even though every query's time was not.
+  const pendingRenderSpanRef = useRef<SpanHandle | null>(null);
   // Always tracks the latest executeQuery closure so deferred calls get fresh state.
   const latestExecuteQuery = useRef<(actionName?: string) => void>(() => {});
+  // Groups the two independently-debounced fetchLogs/fetchVolume effects below (the ones the
+  // comment above actionRef says are "genuinely separate top-level activity entries") back under
+  // one shared action when they're actually responding to the same user change — a time-range
+  // drag, a filter add, a search submit. Ungrouped, one search bar keystroke could produce two
+  // unrelated-looking rail entries ('logs' and 'volume') instead of one named action containing
+  // both, which is exactly the "reads as soup" rail problem this fixes. Sidebar discovery
+  // (columns/mapKeys/jsonPaths) and presence genuinely have no shared gesture and stay ungrouped
+  // orphan roots, per the original design.
+  const groupActionRef = useRef<{ action: SpanHandle; promises: Array<Promise<unknown>> } | null>(null);
+  const groupSettleTimerRef = useRef<number | null>(null);
+
+  // A small grace window after a fetch joins the shared group action, giving the OTHER debounced
+  // effect (logs vs. volume) a chance to also join before the group is finalized — both effects use
+  // the same MUTATION_DEBOUNCE_MS below and fire from the same originating state change, so in
+  // practice they land within a tick of each other. Restarted on every join, so if both fetches
+  // join back-to-back the group only finalizes once, after the last one settles.
+  const GROUP_SETTLE_GRACE_MS = 50;
 
   // Effective columns: use state if set, else derive defaults from config
   const effectiveColumns = useMemo<SelectedColumn[]>(() => {
     return queryState.columns.length > 0 ? queryState.columns : defaultColumns(config);
   }, [queryState.columns, config]);
+
+  // What describeGroupChange's diff last compared against — updated only when a NEW group action
+  // is created (see joinGroupAction above), not on every render, so the diff reflects "what
+  // changed since the last named action" rather than "what changed since the last render". Starts
+  // null (rather than seeding from current state) deliberately: reading effectiveColumns/queryState
+  // directly in a useRef initializer defeated the React Compiler's ability to preserve
+  // effectiveColumns' own memoization. describeGroupChange treats a null previous snapshot as "the
+  // first group ever" and names it 'Load' rather than diffing against a guess.
+  const lastGroupSnapshotRef = useRef<{
+    search: string;
+    filtersKey: string;
+    columnsKey: string;
+    sortKey: string;
+    timeRangeKey: string;
+  } | null>(null);
+
+  /** Names a newly-created group action from whichever tracked field actually changed since the
+   *  last one was named — checked in roughly causal-salience order (a time-range drag is a bigger
+   *  "why did this run" story than a column reorder). Falls back to 'Load' for the mount-time case,
+   *  where there's nothing to diff against yet. */
+  function describeGroupChange(): string {
+    const prev = lastGroupSnapshotRef.current;
+    const curr = {
+      search: queryState.search,
+      filtersKey: JSON.stringify(queryState.filters),
+      columnsKey: JSON.stringify(effectiveColumns),
+      sortKey: JSON.stringify(queryState.sort),
+      timeRangeKey: `${timeRange.from.valueOf()}-${timeRange.to.valueOf()}`,
+    };
+    lastGroupSnapshotRef.current = curr;
+    if (!prev) {
+      return 'Load';
+    }
+    if (curr.timeRangeKey !== prev.timeRangeKey) {
+      return 'Time range';
+    }
+    if (curr.filtersKey !== prev.filtersKey) {
+      return 'Filters';
+    }
+    if (curr.search !== prev.search) {
+      return 'Search';
+    }
+    if (curr.sortKey !== prev.sortKey) {
+      return 'Sort';
+    }
+    if (curr.columnsKey !== prev.columnsKey) {
+      return 'Columns';
+    }
+    return 'Load';
+  }
+
+  /** Returns the current group action, creating one (named from whatever changed) if none is
+   *  already pending. Callers must set `actionRef.current` to the returned handle immediately
+   *  before invoking fetchLogs()/fetchVolume() and clear it right after — same synchronous-window
+   *  requirement as executeQuery's own use of actionRef (see its declaration above). */
+  function joinGroupAction(): SpanHandle {
+    if (groupActionRef.current) {
+      return groupActionRef.current.action;
+    }
+    const action = startAction(describeGroupChange());
+    groupActionRef.current = { action, promises: [] };
+    return action;
+  }
+
+  /** Registers `promise` (the fetchLogs()/fetchVolume() call just made under the current group
+   *  action) and (re)schedules the group's finalization after GROUP_SETTLE_GRACE_MS — see that
+   *  constant's doc comment for why a grace window, not an immediate close, is what lets both
+   *  fetches land under one action instead of racing to close it after just the first. */
+  function trackGroupPromise(promise: Promise<unknown>): void {
+    const group = groupActionRef.current;
+    if (!group) {
+      return;
+    }
+    group.promises.push(promise);
+    if (groupSettleTimerRef.current != null) {
+      window.clearTimeout(groupSettleTimerRef.current);
+    }
+    groupSettleTimerRef.current = window.setTimeout(() => {
+      groupSettleTimerRef.current = null;
+      if (groupActionRef.current !== group) {
+        return;
+      }
+      groupActionRef.current = null;
+      Promise.allSettled(group.promises).then(() => {
+        const hasError = group.action.span.children.some((child) => child.status === 'error');
+        group.action.end(hasError ? 'error' : 'ok');
+      });
+    }, GROUP_SETTLE_GRACE_MS);
+  }
 
   // Keeps the URL in sync with the current shareable state, so the address bar is always a valid
   // "copy this link" snapshot (users copy it straight from the browser's address bar) — same field
@@ -477,6 +589,10 @@ export function LogsExplorer() {
         return;
       }
 
+      // Opened here (immediately before the commit it's measuring) rather than nearer the top of
+      // fetchLogs, since the query time above is already covered by its own span — this one starts
+      // exactly where "we have the data, now we have to paint it" begins.
+      pendingRenderSpanRef.current = action?.child('render', 'render') ?? null;
       setRows(logRows);
       setCurrentPage(0);
       setHasMore(!queryState.useRawSql && logRows.length === INITIAL_FETCH);
@@ -792,6 +908,34 @@ export function LogsExplorer() {
     latestExecuteQuery.current = executeQuery;
   });
 
+  // Closes the 'render' span fetchLogs opened right before setRows(logRows) — see
+  // pendingRenderSpanRef's declaration. Two steps, not one: useLayoutEffect fires synchronously
+  // right after React has committed the new rows to the DOM, but before the browser has painted
+  // them; requestAnimationFrame inside it fires just before the *next* paint, i.e. after this one
+  // has happened. Ending the span in the layout effect itself would under-count by however long
+  // the actual paint takes — the gap this span exists to measure in the first place.
+  useLayoutEffect(() => {
+    const span = pendingRenderSpanRef.current;
+    if (!span) {
+      return;
+    }
+    pendingRenderSpanRef.current = null;
+    const frame = requestAnimationFrame(() => span.end('ok'));
+    // Bounded backstop, not just a "did it fire" cleanup: browsers throttle requestAnimationFrame
+    // to near-zero in a backgrounded/inactive tab, so relying only on rAF (or a cleanup that fires
+    // "whenever the next unrelated rows change happens to land") can leave this span open for
+    // seconds — reporting a multi-second "render" time that has nothing to do with actual paint
+    // work (seen live: 8.74s). Capping it at 1s means the worst case is "reported as ~1s and
+    // clearly a measurement artifact", never "reported as 8s and mistaken for a real perf problem".
+    // end() is idempotent, so whichever of {rAF, timeout, unmount cleanup} fires first wins.
+    const timeout = window.setTimeout(() => span.end('ok'), 1000);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      span.end('ok');
+    };
+  }, [rows]);
+
   // Auto-refresh: re-run the query on a tunable interval via RefreshPicker. Reads through
   // latestExecuteQuery (kept fresh above) rather than closing over `executeQuery` directly, so
   // the interval doesn't need to be torn down and restarted on every queryState change.
@@ -828,16 +972,39 @@ export function LogsExplorer() {
     if (enteringRawMode) {
       return;
     }
-    const t = window.setTimeout(() => fetchLogs(), MUTATION_DEBOUNCE_MS);
+    // Joins (or starts) the shared group action for whichever user change triggered this fetch —
+    // see groupActionRef's declaration above. fetchLogs reads actionRef.current synchronously at
+    // its very top, before its own first await, so setting it immediately before the call and
+    // clearing it right after is safe (same window executeQuery relies on).
+    const t = window.setTimeout(() => {
+      actionRef.current = joinGroupAction();
+      const p = fetchLogs();
+      actionRef.current = null;
+      trackGroupPromise(p);
+    }, MUTATION_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
+    // joinGroupAction/trackGroupPromise are plain (non-useCallback) helpers redefined every render
+    // that close over current state via `queryState`/`effectiveColumns`/`timeRange`/refs — they're
+    // deliberately excluded from deps (as several other effects in this file already do for
+    // similar helpers) so this effect still only re-fires for its own real trigger
+    // (fetchLogs identity / queryState.useRawSql), not on every unrelated re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchLogs, queryState.useRawSql]);
 
   // Runs independently of the logs fetch above — fetchVolume's own deps already exclude columns/
   // sort/raw-SQL, so this effect only re-fires for inputs that actually change the histogram
-  // (time range, search, filters, interval, breakdown).
+  // (time range, search, filters, interval, breakdown). Still joins the SAME group action as the
+  // logs effect above when both fire for the same underlying change (see groupActionRef).
   useEffect(() => {
-    const t = window.setTimeout(() => fetchVolume(), MUTATION_DEBOUNCE_MS);
+    const t = window.setTimeout(() => {
+      actionRef.current = joinGroupAction();
+      const p = fetchVolume();
+      actionRef.current = null;
+      trackGroupPromise(p);
+    }, MUTATION_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
+    // See the matching disable comment on the logs effect above — same reasoning applies here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchVolume]);
 
   const onAddFilter = (filter: FilterPill) => {

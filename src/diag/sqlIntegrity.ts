@@ -6,12 +6,52 @@
  * attrs), no ClickHouse round-trip required.
  */
 
-/** First `LIMIT n` in a query, or undefined if the query has none. Deliberately just the row cap —
+// SETTINGS-clause keyword values kept as-is when stripping literals — a small, fixed,
+// non-exhaustive set of ClickHouse enum values this codebase's own query builders emit (see
+// sql/queryBuilder.ts, sql/settings.ts), never user-entered data. Keeping them is what lets
+// `checkSqlIntegrity`'s overflow-mode checks below still find e.g. `timeout_overflow_mode =
+// 'break'` after stripping — that literal is exactly the thing those checks look for, not user
+// data to hide from them. diag/bundle.ts's redaction reuses this same list (via `stripLiterals`)
+// so "safe to reveal" has one definition instead of two that can drift apart.
+const SAFE_STRING_LITERALS = new Set(['throw', 'break', 'any', 'browser', 'dashboard', 'sql', 'Table']);
+const STRING_LITERAL_RE = /'((?:[^'\\]|\\.)*)'/g;
+const LINE_COMMENT_RE = /--[^\n]*/g;
+const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g;
+
+/**
+ * Replaces every string literal's contents (except the small keyword allowlist above) and every
+ * comment with a placeholder. Two callers need this, for the same underlying reason — arbitrary
+ * user-entered text (a searched value, a comment) must never be mistaken for SQL structure:
+ *
+ * 1. This module's own text-level checks (`checkSqlIntegrity`, `extractLimit`) — without it, a
+ *    user searching for the literal word "sample" (`Body LIKE '%sample%'`) trips the SAMPLE
+ *    finding, and a LIMIT number appearing inside a quoted string or a comment would be read as a
+ *    real row cap. See the B8 finding.
+ * 2. diag/bundle.ts's `redactSql` — the copy-bundle export's redaction pass, which is exactly the
+ *    same "don't let user data read as something it isn't" concern, just for privacy instead of
+ *    false positives. Kept here as the one definition both import, rather than two copies that can
+ *    silently diverge on which values are "safe".
+ */
+export function stripLiterals(sql: string): string {
+  return sql
+    .replace(BLOCK_COMMENT_RE, ' ')
+    .replace(LINE_COMMENT_RE, ' ')
+    .replace(STRING_LITERAL_RE, (match, inner: string) => (SAFE_STRING_LITERALS.has(inner) ? match : `'<redacted>'`));
+}
+
+/** Last `LIMIT n` in a query, or undefined if the query has none. Deliberately just the row cap —
  *  `LIMIT n OFFSET m` and `LIMIT n` both match on the first number, and that's the only one
- *  relevant to "did this query get capped". */
+ *  relevant to "did this query get capped". The *last* occurrence, not the first: a query with a
+ *  subquery (e.g. queryBuilder.ts's field-value sampler, which nests an inner `LIMIT sampleSize`
+ *  before its own outer `LIMIT limit`) would otherwise report the inner subquery's cap as if it
+ *  were the whole query's. Run against `stripLiterals`'d text so a LIMIT-shaped number inside a
+ *  quoted string can't be mistaken for a real clause. */
 export function extractLimit(sql: string): number | undefined {
-  const match = /\bLIMIT\s+(\d+)/i.exec(sql);
-  return match ? Number(match[1]) : undefined;
+  const matches = [...stripLiterals(sql).matchAll(/\bLIMIT\s+(\d+)/gi)];
+  if (matches.length === 0) {
+    return undefined;
+  }
+  return Number(matches[matches.length - 1][1]);
 }
 
 /**
@@ -36,8 +76,13 @@ export interface SqlIntegrityFinding {
   message: string;
 }
 
-/** Every text-level integrity concern found in a single query's SQL — see the module doc comment. */
-export function checkSqlIntegrity(sql: string): SqlIntegrityFinding[] {
+/** Every text-level integrity concern found in a single query's SQL — see the module doc comment.
+ *  Runs against `stripLiterals`'d text so a searched value that happens to spell a keyword (e.g.
+ *  `Body LIKE '%sample%'`) can't trip a finding meant to describe the query's own structure — see
+ *  the B8 finding. The overflow-mode / group-by checks below are unaffected by this: their keyword
+ *  values (`'break'`, `'any'`) are on `stripLiterals`'s own safe-to-keep allowlist. */
+export function checkSqlIntegrity(rawSql: string): SqlIntegrityFinding[] {
+  const sql = stripLiterals(rawSql);
   const findings: SqlIntegrityFinding[] = [];
   if (OVERFLOW_BREAK_RE.test(sql)) {
     findings.push({

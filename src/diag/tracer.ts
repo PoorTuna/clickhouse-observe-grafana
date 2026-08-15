@@ -150,6 +150,18 @@ export function getRoots(): readonly Span[] {
   return roots;
 }
 
+/**
+ * Wipes the activity rail — the user-facing "Clear activity" action in the drawer, for when
+ * accumulated history (e.g. from before a deliberate test run) is just noise. Reloading the page
+ * already does this implicitly (module-scoped state resets on every fresh script execution — there
+ * is no persistence layer for spans, only diag/enrichment.ts's toggle uses localStorage), so this
+ * exists for clearing without losing the rest of the page's state (filters, time range, scroll).
+ */
+export function clearRoots(): void {
+  roots = [];
+  notify();
+}
+
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -175,6 +187,39 @@ export function onRootEnd(listener: (span: Span) => void): () => void {
 export function setSpanAttrs(span: Span, attrs: SpanAttrs): void {
   span.attrs = { ...span.attrs, ...attrs };
   notify();
+}
+
+/**
+ * Adds an already-finished child span with explicit historical timestamps, for a span whose
+ * timing is reconstructed after the fact from external data rather than measured live via
+ * `child()`/`end()` — currently only diag/autoEnrich.ts's `clickhouse`/`transport` split, computed
+ * once `system.query_log` stats land (seconds after the query itself finished, so `child()`'s own
+ * "start now, end later" shape doesn't fit: "now" is long past the interval being described).
+ */
+export function addHistoricalChild(
+  parent: Span,
+  name: string,
+  kind: SpanKind,
+  startMs: number,
+  endMs: number,
+  status: Exclude<SpanStatus, 'running'>,
+  attrs?: SpanAttrs
+): Span {
+  const child: Span = {
+    id: nextId(),
+    parentId: parent.id,
+    rootId: parent.rootId,
+    name,
+    kind,
+    startMs,
+    endMs,
+    status,
+    attrs: attrs ? { ...attrs } : {},
+    children: [],
+  };
+  parent.children.push(child);
+  notify();
+  return child;
 }
 
 /** Monotonically increasing counter, bumped on every span mutation — the actual value passed to

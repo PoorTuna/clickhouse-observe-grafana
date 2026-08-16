@@ -1,9 +1,6 @@
 /**
- * "Where the time went" — one stacked bar summing every phase span's duration across the whole
- * tree by kind (diag/types.ts's SpanKind), sitting between the summary card and the waterfall on
- * the Timeline tab. This is the highest-value addition of the visual overhaul: it answers the
- * feature's founding question ("was it ClickHouse or everything else?") in one glance instead of
- * requiring every waterfall row's numbers to be read and summed by hand.
+ * Stacked bar summing every phase span's duration across the whole tree by kind
+ * (diag/types.ts's SpanKind), sitting between the summary card and the waterfall on the Timeline tab.
  *
  * Concurrent queries (a search submit fans out logs+volume+presence together, by design — see the
  * diagnostics plan's Context section) mean these segments can sum to more than the action's own
@@ -50,7 +47,7 @@ export function PhaseBreakdown({ root }: PhaseBreakdownProps) {
 
   return (
     <div className={styles.container}>
-      <div className={styles.heading}>Where the time went</div>
+      <div className={styles.heading}>Time by phase</div>
       <div className={styles.bar}>
         {present.map((kind) => (
           <div

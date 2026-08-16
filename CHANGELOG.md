@@ -10,13 +10,22 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.7.1] — 2026-08-15
+
+### Fixed
+
+- **Renamed the Timeline tab's phase-breakdown heading** from "Where the time went" to "Time by
+  phase".
+
+---
+
 ## [0.7.0] — 2026-08-15
 
 ### Changed
 
 - **Inspect drawer visual overhaul**: the Timeline tab now has a time ruler with gridlines, a
-  "Where the time went" phase-breakdown bar (ClickHouse/network/decode/render, colored and
-  legended), and phase-colored waterfall bars instead of every bar reading identically. A new
+  phase-breakdown bar (ClickHouse/network/decode/render, colored and legended), and phase-colored
+  waterfall bars instead of every bar reading identically. A new
   summary card (name, wall-clock time, duration, query count, rows/bytes read) sits above every
   tab. The activity rail now shows a magnitude micro-bar and relative time per row, a left accent
   border on the selected entry, and distinguishes action roots from background/orphan roots.

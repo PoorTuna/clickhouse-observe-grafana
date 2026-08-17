@@ -61,29 +61,22 @@ describe('withSettings', () => {
     expect(sql).not.toContain('max_execution_time = 10');
   });
 
-  // Every existing guardrail pairs max_execution_time with timeout_overflow_mode = 'throw' but
-  // never sets timeout_before_checking_execution_speed, so ClickHouse's default value of 10
-  // grants ~10s of grace before the cap is enforced at all — an advertised 10s cap was really a
-  // 20s one. withSettings now fills that gap automatically rather than requiring every call site
-  // to remember it.
-  it('defaults timeout_before_checking_execution_speed to 0 whenever max_execution_time is set', () => {
+  // Measured against a live server (CH 26.3.17.4): max_execution_time = 3 fires at 3.00s with or
+  // without timeout_before_checking_execution_speed set — that setting governs min_execution_speed
+  // checking, not the timeout itself, so withSettings must never inject it (see its doc comment;
+  // this used to default it to 0 on a since-disproven "10s of grace" theory).
+  it('never emits timeout_before_checking_execution_speed, even when max_execution_time is set', () => {
     const sql = withSettings(['SELECT 1'], [`max_execution_time = 10`, `timeout_overflow_mode = 'throw'`]);
-    expect(sql).toContain('timeout_before_checking_execution_speed = 0');
-  });
-
-  it('does not add timeout_before_checking_execution_speed when max_execution_time is absent', () => {
-    const sql = withSettings(['SELECT 1'], ['a = 1']);
     expect(sql).not.toContain('timeout_before_checking_execution_speed');
   });
 
-  it('respects an explicit timeout_before_checking_execution_speed instead of overriding it', () => {
-    // e.g. a user's extraQuerySettings fragment, merged in before the auto-fill runs.
+  it('passes through an explicit timeout_before_checking_execution_speed fragment unchanged', () => {
+    // e.g. a user's own extraQuerySettings fragment — withSettings must not touch it either way.
     const sql = withSettings(
       ['SELECT 1'],
       ['max_execution_time = 10', 'timeout_before_checking_execution_speed = 5']
     );
     expect(sql).toContain('timeout_before_checking_execution_speed = 5');
-    expect(sql).not.toContain('timeout_before_checking_execution_speed = 0');
   });
 
   // See the diagnostics plan's "Hole 1": before this, a later (config-derived) fragment always

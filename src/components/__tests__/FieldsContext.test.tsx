@@ -1,16 +1,14 @@
 /**
- * Regression coverage: field discovery must surface a scan failure, not silently swallow it into
- * an empty key list. Before this change, buildMapKeysQuery/buildJsonPathsQuery capped at 1000 rows
- * with `read_overflow_mode = 'break'` and FieldsContext caught per-column errors into `keys: []` —
- * a Map/JSON column that failed to scan looked identical to one with genuinely zero keys, and the
- * log detail drawer silently rendered without that column's flattened attribute rows. Discovery now
- * throws instead of truncating (see introspection.ts's DISCOVERY_SETTINGS), so a real failure must
- * reach useFieldDiscovery's `error`, alongside whatever fields *did* discover successfully.
+ * useFieldDiscovery is now Phase A only (system.columns) — Map-key/JSON-path discovery (formerly
+ * Phase B/C) was deleted from the mount-time hot path (see the perf plan's "Delete the presence
+ * query and its Available/Empty machinery"). Attribute keys are now derived from hydrated rows
+ * (sql/rowFields.ts) instead of a dedicated scan, so there is no more per-column mapKeys/jsonPaths
+ * failure banner to test — a Phase A (system.columns) failure is the only failure mode left.
  */
 import { renderHook, waitFor } from '@testing-library/react';
 import { useFieldDiscovery } from '../FieldsContext';
 import { runQueryRows } from '../../data/runQuery';
-import { DEFAULT_SOURCE_CONFIG, SourceConfig } from '../../types';
+import { DEFAULT_SOURCE_CONFIG, OTEL_COLUMN_MAPPING, SourceConfig } from '../../types';
 import { TimeRange, dateTime } from '@grafana/data';
 
 jest.mock('../../data/runQuery');
@@ -30,18 +28,19 @@ const timeRange: TimeRange = {
   raw: { from: 'now-1h', to: 'now' },
 };
 
-describe('useFieldDiscovery — discovery failure surfacing', () => {
+describe('useFieldDiscovery — Phase A only', () => {
   beforeEach(() => {
     mockRunQueryRows.mockReset();
   });
 
-  it('surfaces a Map-key scan failure as `error` while still publishing the columns phase A found', async () => {
+  it('publishes discovered columns from system.columns', async () => {
     mockRunQueryRows.mockImplementation(async ({ sql }) => {
       if (sql.includes('system.columns')) {
-        return [{ name: 'LogAttributes', type: "Map(LowCardinality(String), String)" }];
-      }
-      if (sql.includes('mapKeys')) {
-        throw new Error('Timeout exceeded: max_execution_time = 60');
+        return [
+          { name: 'Timestamp', type: 'DateTime64(9)' },
+          { name: 'Body', type: 'String' },
+          { name: 'LogAttributes', type: 'Map(LowCardinality(String), String)' },
+        ];
       }
       return [];
     });
@@ -50,14 +49,32 @@ describe('useFieldDiscovery — discovery failure surfacing', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(result.current.error).toMatch(/LogAttributes/);
-    // The column itself is still published (as a plain column field) even though its Map-key
-    // scan failed — partial fields plus a visible error, never partial fields presented as
-    // complete.
-    expect(result.current.fields.some((f) => f.name === 'LogAttributes')).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(result.current.fields.map((f) => f.name).sort()).toEqual(['Body', 'LogAttributes', 'Timestamp']);
+    // Map/JSON key/path discovery no longer runs here — a Map column is published only as itself
+    // (source: 'column'), never expanded into per-key fields the way Phase B used to.
+    expect(result.current.fields.every((f) => f.source === 'column')).toBe(true);
   });
 
-  it('leaves error null when every discovery phase succeeds', async () => {
+  it('surfaces a system.columns failure as `error`, with no fields published', async () => {
+    mockRunQueryRows.mockImplementation(async ({ sql }) => {
+      if (sql.includes('system.columns')) {
+        throw new Error('Timeout exceeded: max_execution_time = 25');
+      }
+      return [];
+    });
+
+    const { result } = renderHook(() =>
+      useFieldDiscovery({ ...config, logsTable: 'failing_table' }, timeRange)
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.error).toMatch(/Timeout exceeded/);
+    expect(result.current.fields).toHaveLength(0);
+  });
+
+  it('leaves error null when discovery succeeds', async () => {
     mockRunQueryRows.mockImplementation(async ({ sql }) => {
       if (sql.includes('system.columns')) {
         return [{ name: 'Body', type: 'String' }];
@@ -65,10 +82,9 @@ describe('useFieldDiscovery — discovery failure surfacing', () => {
       return [];
     });
 
-    // Different table than the first test — module-level caching in FieldsContext.tsx keys on
-    // datasourceUid:database:table, so reusing the same table would silently reuse the first
-    // test's cached (Map-typed) column instead of exercising this test's own mock.
-    const { result } = renderHook(() => useFieldDiscovery({ ...config, logsTable: 'plain_logs' }, timeRange));
+    const { result } = renderHook(() =>
+      useFieldDiscovery({ ...config, logsTable: 'plain_logs' }, timeRange)
+    );
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -76,54 +92,81 @@ describe('useFieldDiscovery — discovery failure surfacing', () => {
   });
 });
 
-// ── C2: discovered Map keys / JSON paths must be safely escaped into sqlExpr ──────────────────
-// Regression guard for FieldsContext building FieldModel.sqlExpr directly from scanned *data*
-// (Map keys, JSON paths) rather than from anything this codebase controls the shape of — a key
-// containing `'` used to produce broken/injectable SQL, and a JSON path segment that isn't a bare
-// identifier (e.g. `user-id`) used to silently change meaning (`Payload.user-id` parses as
-// subtraction) instead of erroring or resolving correctly.
-describe('useFieldDiscovery — discovered field sqlExpr escaping', () => {
+// ── Tuple elements (Phase D) — synchronous parse from system.columns' own type string, no scan ──
+describe('useFieldDiscovery — tuple elements still derived synchronously', () => {
   beforeEach(() => {
     mockRunQueryRows.mockReset();
   });
 
-  it('a Map key containing a single quote is escaped via quoteString, not spliced in raw', async () => {
+  it('flattens a Tuple-typed column into per-element fields without an extra query', async () => {
     mockRunQueryRows.mockImplementation(async ({ sql }) => {
       if (sql.includes('system.columns')) {
-        return [{ name: 'LogAttributes', type: 'Map(LowCardinality(String), String)' }];
-      }
-      if (sql.includes('mapKeys')) {
-        return [{ k: "it's" }];
+        return [{ name: 'MyTuple', type: 'Tuple(a String, b Int64)' }];
       }
       return [];
     });
 
     const { result } = renderHook(() =>
-      useFieldDiscovery({ ...config, logsTable: 'escape_map_keys' }, timeRange)
+      useFieldDiscovery({ ...config, logsTable: 'tuple_table' }, timeRange)
     );
+
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    const field = result.current.fields.find((f) => f.source === 'map');
-    expect(field?.sqlExpr).toBe("LogAttributes['it\\'s']");
+    const tupleFields = result.current.fields.filter((f) => f.source === 'tuple');
+    expect(tupleFields.map((f) => f.name).sort()).toEqual(['a', 'b']);
+    // Exactly one query fired (system.columns) — no per-tuple scan.
+    expect(mockRunQueryRows).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Coarse index-pruning column auto-detection (perf plan item 0) ────────────────────────────
+describe('useFieldDiscovery — detectedPartitionTimestamp', () => {
+  beforeEach(() => {
+    mockRunQueryRows.mockReset();
   });
 
-  it('a JSON path segment that is not a bare identifier is double-quoted, not left bare', async () => {
+  it('detects a toDate(...) partition-key column derived from the mapped timestamp', async () => {
     mockRunQueryRows.mockImplementation(async ({ sql }) => {
       if (sql.includes('system.columns')) {
-        return [{ name: 'Payload', type: 'JSON' }];
-      }
-      if (sql.includes('JSONAllPathsWithTypes')) {
-        return [{ path: 'user-id', type: 'String' }];
+        return [
+          { name: 'Timestamp', type: 'DateTime64(9)', default_kind: '', default_expression: '', is_in_partition_key: 0, is_in_primary_key: 0, position: 1 },
+          { name: 'TimestampTime', type: 'DateTime', default_kind: 'DEFAULT', default_expression: 'toDate(Timestamp)', is_in_partition_key: 1, is_in_primary_key: 1, position: 2 },
+        ];
       }
       return [];
     });
 
     const { result } = renderHook(() =>
-      useFieldDiscovery({ ...config, logsTable: 'escape_json_paths' }, timeRange)
+      useFieldDiscovery(
+        { ...config, logsTable: 'prune_detect_table', columns: OTEL_COLUMN_MAPPING },
+        timeRange
+      )
     );
+
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    const field = result.current.fields.find((f) => f.source === 'json');
-    expect(field?.sqlExpr).toBe('Payload."user-id"');
+    expect(result.current.detectedPartitionTimestamp).toBe('TimestampTime');
+  });
+
+  it('detects nothing when no column qualifies (e.g. the mapped timestamp is itself the sort key)', async () => {
+    mockRunQueryRows.mockImplementation(async ({ sql }) => {
+      if (sql.includes('system.columns')) {
+        return [
+          { name: 'Timestamp', type: 'DateTime64(9)', default_kind: '', default_expression: '', is_in_partition_key: 0, is_in_primary_key: 1, position: 1 },
+        ];
+      }
+      return [];
+    });
+
+    const { result } = renderHook(() =>
+      useFieldDiscovery(
+        { ...config, logsTable: 'no_prune_table', columns: OTEL_COLUMN_MAPPING },
+        timeRange
+      )
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.detectedPartitionTimestamp).toBe('');
   });
 });

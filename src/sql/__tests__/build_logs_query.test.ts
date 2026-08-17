@@ -11,6 +11,7 @@
  */
 
 import { buildLogsQuery, logRowKey, CORE_ALIAS } from '../queryBuilder';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../settings';
 import { DEFAULT_LOGS_QUERY_STATE, EMPTY_COLUMN_MAPPING, OTEL_COLUMN_MAPPING, SourceConfig } from '../../types';
 
 const otelConfig: SourceConfig = {
@@ -154,6 +155,57 @@ describe('buildLogsQuery core SELECT list — full/default projection (bare SELE
     };
     const sql = buildLogsQuery(otelConfig, state);
     expect(sql).toContain('ORDER BY fld_extra ASC');
+  });
+});
+
+describe('buildLogsQuery — execution guardrail (perf plan item 1)', () => {
+  it('carries the shared query-timeout budget, throwing rather than silently truncating', () => {
+    const sql = buildLogsQuery(otelConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).toContain(`max_execution_time = ${DEFAULT_QUERY_TIMEOUT_SECONDS}`);
+    expect(sql).toContain("timeout_overflow_mode = 'throw'");
+  });
+
+  it('respects a per-view queryTimeoutSeconds override', () => {
+    const sql = buildLogsQuery({ ...otelConfig, queryTimeoutSeconds: 5 }, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).toContain('max_execution_time = 5');
+  });
+});
+
+describe('buildLogsQuery — coarse index-pruning predicate (perf plan item 0)', () => {
+  const withPrune: SourceConfig = {
+    ...otelConfig,
+    columns: { ...otelConfig.columns, partitionTimestamp: 'TimestampTime' },
+  };
+
+  it('appends the coarse predicate alongside the fine one when partitionTimestamp resolves', () => {
+    const sql = buildLogsQuery(withPrune, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).toContain(`${withPrune.columns.timestamp} >= $__fromTime AND ${withPrune.columns.timestamp} <= $__toTime`);
+    expect(sql).toContain('TimestampTime >= $__fromTime - INTERVAL 1 SECOND AND TimestampTime <= $__toTime + INTERVAL 1 SECOND');
+  });
+
+  it('emits byte-identical SQL to the no-prune-column case when partitionTimestamp is unset', () => {
+    // EMPTY_COLUMN_MAPPING (and hence otelConfig without an explicit override) has
+    // partitionTimestamp === '' — no candidate resolved, today's SQL unchanged. This is also the
+    // correct behavior for a table where the mapped timestamp is itself the sort key (e.g.
+    // default.eval_otel — see the perf plan's no-partition-key regression check).
+    const unprunedConfig: SourceConfig = { ...otelConfig, columns: { ...otelConfig.columns, partitionTimestamp: '' } };
+    const sql = buildLogsQuery(unprunedConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).not.toContain('INTERVAL 1 SECOND');
+  });
+
+  it('is suppressed by the explicit "off" sentinel ("-") even if a coarse column name is meaningful', () => {
+    const offConfig: SourceConfig = { ...otelConfig, columns: { ...otelConfig.columns, partitionTimestamp: '-' } };
+    const sql = buildLogsQuery(offConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).not.toContain('INTERVAL 1 SECOND');
+  });
+
+  it('never appends the coarse predicate when no timestamp column is mapped at all', () => {
+    const noTsConfig: SourceConfig = {
+      ...otelConfig,
+      columns: { ...otelConfig.columns, timestamp: '', partitionTimestamp: 'TimestampTime' },
+    };
+    const sql = buildLogsQuery(noTsConfig, DEFAULT_LOGS_QUERY_STATE, undefined, { projection: 'grid' });
+    expect(sql).not.toContain('TimestampTime');
   });
 });
 

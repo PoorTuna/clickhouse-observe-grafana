@@ -12,6 +12,7 @@ import {
   resolveVolumeBreakdown,
 } from '../queryBuilder';
 import { buildMapKeysQuery } from '../introspection';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../settings';
 import { FieldModel, selectMapColumns } from '../fieldModel';
 import { EMPTY_COLUMN_MAPPING, SourceConfig } from '../../types';
 
@@ -35,33 +36,39 @@ describe('buildVolumeQuery', () => {
 });
 
 describe('buildMapKeysQuery', () => {
-  it('omits the time filter (not "undefined") when timestamp is unmapped', () => {
+  it('omits ORDER BY (not "undefined") when timestamp is unmapped, but still bounds by LIMIT', () => {
     const cfg: SourceConfig = { ...arbitraryConfig, columns: { ...EMPTY_COLUMN_MAPPING } };
-    const sql = buildMapKeysQuery(cfg, 'attrs');
+    const sql = buildMapKeysQuery(cfg, 'attrs', { table: cfg.logsTable, conditions: [] });
     expect(sql).not.toContain('undefined');
-    expect(sql).not.toContain('WHERE');
+    expect(sql).not.toContain('ORDER BY');
+    expect(sql).toContain('LIMIT 500');
   });
 
-  it('includes the time filter when timestamp is mapped', () => {
-    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
+  it('scopes the sample by the caller-supplied WHERE conditions and orders by timestamp DESC', () => {
+    const conditions = ['ts >= $__fromTime AND ts <= $__toTime'];
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', { table: arbitraryConfig.logsTable, conditions });
     expect(sql).toContain('WHERE ts >= $__fromTime');
+    expect(sql).toContain('ORDER BY ts DESC');
   });
 
-  it('has no row-count cap and throws (rather than silently truncating) on timeout', () => {
-    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
-    expect(sql).not.toContain('LIMIT');
-    expect(sql).not.toContain('max_rows_to_read');
-    expect(sql).toContain('max_execution_time = 60');
+  it('keeps the timeout guardrail on top of the LIMIT bound', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', { table: arbitraryConfig.logsTable, conditions: [] });
+    expect(sql).toContain(`max_execution_time = ${DEFAULT_QUERY_TIMEOUT_SECONDS}`);
     expect(sql).toContain("timeout_overflow_mode = 'throw'");
   });
 
   it('respects a custom table', () => {
-    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', 'custom_table');
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', { table: 'custom_table', conditions: [] });
     expect(sql).toContain('"default"."custom_table"');
   });
 
+  it('respects a custom sampleSize', () => {
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', { table: arbitraryConfig.logsTable, conditions: [], sampleSize: 1000 });
+    expect(sql).toContain('LIMIT 1000');
+  });
+
   it('includes select_sequential_consistency by default', () => {
-    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs');
+    const sql = buildMapKeysQuery(arbitraryConfig, 'attrs', { table: arbitraryConfig.logsTable, conditions: [] });
     expect(sql).toContain('select_sequential_consistency = 1');
   });
 });

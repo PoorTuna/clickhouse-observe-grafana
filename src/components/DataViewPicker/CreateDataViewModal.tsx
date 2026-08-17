@@ -12,6 +12,7 @@ import { AiConfigContext, DataViewContext } from '../App/App';
 import { buildColumnsQuery, buildDatabasesQuery, buildJsonPathsQuery, buildTablesQuery } from '../../sql/introspection';
 import { runQueryRows } from '../../data/runQuery';
 import { applyOtelPreset } from '../../sql/schema';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../../sql/settings';
 import { useFieldDiscovery, runWithConcurrencyLimit } from '../FieldsContext';
 import { fieldToColumn } from '../FieldSidebar/FieldSidebar';
 import { ColumnMapping, DataView, DEFAULT_SOURCE_CONFIG, EMPTY_COLUMN_MAPPING, SelectedColumn, SourceConfig } from '../../types';
@@ -108,6 +109,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // view never has to look at this; it exists for the rare case a personal view points at a
   // multi-replica cluster with unusual latency/consistency needs.
   const [sequentialConsistency, setSequentialConsistency] = useState(true);
+  const [queryTimeoutSeconds, setQueryTimeoutSeconds] = useState(DEFAULT_QUERY_TIMEOUT_SECONDS);
   const [extraQuerySettings, setExtraQuerySettings] = useState('');
   const [clusterName, setClusterName] = useState('');
   const [showQuerySettings, setShowQuerySettings] = useState(false);
@@ -143,6 +145,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
     setPinnedIds([]);
     setShowPinned(false);
     setSequentialConsistency(true);
+    setQueryTimeoutSeconds(DEFAULT_QUERY_TIMEOUT_SECONDS);
     setExtraQuerySettings('');
     setShowQuerySettings(false);
     setShowAdvancedSection(false);
@@ -190,6 +193,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
       setName(editingView.name);
       setPinnedIds((editingView.pinnedColumns ?? []).map((col) => col.id));
       setSequentialConsistency(editingView.sequentialConsistency ?? true);
+      setQueryTimeoutSeconds(editingView.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS);
       setExtraQuerySettings(editingView.extraQuerySettings ?? '');
       setClusterName(editingView.clusterName ?? '');
       goToColumnsStepFor(editingView.datasourceUid, editingView.database, editingView.logsTable, false);
@@ -308,7 +312,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
           try {
             const pathRows = await runQueryRows({
               datasourceUid: uid,
-              sql: buildJsonPathsQuery(scanCfg, jsonCol, table),
+              sql: buildJsonPathsQuery(scanCfg, jsonCol, { table, conditions: [] }),
               timeRange: schemaTimeRange(),
               op: 'wizardJsonPaths',
             });
@@ -444,6 +448,8 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
         name: name.trim() || `${database}.${logsTable}`,
         pinnedColumns: pinnedColumns.length > 0 ? pinnedColumns : undefined,
         sequentialConsistency,
+        queryTimeoutSeconds:
+          queryTimeoutSeconds !== DEFAULT_QUERY_TIMEOUT_SECONDS ? queryTimeoutSeconds : undefined,
         extraQuerySettings: extraQuerySettings.trim() || undefined,
         clusterName: clusterName.trim() || undefined,
       };
@@ -695,8 +701,23 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
                       </Field>
 
                       <Field
+                        label="Query timeout (seconds)"
+                        description={`Every query for this view is capped at this many seconds (ClickHouse max_execution_time, throw-on-timeout). Defaults to ${DEFAULT_QUERY_TIMEOUT_SECONDS}s — deliberately below a typical reverse-proxy's own hard timeout (e.g. a 30s OpenShift Route) so ClickHouse's own failure wins the race instead of the proxy killing the connection and Grafana surfacing an opaque 502/504.`}
+                      >
+                        <Input
+                          width={15}
+                          type="number"
+                          value={queryTimeoutSeconds}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const n = Number(e.target.value);
+                            setQueryTimeoutSeconds(Number.isFinite(n) && n > 0 ? n : DEFAULT_QUERY_TIMEOUT_SECONDS);
+                          }}
+                        />
+                      </Field>
+
+                      <Field
                         label="Additional query SETTINGS"
-                        description="Appended to every query for this view. Comma-separated. Overrides the defaults above, except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
+                        description="Appended to every query for this view. Comma-separated. Overrides the defaults above (including the query timeout above), except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
                       >
                         <Input
                           width={50}

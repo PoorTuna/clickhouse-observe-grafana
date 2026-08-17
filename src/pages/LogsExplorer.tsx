@@ -14,7 +14,6 @@ import { resolveInterval, ResolvedInterval, fillEmptyBuckets } from '../componen
 import { LogsHistogramPanel } from '../components/LogsHistogramPanel';
 import { FieldSidebar, fieldToColumn } from '../components/FieldSidebar/FieldSidebar';
 import { FieldsContext, useFieldDiscovery } from '../components/FieldsContext';
-import { useFieldPresence } from '../components/useFieldPresence';
 import { PaginationBar } from '../components/PaginationBar';
 import { DataViewPicker } from '../components/DataViewPicker/DataViewPicker';
 import { AddToDashboardModal } from '../components/AddToDashboard/AddToDashboardModal';
@@ -144,15 +143,13 @@ export function LogsExplorer() {
   // comment. fieldsState is also handed to <FieldsContext.Provider> further down so FieldSidebar/
   // SearchBar/etc. get the exact same discovery run rather than a second independent one.
   const fieldsState = useFieldDiscovery(config, timeRange);
+  // Phase-A-only (see FieldsContext.tsx) — this index only needs to resolve a bare name typed
+  // into KQL/filter shorthand to a real config-column/discovered-column sqlExpr; a sidebar- or
+  // drawer-originated filter/column already carries its resolved sqlExpr directly (FieldModel.
+  // sqlExpr), never a bare name needing lookup. Keeping this stable across hydration also avoids
+  // recreating hydratePage/hydrateRow/ensureRows (all keyed off it) every time a page finishes
+  // hydrating.
   const fieldIndex = useMemo(() => buildFieldIndex(fieldsState.fields), [fieldsState.fields]);
-  // Filter-aware Available/Empty split for the sidebar — separate from discovery above (schema-
-  // scoped) because this must re-derive on every search/filter change, the same trigger set
-  // fetchVolume below already uses for the histogram (see useFieldPresence's doc comment).
-  const presence = useFieldPresence(config, timeRange, queryState, fieldsState.fields, fieldIndex);
-  const fieldsContextValue = useMemo(
-    () => ({ ...fieldsState, presence }),
-    [fieldsState, presence]
-  );
   // Mount-query queries (fetchLogs/fetchVolume) read the field index through this ref instead of
   // closing over `fieldIndex` directly — see the comment on their useCallback deps below for why:
   // depending on `fieldIndex` there made both queries re-fire the moment async field discovery
@@ -205,6 +202,7 @@ export function LogsExplorer() {
   useEffect(() => {
     hydratedRowsRef.current = hydratedRows;
   }, [hydratedRows]);
+
   // Pages whose full rows are already cached (success only — a failed fetch is retryable).
   const hydratedPagesRef = useRef<Set<number>>(new Set());
   // Pages with a hydrate fetch in flight, so re-opening the drawer on the same page while the
@@ -380,8 +378,9 @@ export function LogsExplorer() {
   // drag, a filter add, a search submit. Ungrouped, one search bar keystroke could produce two
   // unrelated-looking rail entries ('logs' and 'volume') instead of one named action containing
   // both, which is exactly the "reads as soup" rail problem this fixes. Sidebar discovery
-  // (columns/mapKeys/jsonPaths) and presence genuinely have no shared gesture and stay ungrouped
-  // orphan roots, per the original design.
+  // (columns at mount; mapKeys/jsonPaths on-demand per Map/JSON column click) genuinely has no
+  // shared gesture with a logs/volume fetch and stays ungrouped orphan roots, per the original
+  // design.
   const groupActionRef = useRef<{ action: SpanHandle; promises: Array<Promise<unknown>> } | null>(null);
   const groupSettleTimerRef = useRef<number | null>(null);
 
@@ -1241,7 +1240,7 @@ export function LogsExplorer() {
   }, [selectedRow, hydratedRows, queryState.useRawSql, config]);
 
   return (
-    <FieldsContext.Provider value={fieldsContextValue}>
+    <FieldsContext.Provider value={fieldsState}>
       <PluginPage layout={PageLayoutType.Custom} pageNav={{ text: 'Logs' }}>
       <div ref={containerRef} className={styles.container} style={{ height: availableHeight }}>
         {/* Row 1: view picker + add filter + search (left/center) + saved/dashboard/time/refresh

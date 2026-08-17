@@ -107,7 +107,7 @@ describe('computeWarnings', () => {
     const warn = action.child('volume', 'volume');
     warn.setAttrs({ sql: `SETTINGS timeout_overflow_mode = 'break'` });
     warn.end('ok');
-    const err = action.child('presence', 'presence');
+    const err = action.child('detailRow', 'detailRow');
     err.setError('boom');
     err.end('error');
 

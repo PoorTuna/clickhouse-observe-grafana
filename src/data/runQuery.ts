@@ -11,6 +11,7 @@ import { QueryOp, SpanHandle } from '../diag/types';
 import { detectTruncation } from '../diag/sqlIntegrity';
 import { appendLogComment, buildLogCommentTag } from '../diag/logComment';
 import { isEnrichmentEnabled } from '../diag/enrichment';
+import { errMsg } from '../errMsg';
 
 // CH datasource format enum (Table = 1). Must match their src/types/sql.ts.
 const FORMAT_TABLE = 1;
@@ -87,8 +88,9 @@ export interface RunQueryOptions {
    * the diagnostics plan's "Root attribution, including work with no gesture behind it").
    *
    * Deliberately explicit rather than ambient/inferred: this plugin fires concurrent queries by
-   * design (one search submit kicks off logs + volume + presence together), so a global "current
-   * action" would misattribute the moment two actions' async work interleaves.
+   * design (one search submit kicks off logs + volume together, plus the sidebar's own on-demand
+   * mapKeys/jsonPaths queries), so a global "current action" would misattribute the moment two
+   * actions' async work interleaves.
    */
   trace?: SpanHandle;
 }
@@ -218,7 +220,7 @@ async function traced<T>(options: RunQueryOptions, fn: (span: SpanHandle) => Pro
     if (isAbort) {
       span.end('cancelled');
     } else {
-      span.setError(err instanceof Error ? err.message : String(err));
+      span.setError(errMsg(err));
       span.end('error');
     }
     throw err;

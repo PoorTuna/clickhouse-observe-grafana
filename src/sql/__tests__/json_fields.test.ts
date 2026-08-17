@@ -1,12 +1,13 @@
 /**
  * Unit tests for native ClickHouse JSON-column field support:
  * - inferFieldType recognizes the JSON type (and its legacy Object('json') spelling).
- * - buildJsonPathsQuery mirrors buildMapKeysQuery's time-bounding/degradation shape.
+ * - buildJsonPathsQuery mirrors buildMapKeysQuery's bounded sampled-CTE shape.
  * - buildFieldIndex + resolveField correctly resolve JSON paths by name and by sqlExpr passthrough.
  */
 
 import { inferFieldType, FieldModel } from '../fieldModel';
 import { buildJsonPathsQuery } from '../introspection';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../settings';
 import { buildFieldIndex, resolveField } from '../fields';
 import { OTEL_COLUMN_MAPPING, SourceConfig } from '../../types';
 
@@ -39,35 +40,48 @@ describe('inferFieldType — JSON', () => {
 });
 
 describe('buildJsonPathsQuery', () => {
-  it('bounds the scan by timestamp when a timestamp column is mapped', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload');
-    expect(sqlStr).toContain('$__fromTime');
-    expect(sqlStr).toContain('$__toTime');
-    expect(sqlStr).toContain('JSONAllPathsWithTypes(Payload)');
+  const conditions = [`${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`];
+
+  it('wraps the scan in a sample CTE, ordered by timestamp DESC, bounded by LIMIT', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
+    expect(sqlStr).toContain('WITH sample AS');
+    expect(sqlStr).toContain(`ORDER BY ${config.columns.timestamp} DESC`);
+    expect(sqlStr).toContain('LIMIT 500');
+    expect(sqlStr).toContain('JSONAllPathsWithTypes(j)');
   });
 
-  it('has no row-count cap and throws (rather than silently truncating) on timeout', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload');
-    expect(sqlStr).not.toContain('LIMIT');
-    expect(sqlStr).not.toContain('max_rows_to_read');
-    expect(sqlStr).toContain('max_execution_time = 60');
+  it('scopes the sample by the caller-supplied WHERE conditions (search/filters, not just time)', () => {
+    const scoped = [...conditions, `ServiceName = 'checkout'`];
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions: scoped });
+    expect(sqlStr).toContain('$__fromTime');
+    expect(sqlStr).toContain(`ServiceName = 'checkout'`);
+  });
+
+  it('keeps the timeout guardrail (still throws, not a silent truncation) on top of the LIMIT bound', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
+    expect(sqlStr).toContain(`max_execution_time = ${DEFAULT_QUERY_TIMEOUT_SECONDS}`);
     expect(sqlStr).toContain("timeout_overflow_mode = 'throw'");
   });
 
-  it('degrades to an unbounded scan when no timestamp column is mapped', () => {
+  it('omits ORDER BY (but still applies LIMIT) when no timestamp column is mapped', () => {
     const noTsConfig: SourceConfig = { ...config, columns: { ...config.columns, timestamp: '' } };
-    const sqlStr = buildJsonPathsQuery(noTsConfig, 'Payload');
-    expect(sqlStr).not.toContain('$__fromTime');
-    expect(sqlStr).toContain('JSONAllPathsWithTypes(Payload)');
+    const sqlStr = buildJsonPathsQuery(noTsConfig, 'Payload', { table: config.logsTable, conditions: [] });
+    expect(sqlStr).not.toContain('ORDER BY');
+    expect(sqlStr).toContain('LIMIT 500');
   });
 
   it('respects a custom table', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', 'custom_table');
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: 'custom_table', conditions });
     expect(sqlStr).toContain('"default"."custom_table"');
   });
 
+  it('respects a custom sampleSize', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions, sampleSize: 1000 });
+    expect(sqlStr).toContain('LIMIT 1000');
+  });
+
   it('includes select_sequential_consistency by default', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload');
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
     expect(sqlStr).toContain('select_sequential_consistency = 1');
   });
 });

@@ -3,7 +3,7 @@
  * (what runQuery.ts was asked to run) and the executed SQL (post-macro, from
  * frame.meta.executedQueryString — see runQuery.ts's fetchFrames) when it's landed and differs.
  * This is the tab that actually closes the plan's stated gap: SqlInspectorBar's "Inspect SQL" has
- * only ever shown the logs query, pre-expansion; every other query builder here (volume, presence,
+ * only ever shown the logs query, pre-expansion; every other query builder here (volume, sidebar
  * field discovery, detail hydration, load-more, the setup wizard) has never been inspectable
  * before this drawer.
  */

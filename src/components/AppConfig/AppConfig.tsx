@@ -11,6 +11,7 @@ import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from 
 import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, Field, FieldSet, Input, Select, Switch, useStyles2 } from '@grafana/ui';
 import { applyOtelPreset } from '../../sql/schema';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../../sql/settings';
 import { errMsg } from '../../errMsg';
 import {
   AiProviderConfig,
@@ -186,8 +187,23 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                 </Field>
 
                 <Field
+                  label="Query timeout (seconds)"
+                  description={`Every query for this view is capped at this many seconds (ClickHouse max_execution_time, throw-on-timeout). Defaults to ${DEFAULT_QUERY_TIMEOUT_SECONDS}s — deliberately below a typical reverse-proxy's own hard timeout (e.g. a 30s OpenShift Route) so ClickHouse's own failure wins the race instead of the proxy killing the connection and Grafana surfacing an opaque 502/504.`}
+                >
+                  <Input
+                    width={15}
+                    type="number"
+                    value={v.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      const n = Number(e.target.value);
+                      patchView(v.id, { queryTimeoutSeconds: Number.isFinite(n) && n > 0 ? n : undefined });
+                    }}
+                  />
+                </Field>
+
+                <Field
                   label="Additional query SETTINGS"
-                  description="Appended to every query for this view. Comma-separated. Overrides the defaults above, except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
+                  description="Appended to every query for this view. Comma-separated. Overrides the defaults above (including the query timeout above), except timeout_overflow_mode / read_overflow_mode / result_overflow_mode / group_by_overflow_mode, which every query builder in this plugin deliberately pins to a loud-failure mode — a 'break'/'any' override there is ignored rather than silently truncating results."
                 >
                   <Input
                     width={50}

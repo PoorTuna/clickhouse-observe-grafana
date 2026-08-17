@@ -4,6 +4,7 @@
  */
 
 import { ColumnMapping, SourceConfig, OTEL_COLUMN_MAPPING } from '../types';
+import { quoteDottedPath, quoteString } from './queryBuilder';
 
 export const OTEL_LOGS_TABLE = 'otel_logs';
 
@@ -139,13 +140,19 @@ export function groupAttributes(
         rows = flattenJson(parseJsonColumnValue(rawValue)).map(({ key, value }) => ({
           key,
           value,
-          sqlExpr: `${col}.${key}`,
+          // quoteDottedPath() — shared with FieldsContext.tsx's discovery-derived fields and
+          // rowFields.ts's deriveAttributeFields() — so a path with a non-bare-identifier segment
+          // (e.g. `user-id`) produces the same sqlExpr regardless of which of the three built it
+          // (see item 6 in the perf plan).
+          sqlExpr: quoteDottedPath(col, key),
         }));
       } else {
         rows = Object.entries(parseMapValue(rawValue)).map(([key, value]) => ({
           key,
           value,
-          sqlExpr: `${col}['${key}']`,
+          // quoteString() — same reasoning as above, for Map keys: a key containing `'` must
+          // produce one expression, not a raw-spliced one that diverges from discovery's.
+          sqlExpr: `${col}[${quoteString(key)}]`,
         }));
       }
       return { col, rows };

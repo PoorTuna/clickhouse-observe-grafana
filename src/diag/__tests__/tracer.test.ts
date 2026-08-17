@@ -61,10 +61,10 @@ describe('startAction / child nesting', () => {
 
 describe('startOrphanRoot — background work with no gesture behind it', () => {
   it('opens its own root named after the op, never anonymous', () => {
-    const handle = startOrphanRoot('presence');
+    const handle = startOrphanRoot('mapKeys');
     expect(handle.span.parentId).toBeNull();
-    expect(handle.span.name).toBe('presence');
-    expect(handle.span.kind).toBe('presence');
+    expect(handle.span.name).toBe('mapKeys');
+    expect(handle.span.kind).toBe('mapKeys');
   });
 });
 
@@ -184,8 +184,8 @@ describe('onRootEnd', () => {
   it('fires for an orphan root too, not just an explicit action', () => {
     const calls: string[] = [];
     onRootEnd((span) => calls.push(span.name));
-    startOrphanRoot('presence').end('ok');
-    expect(calls).toEqual(['presence']);
+    startOrphanRoot('mapKeys').end('ok');
+    expect(calls).toEqual(['mapKeys']);
   });
 
   it('unsubscribes cleanly', () => {

@@ -10,6 +10,31 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.8.0] — 2026-08-18
+
+### Changed
+
+- **Field sidebar: on-demand Map/JSON key browsing.** Map/JSON columns now show as a single entry;
+  clicking one fires a bounded, filter-scoped query to list that column's keys instead of relying on
+  whatever happened to be in the currently-loaded rows, so keys missing from the on-screen sample
+  are no longer invisible. Clicking a key opens the existing top-values popover for it.
+- **Restored index pruning** on logs/detail/volume queries via an auto-detected coarse
+  partition/sort-key predicate, and widened `system.columns` introspection to support it.
+- **Deleted the presence query and its Available/Empty field split** — sidebar is a single flat,
+  filterable list; presence/empty-state tracking is removed for now.
+- **Dropped the eager full-row hydrate fetch** — the detail drawer's full-row fetch is
+  click-triggered only again, removing a repeated background query on every auto-refresh tick.
+- **Per-view query timeout budget** (`queryTimeoutSeconds`, default 25s) replaces the old
+  hardcoded 60s discovery/volume timeouts, which exceeded a typical reverse-proxy's own timeout.
+
+### Fixed
+
+- **Error messages no longer render as `[object Object]`** when a query fails with a plain
+  (non-`Error`) rejection, e.g. from a misconfigured or missing datasource.
+- Map-key/JSON-path SQL access in attribute grouping now consistently escapes quotes.
+
+---
+
 ## [0.7.1] — 2026-08-15
 
 ### Fixed

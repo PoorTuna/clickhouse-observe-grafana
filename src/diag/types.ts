@@ -21,7 +21,6 @@ export type QueryOp =
   | 'columns'
   | 'mapKeys'
   | 'jsonPaths'
-  | 'presence'
   | 'fieldValues'
   | 'traceLink'
   | 'wizardDatabases'
@@ -73,7 +72,8 @@ export interface SpanHandle {
  * What callers thread through `RunQueryOptions.trace` (runQuery.ts) to attach a query's spans to
  * the action that triggered it, instead of the tracer trying to infer "what's currently happening"
  * from ambient/global mutable state — which breaks the moment two actions' async work interleaves,
- * exactly the situation this plugin is in by design (a search submits logs + volume + presence
- * concurrently). Passing the handle explicitly means attribution is always correct, never a race.
+ * exactly the situation this plugin is in by design (a search submits logs + volume concurrently,
+ * and the sidebar fires its own mapKeys/jsonPaths queries on-demand). Passing the handle explicitly
+ * means attribution is always correct, never a race.
  */
 export type TraceParent = SpanHandle | undefined;

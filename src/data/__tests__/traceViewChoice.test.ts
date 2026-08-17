@@ -24,7 +24,7 @@ function view(id: string, overrides: Partial<DataView> = {}): DataView {
     database: 'default',
     logsTable: id,
     isOtel: false,
-    columns: { timestamp: 'Timestamp', body: 'Body', severity: '', traceId: 'TraceId', serviceName: '', spanAttributes: '' },
+    columns: { timestamp: 'Timestamp', body: 'Body', severity: '', traceId: 'TraceId', serviceName: '', spanAttributes: '', partitionTimestamp: '' },
     ...overrides,
   };
 }
@@ -47,7 +47,7 @@ describe('resolveTraceLanding', () => {
   it('asks (ambiguous) when several views share the datasource, splitting by traceId mapping', () => {
     const views = [
       view('otel_logs'),
-      view('app_logs', { columns: { timestamp: 'ts', body: 'msg', severity: '', traceId: '', serviceName: '', spanAttributes: '' } }),
+      view('app_logs', { columns: { timestamp: 'ts', body: 'msg', severity: '', traceId: '', serviceName: '', spanAttributes: '', partitionTimestamp: '' } }),
     ];
     const landing = resolveTraceLanding(views, DS_A, null);
     expect(landing.status).toBe('choosing');

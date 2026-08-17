@@ -22,7 +22,9 @@ const config: SourceConfig = {
   database: 'default',
   logsTable: 'otel_logs',
   isOtel: true,
-  columns: OTEL_COLUMN_MAPPING,
+  // partitionTimestamp explicitly off ('-') — this file tests filter-clause construction, not the
+  // coarse index-pruning predicate (see prune_column.test.ts / build_logs_query.test.ts for that).
+  columns: { ...OTEL_COLUMN_MAPPING, partitionTimestamp: '-' },
 };
 
 function stateWithFilter(pill: Omit<FilterPill, 'id'>): typeof DEFAULT_LOGS_QUERY_STATE {

@@ -11,6 +11,7 @@
  */
 
 import { buildVolumeQuery } from '../queryBuilder';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../settings';
 import { EMPTY_COLUMN_MAPPING, LogsQueryState, SourceConfig } from '../../types';
 
 const config: SourceConfig = {
@@ -30,6 +31,27 @@ describe('buildVolumeQuery execution guardrail', () => {
       breakdown: { kind: 'none' },
     });
     expect(sql).toContain("timeout_overflow_mode = 'throw'");
+  });
+
+  // The budget itself now comes from the shared queryTimeoutFragments(config) (sql/settings.ts) —
+  // a hardcoded 60s here was one of the values that outlived a 30s reverse-proxy timeout (see the
+  // perf plan's item 1). Default applies when the view never set queryTimeoutSeconds; an explicit
+  // per-view override replaces it.
+  it('uses the shared default query-timeout budget, not a hardcoded 60s', () => {
+    const sql = buildVolumeQuery(config, state, {
+      interval: { unit: 'MINUTE', value: 1 },
+      breakdown: { kind: 'none' },
+    });
+    expect(sql).toContain(`max_execution_time = ${DEFAULT_QUERY_TIMEOUT_SECONDS}`);
+    expect(sql).not.toContain('max_execution_time = 60');
+  });
+
+  it('respects a per-view queryTimeoutSeconds override', () => {
+    const sql = buildVolumeQuery({ ...config, queryTimeoutSeconds: 5 }, state, {
+      interval: { unit: 'MINUTE', value: 1 },
+      breakdown: { kind: 'none' },
+    });
+    expect(sql).toContain('max_execution_time = 5');
   });
 
   it('carries no rows-read cap — counting rows is this query\'s job, so a cap only truncates the count', () => {

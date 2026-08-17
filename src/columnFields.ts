@@ -46,4 +46,12 @@ export const COL_FIELDS: Array<{
     label: 'Span Attributes Map column',
     description: 'Adds a "Span Attributes" section to the log detail drawer and enables autocomplete for its keys.',
   },
+  {
+    key: 'partitionTimestamp',
+    label: 'Partition/index time column (advanced)',
+    description:
+      'Coarse time column used only to help ClickHouse prune partitions/index granules — never used to filter or ' +
+      'display data. Leave blank to auto-detect from the table\'s partition/sort key (e.g. a toDate(...)/toStartOfHour(...) ' +
+      'materialized column derived from the timestamp column above). Enter "-" to turn pruning off explicitly.',
+  },
 ];

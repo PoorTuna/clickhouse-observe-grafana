@@ -26,15 +26,15 @@ import { checkSqlIntegrity } from './sqlIntegrity';
 
 /**
  * Ops where hitting a query's own LIMIT really does mean data is missing from what the page shows
- * — a sidebar field-discovery/presence/autocomplete query has no pagination UI, so a capped result
- * silently under-represents the truth. `logs`/`loadMore` are deliberately excluded: the log grid
+ * — a sidebar field-discovery/autocomplete query has no pagination UI, so a capped result silently
+ * under-represents the truth. `logs`/`loadMore` are deliberately excluded: the log grid
  * has an explicit "load more" affordance, so returning exactly LIMIT rows is the *expected* steady
  * state of a healthy paginated fetch, not an anomaly — see the B2 finding this fixes. Before this,
  * a full page of logs permanently lit the Warnings & Errors badge on every single search, which
  * trains a reader to ignore the one tab meant to matter more than "slow" (see the module doc
  * comment on ranking).
  */
-const TRUNCATION_MATTERS_FOR: ReadonlySet<QueryOp> = new Set(['mapKeys', 'jsonPaths', 'fieldValues', 'presence', 'columns']);
+const TRUNCATION_MATTERS_FOR: ReadonlySet<QueryOp> = new Set(['mapKeys', 'jsonPaths', 'fieldValues', 'columns']);
 
 export type WarningSeverity = 'error' | 'warning' | 'info';
 
@@ -86,9 +86,9 @@ export function computeWarnings(root: Span): Warning[] {
   }
 
   // Every failed span, including the ones LogsExplorer.tsx's own catch blocks deliberately swallow
-  // (load-more, sidebar presence, the trace-link probe, field-value autocomplete — see the plan's
-  // Hole 2) — this tab is what makes those visible again without changing their by-design silence
-  // in the page UI itself.
+  // (load-more, sidebar mapKeys/jsonPaths discovery, the trace-link probe, field-value autocomplete
+  // — see the plan's Hole 2) — this tab is what makes those visible again without changing their
+  // by-design silence in the page UI itself.
   for (const { span } of flattenSpanTree(root)) {
     if (span.status === 'error') {
       warnings.push({

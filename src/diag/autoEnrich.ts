@@ -12,10 +12,11 @@
  * Every root that ends while enrichment is on joins a single shared poll cycle here, rather than
  * starting its own — see the B3 finding this batching fixes. Before it, each ended root ran an
  * independent 3-attempt backoff loop calling diag/serverStats.ts on its own; one auto-refresh tick
- * (one 'Auto-refresh' action plus its background 'volume'/'logs'/'presence'/'jsonPaths'/'mapKeys'
- * orphan roots) could fire up to ~18 extra system.query_log scans, each over a 10-minute window —
- * the debugger measurably loading the very server it exists to help debug, a direct violation of
- * the diagnostics plan's own "the debugger must not slow the thing being debugged" constraint.
+ * (one 'Auto-refresh' action plus its background 'volume'/'logs' children, alongside any sidebar
+ * 'jsonPaths'/'mapKeys' orphan roots fired on-demand) could fire many extra system.query_log scans,
+ * each over a 10-minute window — the debugger measurably loading the very server it exists to help
+ * debug, a direct violation of the diagnostics plan's own "the debugger must not slow the thing
+ * being debugged" constraint.
  */
 import { SourceConfig } from '../types';
 import { addHistoricalChild, onRootEnd, setSpanAttrs } from './tracer';
@@ -30,8 +31,8 @@ export interface EnrichmentContext {
 }
 
 // How long to let ended roots accumulate before the first lookup fires — batches a burst of roots
-// ending together (e.g. one search submit's logs+volume+presence+discovery all settling within
-// milliseconds of each other) into the same query instead of one each.
+// ending together (e.g. one search submit's logs+volume settling alongside a sidebar mapKeys/
+// jsonPaths discovery, all within milliseconds of each other) into the same query instead of one each.
 const BATCH_DEBOUNCE_MS = 500;
 // Backoff between lookup rounds once a batch starts, riding out system.query_log's async flush
 // (flush_interval_milliseconds defaults to 7500ms) — same shape as the old per-root loop, just now

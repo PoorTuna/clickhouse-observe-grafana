@@ -90,3 +90,28 @@ describe('buildLogDetailQuery', () => {
     expect(sql).not.toContain('select_sequential_consistency');
   });
 });
+
+describe('buildLogDetailQuery — coarse index-pruning predicate (perf plan item 0)', () => {
+  const withPrune: SourceConfig = {
+    ...otelConfig,
+    columns: { ...otelConfig.columns, partitionTimestamp: 'TimestampTime' },
+  };
+
+  it('appends the coarse predicate on the same 1ms window when partitionTimestamp resolves', () => {
+    const sql = buildLogDetailQuery(withPrune, { [CORE_ALIAS.timestamp]: 1700000000123 });
+    expect(sql).toContain('TimestampTime >= fromUnixTimestamp64Milli(1700000000123) - INTERVAL 1 SECOND');
+    expect(sql).toContain('TimestampTime <= fromUnixTimestamp64Milli(1700000000124) + INTERVAL 1 SECOND');
+  });
+
+  it('omits the coarse predicate when partitionTimestamp is unset', () => {
+    const unprunedConfig: SourceConfig = { ...otelConfig, columns: { ...otelConfig.columns, partitionTimestamp: '' } };
+    const sql = buildLogDetailQuery(unprunedConfig, { [CORE_ALIAS.timestamp]: 1700000000123 });
+    expect(sql).not.toContain('INTERVAL 1 SECOND');
+  });
+
+  it('omits the coarse predicate when explicitly off ("-")', () => {
+    const offConfig: SourceConfig = { ...otelConfig, columns: { ...otelConfig.columns, partitionTimestamp: '-' } };
+    const sql = buildLogDetailQuery(offConfig, { [CORE_ALIAS.timestamp]: 1700000000123 });
+    expect(sql).not.toContain('INTERVAL 1 SECOND');
+  });
+});

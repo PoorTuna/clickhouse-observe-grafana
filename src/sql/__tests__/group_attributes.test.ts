@@ -48,6 +48,18 @@ describe('groupAttributes — Map columns', () => {
     const groups = groupAttributes(row, columns, new Set(['LogAttributes', 'SomeOtherMapCol']));
     expect(groups.map((g) => g.col).sort()).toEqual(['LogAttributes', 'SomeOtherMapCol']);
   });
+
+  // Item 6 (perf plan): groupAttributes must use the same quoteString()-based escaping as
+  // discovery / rowFields.ts's deriveAttributeFields, not a raw-spliced `['${key}']` — a Map key
+  // containing a quote used to produce a different (and broken) sqlExpr here than everywhere else.
+  it('escapes a Map key containing a single quote via quoteString, not raw-spliced', () => {
+    const row = { LogAttributes: { "it's": 'x' } };
+    const groups = groupAttributes(row, columns, new Set(['LogAttributes']));
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
+    expect(log.rows).toEqual([
+      { key: "it's", value: 'x', sqlExpr: "LogAttributes['it\\'s']" },
+    ]);
+  });
 });
 
 describe('groupAttributes — JSON columns (jsonColumns provided)', () => {
@@ -98,6 +110,18 @@ describe('groupAttributes — JSON columns (jsonColumns provided)', () => {
   it('returns no rows for an empty or absent JSON column', () => {
     const groups = groupAttributes({}, columns, new Set(), jsonColumns);
     expect(groups.find((g) => g.col === 'LogAttributes')).toBeUndefined();
+  });
+
+  // Item 6 (perf plan): a JSON path segment that isn't a bare identifier must be double-quoted via
+  // quoteDottedPath(), same as discovery / rowFields.ts — a raw `${col}.${key}` splice used to
+  // silently change meaning for a segment like `user-id` (parses as subtraction).
+  it('double-quotes a non-bare-identifier path segment via quoteDottedPath, not raw-spliced', () => {
+    const row = { LogAttributes: { 'user-id': '42' } };
+    const groups = groupAttributes(row, columns, new Set(), jsonColumns);
+    const log = groups.find((g) => g.col === 'LogAttributes')!;
+    expect(log.rows).toEqual([
+      { key: 'user-id', value: '42', sqlExpr: 'LogAttributes."user-id"' },
+    ]);
   });
 });
 

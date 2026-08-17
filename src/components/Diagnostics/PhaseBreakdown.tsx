@@ -2,9 +2,10 @@
  * Stacked bar summing every phase span's duration across the whole tree by kind
  * (diag/types.ts's SpanKind), sitting between the summary card and the waterfall on the Timeline tab.
  *
- * Concurrent queries (a search submit fans out logs+volume+presence together, by design — see the
- * diagnostics plan's Context section) mean these segments can sum to more than the action's own
- * wall-clock duration; this is deliberately a "where did the CPU-time-equivalent go" breakdown, not
+ * Concurrent queries (a search submit fans out logs+volume together, plus the sidebar's own
+ * on-demand mapKeys/jsonPaths, by design — see the diagnostics plan's Context section) mean these
+ * segments can sum to more than the action's own wall-clock duration; this is deliberately a
+ * "where did the CPU-time-equivalent go" breakdown, not
  * a second waterfall, so it's normalized to the sum of the segments themselves, not to the root's
  * total duration.
  */

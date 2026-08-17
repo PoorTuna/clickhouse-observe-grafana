@@ -44,6 +44,30 @@ export function configSettingsFragments(config: SourceConfig): string[] {
 }
 
 /**
+ * Single query-timeout budget shared by every query builder in this codebase (buildLogsQuery,
+ * buildVolumeQuery, buildLogDetailQuery, buildMapKeysQuery/buildJsonPathsQuery) — see
+ * queryTimeoutFragments below for why one number replaced the old 60s/15s/10s per-query-class
+ * spread. 25s sits below a typical reverse-proxy's own hard timeout (e.g. a 30s OpenShift Route),
+ * so ClickHouse's own `max_execution_time` throw wins the race instead of the proxy killing the
+ * connection first and Grafana surfacing an opaque 502/504 — the 5s of headroom covers
+ * proxy/queue overhead that this wall-clock cap alone doesn't see.
+ */
+export const DEFAULT_QUERY_TIMEOUT_SECONDS = 25;
+
+/**
+ * `max_execution_time` + `timeout_overflow_mode = 'throw'` for `config`'s view, using
+ * `config.queryTimeoutSeconds` if set, else DEFAULT_QUERY_TIMEOUT_SECONDS. The 60/15/10s spread
+ * this replaced across DISCOVERY_SETTINGS/VOLUME_QUERY_SETTINGS/DETAIL_QUERY_SETTINGS (and
+ * buildLogsQuery, which previously had no cap at all) was drift, not policy — and the 60s values
+ * were exactly the ones that outlived a 30s proxy timeout. Each call site keeps its own doc
+ * comment on *why* it throws on timeout; only the number now comes from here.
+ */
+export function queryTimeoutFragments(config: SourceConfig): string[] {
+  const seconds = config.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS;
+  return [`max_execution_time = ${seconds}`, `timeout_overflow_mode = 'throw'`];
+}
+
+/**
  * Setting keys that govern what happens when a query hits a scan/row/time cap:
  * `'break'`/`'any'` truncate a result silently, `'throw'` fails loudly. Every builder in this file
  * deliberately picks `'throw'` and documents at length why (see `VOLUME_QUERY_SETTINGS` in
@@ -75,14 +99,13 @@ const BUILDER_OWNED_SETTINGS = new Set([
  * Two `SETTINGS` clauses in one query is a syntax error, so every builder must route its output
  * through this instead of appending its own `SETTINGS ...` line directly.
  *
- * Every guardrail in this codebase pairs `max_execution_time` with `timeout_overflow_mode =
- * 'throw'`, on the assumption that a query is interrupted at N seconds. It isn't: ClickHouse's
- * default `timeout_before_checking_execution_speed = 10` grants a query 10s of grace before
- * `max_execution_time` starts being enforced at all, so e.g. `DETAIL_QUERY_SETTINGS`'s "10 second
- * cap" (queryBuilder.ts) was really an ~20 second cap. If `max_execution_time` is present and
- * nothing (builder or config) already set `timeout_before_checking_execution_speed` explicitly,
- * default it to 0 here so the advertised cap is the real, wall-clock one. An explicit fragment —
- * from a builder or from a user's `extraQuerySettings` — still wins, since this only fills a gap.
+ * This used to also default `timeout_before_checking_execution_speed` to 0 whenever
+ * `max_execution_time` was present, on the theory that ClickHouse's own default of 10 for that
+ * setting granted every capped query ~10s of extra grace before `max_execution_time` started being
+ * enforced. Measured against a live server (CH 26.3.17.4): false — `max_execution_time = 3` fires
+ * at 3.00s with or without `timeout_before_checking_execution_speed` set. That setting governs
+ * `min_execution_speed` checking, not whether/when the timeout itself is enforced, so the
+ * injection was a no-op dressed up as a fix. Removed; `max_execution_time` alone is the real cap.
  */
 export function withSettings(lines: Array<string | null | undefined | false>, fragments: string[]): string {
   const body = lines.filter((l): l is string => Boolean(l));
@@ -97,10 +120,6 @@ export function withSettings(lines: Array<string | null | undefined | false>, fr
       continue;
     }
     merged.set(key, fragment);
-  }
-
-  if (merged.has('max_execution_time') && !merged.has('timeout_before_checking_execution_speed')) {
-    merged.set('timeout_before_checking_execution_speed', 'timeout_before_checking_execution_speed = 0');
   }
 
   if (merged.size === 0) {

@@ -11,6 +11,15 @@ export interface ColumnMapping {
   serviceName: string;
   // Map column — empty string means column absent.
   spanAttributes: string;
+  /**
+   * Coarse partition/primary-key-member time column used purely for index-pruning predicates
+   * (see sql/pruneColumn.ts + queryBuilder.ts's buildWhereConditions) — never used to select or
+   * filter data on its own. `''` = auto-detect (App.tsx fills in whatever useFieldDiscovery
+   * detects from system.columns at runtime, so already-persisted views benefit without
+   * re-saving); `'-'` = explicitly off (no coarse predicate emitted, even if one would auto-
+   * detect); any other value = use that column name literally.
+   */
+  partitionTimestamp: string;
 }
 
 export const OTEL_COLUMN_MAPPING: ColumnMapping = {
@@ -20,6 +29,7 @@ export const OTEL_COLUMN_MAPPING: ColumnMapping = {
   traceId: 'TraceId',
   serviceName: 'ServiceName',
   spanAttributes: 'SpanAttributes',
+  partitionTimestamp: 'TimestampTime',
 };
 
 export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
@@ -29,6 +39,7 @@ export const EMPTY_COLUMN_MAPPING: ColumnMapping = {
   traceId: '',
   serviceName: '',
   spanAttributes: '',
+  partitionTimestamp: '',
 };
 
 export interface SourceConfig {
@@ -58,6 +69,11 @@ export interface SourceConfig {
    *  "max_replica_delay_for_distributed_queries = 30". Overrides builder/sequentialConsistency
    *  defaults on key collision (see sql/settings.ts's withSettings). */
   extraQuerySettings?: string;
+  /** Per-view ClickHouse `max_execution_time` budget (seconds) for every query this view issues —
+   *  see sql/settings.ts's DEFAULT_QUERY_TIMEOUT_SECONDS and queryTimeoutFragments() for why one
+   *  number replaced the old per-query-class spread (60s/15s/10s), and why the default sits below
+   *  a typical reverse-proxy's own hard timeout. Undefined = DEFAULT_QUERY_TIMEOUT_SECONDS. */
+  queryTimeoutSeconds?: number;
   /** Advanced: cluster name for the diagnostics drawer's server-side enrichment tier (see
    *  diag/serverStats.ts) — when set, the tier reads `system.query_log` via
    *  `clusterAllReplicas(<name>, system.query_log)` instead of the local table, so stats for a

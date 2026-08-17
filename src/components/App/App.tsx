@@ -1,7 +1,8 @@
 import React, { createContext, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { startAutoEnrichment } from '../../diag/autoEnrich';
-import { AppRootProps } from '@grafana/data';
+import { AppRootProps, getDefaultTimeRange } from '@grafana/data';
 import { LoadingPlaceholder } from '@grafana/ui';
+import { useFieldDiscovery } from '../FieldsContext';
 import {
   AiProviderConfig,
   AppJsonData,
@@ -152,7 +153,33 @@ function App(props: AppRootProps<AppJsonData>) {
   }, [allViews]);
 
   // The active view (a DataView) is assignable to SourceConfig — existing consumers unchanged.
-  const sourceConfig: SourceConfig = activeView ?? DEFAULT_SOURCE_CONFIG;
+  const rawSourceConfig: SourceConfig = activeView ?? DEFAULT_SOURCE_CONFIG;
+
+  // Stable placeholder — Phase A discovery (system.columns) doesn't filter by time, so this only
+  // exists to give useFieldDiscovery a TimeRange argument; a fresh object every render would churn
+  // its coarse-bucket effect dependency for no reason.
+  const [discoveryTimeRange] = useState(() => getDefaultTimeRange());
+  // Runtime fallback so an already-persisted view benefits from index pruning (item 0) without
+  // being re-saved: useFieldDiscovery detects a coarse prune column from system.columns' widened
+  // metadata (see sql/pruneColumn.ts); if this view never explicitly configured
+  // columns.partitionTimestamp ('' = auto-detect), fill in whatever was detected. An explicit
+  // '-' (off) or a literal column name from the persisted view always wins over detection.
+  // Every query-building consumer reads SourceConfig through SourceConfigContext below, so this is
+  // the one place this fallback needs to be applied.
+  const { detectedPartitionTimestamp } = useFieldDiscovery(rawSourceConfig, discoveryTimeRange);
+  const sourceConfig: SourceConfig = useMemo(() => {
+    if (rawSourceConfig.columns.partitionTimestamp) {
+      // Already explicit (a real column name, or '-' for off) — never overridden by detection.
+      return rawSourceConfig;
+    }
+    if (!detectedPartitionTimestamp) {
+      return rawSourceConfig;
+    }
+    return {
+      ...rawSourceConfig,
+      columns: { ...rawSourceConfig.columns, partitionTimestamp: detectedPartitionTimestamp },
+    };
+  }, [rawSourceConfig, detectedPartitionTimestamp]);
 
   // Diagnostics' server-side enrichment tier (see diag/autoEnrich.ts) is wired once here, at the
   // top of the app, rather than inside LogsExplorer — capture must happen regardless of which page

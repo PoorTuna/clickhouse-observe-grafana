@@ -10,7 +10,10 @@ const config: SourceConfig = {
   database: 'default',
   logsTable: 'otel_logs',
   isOtel: true,
-  columns: OTEL_COLUMN_MAPPING,
+  // partitionTimestamp explicitly off ('-') — this file tests search-clause construction, not the
+  // coarse index-pruning predicate (see prune_column.test.ts / build_logs_query.test.ts for that),
+  // so an unrelated extra WHERE condition would just be noise against every assertion below.
+  columns: { ...OTEL_COLUMN_MAPPING, partitionTimestamp: '-' },
 };
 
 function conditions(search: string): string[] {

@@ -6,6 +6,7 @@ import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { fieldTypeColor } from './fieldTypeColors';
 import { FieldStatsPopover } from './FieldStatsPopover';
+import { FieldKeysPopover } from './FieldKeysPopover';
 import { FilterPill, LogsQueryState } from '../../types';
 import { makeFilter } from '../../sql/filters';
 import { FIELD_DRAG_MIME } from '../../constants';
@@ -31,9 +32,18 @@ export function FieldItem({
   const theme = useTheme2();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
+  // Set once the user clicks a key inside FieldKeysPopover — swaps this popover's content from the
+  // key-browse list to FieldStatsPopover for that leaf key, in place (same Portal/position, no
+  // second popover layer). Reset whenever the popover closes/reopens so it always starts back at
+  // the key list, not wherever the user last drilled into.
+  const [drillField, setDrillField] = useState<FieldModel | null>(null);
   const rowRef = useRef<HTMLDivElement>(null);
 
   const icon = FIELD_TYPE_ICONS[field.type] ?? 'question-circle';
+  // Map/JSON *container* columns (Phase A discovery, not a row-derived leaf key) get the on-demand
+  // key-browse popover instead of top-values — there's nothing to show "top values" of for a
+  // container column itself.
+  const isKeyBrowsable = field.source === 'column' && (field.type === 'map' || field.type === 'json');
 
   const openPopover = () => {
     if (rowRef.current) {
@@ -52,6 +62,7 @@ export function FieldItem({
 
       setPopoverPos({ top, left });
     }
+    setDrillField(null);
     setPopoverOpen(true);
   };
 
@@ -119,20 +130,51 @@ export function FieldItem({
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <FieldStatsPopover
-                field={field}
-                queryState={queryState}
-                timeRange={timeRange}
-                isSelected={isSelected}
-                onAddFilter={(f) => {
-                  onAddFilter(f);
-                  setPopoverOpen(false);
-                }}
-                onAddColumn={() => {
-                  onToggleColumn(field);
-                  setPopoverOpen(false);
-                }}
-              />
+              {isKeyBrowsable && !drillField && (
+                <FieldKeysPopover
+                  field={field}
+                  queryState={queryState}
+                  timeRange={timeRange}
+                  onSelectKey={setDrillField}
+                />
+              )}
+              {isKeyBrowsable && drillField && (
+                <>
+                  <button className={styles.backBtn} onClick={() => setDrillField(null)}>
+                    <Icon name="angle-left" size="xs" /> {field.displayName}
+                  </button>
+                  <FieldStatsPopover
+                    field={drillField}
+                    queryState={queryState}
+                    timeRange={timeRange}
+                    isSelected={false}
+                    onAddFilter={(f) => {
+                      onAddFilter(f);
+                      setPopoverOpen(false);
+                    }}
+                    onAddColumn={() => {
+                      onToggleColumn(drillField);
+                      setPopoverOpen(false);
+                    }}
+                  />
+                </>
+              )}
+              {!isKeyBrowsable && (
+                <FieldStatsPopover
+                  field={field}
+                  queryState={queryState}
+                  timeRange={timeRange}
+                  isSelected={isSelected}
+                  onAddFilter={(f) => {
+                    onAddFilter(f);
+                    setPopoverOpen(false);
+                  }}
+                  onAddColumn={() => {
+                    onToggleColumn(field);
+                    setPopoverOpen(false);
+                  }}
+                />
+              )}
             </div>
           </div>
         </Portal>
@@ -142,6 +184,24 @@ export function FieldItem({
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
+  backBtn: css`
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-bottom: ${theme.spacing(0.5)};
+    padding: 2px 4px;
+    background: transparent;
+    border: none;
+    border-radius: ${theme.shape.radius.default};
+    cursor: pointer;
+    color: ${theme.colors.text.secondary};
+    font-size: 13px;
+    font-family: ${theme.typography.fontFamilyMonospace};
+    &:hover {
+      color: ${theme.colors.text.primary};
+      background: ${theme.colors.action.hover};
+    }
+  `,
   row: css`
     position: relative;
     display: flex;

@@ -114,4 +114,25 @@ describe('LogDetailDrawer blocking states', () => {
     expect(screen.getByText(/field discovery failed/i)).toBeInTheDocument();
     expect(screen.queryByText(TRACE_ID)).not.toBeInTheDocument();
   });
+
+  // Regression coverage for the perf plan's item 4 / the user's original "can't read a record"
+  // complaint: fieldsLoading/fieldsError now reflect Phase A (system.columns) discovery only — the
+  // dedicated Map-key/JSON-path scan (former Phase B/C) that used to also gate this render was
+  // deleted from the mount path entirely (see FieldsContext.tsx). The drawer must render as soon
+  // as detailRow + Phase-A fields are ready, with no separate "attribute discovery" signal to wait
+  // on — there no longer is one.
+  it('renders once detailRow + Phase-A fields are ready, with no attribute-discovery signal to block on', () => {
+    render(
+      <LogDetailDrawer
+        {...baseProps}
+        fieldsLoading={false}
+        fieldsError={null}
+        fields={[{ id: 'col:TraceId', name: 'TraceId', displayName: 'TraceId', sqlExpr: 'TraceId', type: 'string', source: 'column' }]}
+      />
+    );
+
+    expect(screen.queryByText(/loading all fields/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/field discovery failed/i)).not.toBeInTheDocument();
+    expect(screen.getByText(TRACE_ID)).toBeInTheDocument();
+  });
 });

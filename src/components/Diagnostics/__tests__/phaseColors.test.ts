@@ -27,7 +27,7 @@ describe('labelForKind', () => {
 
 describe('tooltipForKind', () => {
   it('gives every QueryOp a tooltip explaining what it is for', () => {
-    expect(tooltipForKind('presence', 'presence')).toMatch(/available vs empty/i);
+    expect(tooltipForKind('mapKeys', 'mapKeys')).toMatch(/map-typed columns/i);
     expect(tooltipForKind('fieldValues', 'fieldValues')).toMatch(/autocomplete/i);
   });
 });

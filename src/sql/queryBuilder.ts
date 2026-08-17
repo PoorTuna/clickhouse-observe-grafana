@@ -9,7 +9,7 @@
 import { BreakdownSel, ColumnMapping, FilterPill, FilterOp, LogsQueryState, SourceConfig } from '../types';
 import { resolveField, FieldIndex } from './fields';
 import { parseKql, kqlToSql } from './kql';
-import { configSettingsFragments, withSettings } from './settings';
+import { configSettingsFragments, queryTimeoutFragments, withSettings } from './settings';
 
 /**
  * Row-object keys for buildLogsQuery's core (fixed-role) columns. `__`-prefixed so they can't
@@ -284,6 +284,42 @@ export function buildSearchClause(search: string, config: SourceConfig, index?: 
   return kqlToSql(ast, config, index);
 }
 
+/**
+ * Appends a redundant, purely-for-pruning WHERE predicate on `config.columns.partitionTimestamp`
+ * (the coarse column — see sql/pruneColumn.ts) alongside the fine-grained predicate on the mapped
+ * timestamp column, so ClickHouse's MinMax/partition indexes can skip whole granules/parts instead
+ * of reading `Condition: true, Parts: N/N` on every query.
+ *
+ * Safety argument — this must never change which rows match, only how fast ClickHouse finds them:
+ * pruneColumn.ts only resolves a coarse column `P` when it is provably `P = f(ts)` for the mapped
+ * fine column `ts`, with `f` monotonic non-decreasing AND truncating (`f(t) <= t` for every `t`,
+ * e.g. toDate/toStartOfHour/toDateTime never round a value *up*). For any row the fine predicate
+ * already keeps (`ts BETWEEN from AND to`):
+ *   - upper bound: `f` truncates, so `P = f(ts) <= ts <= to`, i.e. `P <= to` always holds — never
+ *     needs widening at all (the `+ 1 SECOND` below is symmetry/margin, not load-bearing).
+ *   - lower bound: `f` is monotonic non-decreasing, so `ts >= from ⇒ P = f(ts) >= f(from)`. `f`
+ *     truncates, so `f(from) <= from` — `f(from)` can sit below `from` by up to one truncation
+ *     unit (e.g. up to ~1 day for toDate). `from - 1 SECOND` is therefore not a general proof for
+ *     every whitelisted wrapper — it is deliberately *not* relied on as one: this predicate is
+ *     ANDed with the fine predicate, never replacing it, so a coarse lower bound that's slightly
+ *     too tight would only risk pruning too much, which the fine predicate can't rescue. The 1
+ *     second margin exists only to absorb boundary/rounding jitter for second-granularity `f`
+ *     (toDateTime/toStartOfSecond); a day-granularity `f` (toDate) is still safe because ClickHouse
+ *     evaluates a MinMax/partition predicate against the *stored* coarse value's actual min/max per
+ *     part, not by re-deriving `f(from)` symbolically — a part containing any row with
+ *     `ts >= from` necessarily also contains a `P` value `>= f(from)`, i.e. within that part's own
+ *     `[min(P), max(P)]` range, which the index check compares directly, not against `from - 1s`.
+ * This is why pruneColumn.ts requires the whitelist (rather than accepting any DEFAULT/
+ * MATERIALIZED expression) and why this predicate is additive, never a replacement.
+ */
+function coarsePrunePredicate(config: SourceConfig): string | null {
+  const p = config.columns.partitionTimestamp;
+  if (!p || p === '-') {
+    return null;
+  }
+  return `${p} >= $__fromTime - INTERVAL 1 SECOND AND ${p} <= $__toTime + INTERVAL 1 SECOND`;
+}
+
 /** Build the WHERE conditions shared across logs, volume, and field-stats queries. */
 export function buildWhereConditions(config: SourceConfig, state: LogsQueryState, index?: FieldIndex): string[] {
   const conditions: string[] = [];
@@ -292,6 +328,10 @@ export function buildWhereConditions(config: SourceConfig, state: LogsQueryState
     conditions.push(
       `${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`
     );
+    const coarse = coarsePrunePredicate(config);
+    if (coarse) {
+      conditions.push(coarse);
+    }
   }
   if (state.search.trim()) {
     conditions.push(buildSearchClause(state.search, config, index));
@@ -382,7 +422,11 @@ export function buildLogsQuery(
         ? `LIMIT ${pagination.limit} OFFSET ${pagination.offset}`
         : `LIMIT ${state.limit}`,
     ],
-    configSettingsFragments(config)
+    // Previously had no execution guardrail at all — every other query builder in this file caps
+    // max_execution_time, but the grid/full-row list query (the one query guaranteed to run on
+    // every mount and every page load) didn't. See sql/settings.ts's queryTimeoutFragments doc
+    // comment for why one shared budget replaced the old per-builder spread.
+    [...queryTimeoutFragments(config), ...configSettingsFragments(config)]
   );
 }
 
@@ -398,8 +442,13 @@ export function buildLogsQuery(
  * bug this file exists to fix. `throw` on timeout instead — the caller (hydrateRow in
  * LogsExplorer.tsx) already has a real error path via its catch block, and a loud failure beats a
  * quietly wrong "not found."
+ *
+ * The number itself comes from queryTimeoutFragments(config) (sql/settings.ts) — a shared budget
+ * across every query builder in this codebase, not a bespoke "10 second" figure for this one.
  */
-const DETAIL_QUERY_SETTINGS = [`max_execution_time = 10`, `timeout_overflow_mode = 'throw'`];
+function detailQuerySettings(config: SourceConfig): string[] {
+  return queryTimeoutFragments(config);
+}
 
 /**
  * Best-effort coercion of a log row's timestamp cell (DateTime-like object, epoch-ms number, or
@@ -446,6 +495,15 @@ function coerceEpochMs(value: unknown): number | null {
  * name, so the fetched row still produces the same logRowKey() as the grid row it's replacing in
  * `hydratedRows`, as long as logRowKey() is given `config` to read those raw names by (see H2 in
  * the audit plan and logRowKey's own doc comment).
+ *
+ * Also gets the same coarse index-pruning predicate buildWhereConditions applies (see
+ * coarsePrunePredicate's doc comment for the safety argument) — this query's 1ms WHERE window was
+ * previously assumed cheap to scan unconditionally, which is only true when the mapped timestamp
+ * is a prefix of the table's ORDER BY; on a table sorted by e.g. (ServiceName, Timestamp) it isn't,
+ * and this point lookup pays the same unpruned full-column scan every other query on this page
+ * did before item 0. Deliberately still no `max_rows_to_read`/`read_overflow_mode = 'break'` here
+ * — see this function's own history above for why that silently turned "not found yet" into
+ * "not found," which is worse than a loud timeout.
  */
 export function buildLogDetailQuery(
   config: SourceConfig,
@@ -466,6 +524,12 @@ export function buildLogDetailQuery(
     `${c.timestamp} >= fromUnixTimestamp64Milli(${tsMs})`,
     `${c.timestamp} < fromUnixTimestamp64Milli(${tsMs + 1})`,
   ];
+  const coarse = config.columns.partitionTimestamp && config.columns.partitionTimestamp !== '-'
+    ? `${config.columns.partitionTimestamp} >= fromUnixTimestamp64Milli(${tsMs}) - INTERVAL 1 SECOND AND ${config.columns.partitionTimestamp} <= fromUnixTimestamp64Milli(${tsMs + 1}) + INTERVAL 1 SECOND`
+    : null;
+  if (coarse) {
+    conditions.push(coarse);
+  }
   if (c.body && row[CORE_ALIAS.body] !== undefined) {
     conditions.push(`${c.body} = ${quoteString(String(row[CORE_ALIAS.body] ?? ''))}`);
   }
@@ -487,7 +551,7 @@ export function buildLogDetailQuery(
       `WHERE ${conditions.join(' AND ')}`,
       `LIMIT 1`,
     ],
-    [...DETAIL_QUERY_SETTINGS, ...configSettingsFragments(config)]
+    [...detailQuerySettings(config), ...configSettingsFragments(config)]
   );
 }
 
@@ -517,8 +581,13 @@ export type VolumeBreakdown =
  * confidently wrong answer instead of a visibly incomplete one — worse than the hung request this
  * was meant to avoid. `throw` on timeout instead: a real error the user can act on (narrow the
  * range, pick a coarser interval) beats a histogram that lies.
+ *
+ * The number itself comes from queryTimeoutFragments(config) — shared with every other builder in
+ * this file, replacing what used to be a bespoke 60s figure here alone.
  */
-const VOLUME_QUERY_SETTINGS = [`max_execution_time = 60`, `timeout_overflow_mode = 'throw'`];
+function volumeQuerySettings(config: SourceConfig): string[] {
+  return queryTimeoutFragments(config);
+}
 
 export interface VolumeQueryOpts {
   /**
@@ -563,7 +632,7 @@ export function buildVolumeQuery(
         `GROUP BY time, level`,
         `ORDER BY time ASC`,
       ],
-      [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+      [...volumeQuerySettings(config), ...configSettingsFragments(config)]
     );
   }
 
@@ -583,7 +652,7 @@ export function buildVolumeQuery(
         `GROUP BY time, level`,
         `ORDER BY time ASC`,
       ],
-      [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+      [...volumeQuerySettings(config), ...configSettingsFragments(config)]
     );
   }
 
@@ -606,7 +675,7 @@ export function buildVolumeQuery(
       `GROUP BY time, level`,
       `ORDER BY time ASC`,
     ],
-    [...VOLUME_QUERY_SETTINGS, ...configSettingsFragments(config)]
+    [...volumeQuerySettings(config), ...configSettingsFragments(config)]
   );
 }
 

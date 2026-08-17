@@ -15,6 +15,7 @@ import { SourceConfig } from '../types';
 import { Span } from './types';
 import { computeWarnings, Warning } from './warnings';
 import { stripLiterals } from './sqlIntegrity';
+import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../sql/settings';
 
 /**
  * Redacts every single-quoted string literal (and comment) in `sql` except a small keyword
@@ -59,6 +60,10 @@ function redactText(text: string, identifiers: readonly string[]): string {
 export interface RedactedConfig {
   isOtel: boolean;
   sequentialConsistency: boolean;
+  /** Effective max_execution_time budget (seconds) for every query this view issues — see
+   *  sql/settings.ts's queryTimeoutFragments. Useful on its own in a shared bundle: a "query timed
+   *  out" report is meaningless without knowing what the cap actually was. */
+  queryTimeoutSeconds: number;
   hasExtraQuerySettings: boolean;
   hasClusterName: boolean;
   /** Which logical fields (timestamp, body, severity, …) are mapped — not what they're mapped to. */
@@ -74,6 +79,7 @@ export function redactConfig(config: SourceConfig): RedactedConfig {
   return {
     isOtel: config.isOtel,
     sequentialConsistency: config.sequentialConsistency ?? true,
+    queryTimeoutSeconds: config.queryTimeoutSeconds ?? DEFAULT_QUERY_TIMEOUT_SECONDS,
     hasExtraQuerySettings: Boolean(config.extraQuerySettings?.trim()),
     hasClusterName: Boolean(config.clusterName?.trim()),
     mappedFields,

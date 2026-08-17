@@ -7,9 +7,9 @@
  * Deliberately not ambient/global-context-based: a query attaches to an action by receiving that
  * action's SpanHandle explicitly (see TraceParent in types.ts), never by asking the tracer "what's
  * currently happening." This codebase fires concurrent queries by design (one search submit kicks
- * off logs + volume + presence together), so any "current action" global would be a race the
- * moment two actions' async work interleaves — which defeats the entire point of a tool whose job
- * is correct attribution.
+ * off logs + volume together, plus the sidebar's own on-demand mapKeys/jsonPaths queries), so any
+ * "current action" global would be a race the moment two actions' async work interleaves — which
+ * defeats the entire point of a tool whose job is correct attribution.
  *
  * State lives in module scope (like a logger), not behind React Context, so instrumentation in
  * runQuery.ts and the SQL builders never needs to be inside a component tree to record a span.

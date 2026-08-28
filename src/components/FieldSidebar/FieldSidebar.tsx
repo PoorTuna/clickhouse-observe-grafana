@@ -48,17 +48,23 @@ export function FieldSidebar({
     [queryState.columns]
   );
 
-  // Single flat, filterable list of Phase A columns — Map/JSON columns show as one row each (their
-  // keys are browsed on-demand via FieldKeysPopover, opened by clicking the row in FieldItem, not
-  // flattened into the list here) — and no Available/Empty split. The Available/Empty split (a
-  // filter-aware presence check via a dedicated sample query) was removed as part of the perf
-  // plan's "Available/Empty split: removed entirely for now" — revisit later; see the plan's
-  // explicit follow-ups.
+  // Single flat, filterable list, no Available/Empty split (a filter-aware presence check via a
+  // dedicated sample query; removed as part of the perf plan's "Available/Empty split: removed
+  // entirely for now" — revisit later).
+  //
+  // Map columns show as one row each: their keys are browsed on-demand via FieldKeysPopover,
+  // opened by clicking the row in FieldItem, not flattened into the list here. JSON columns are
+  // the opposite — every path is already a real field (FieldsContext Phase C), so the *container*
+  // row is dropped from the list: it would only offer top-values over a whole JSON column, which
+  // is expensive and unreadable. It stays in `fields` regardless, because LogDetailDrawer derives
+  // its JSON-column list (and therefore its dotted-path row flattening, sql/schema.ts's
+  // groupAttributes) from exactly those entries.
   const { selected, unselected } = useMemo(() => {
     const lc = nameFilter.toLowerCase();
+    const listable = fields.filter((f) => !(f.source === 'column' && f.type === 'json'));
     const filtered = nameFilter
-      ? fields.filter((f) => f.displayName.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc))
-      : fields;
+      ? listable.filter((f) => f.displayName.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc))
+      : listable;
     return {
       selected: filtered.filter((f) => selectedIds.has(f.id)),
       unselected: filtered.filter((f) => !selectedIds.has(f.id)),

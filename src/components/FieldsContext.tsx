@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { TimeRange } from '@grafana/data';
-import { FieldModel, inferFieldType, parseTupleElements } from '../sql/fieldModel';
-import { buildColumnsQuery } from '../sql/introspection';
+import { FieldModel, inferFieldType, parseJsonTypedPaths, parseTupleElements } from '../sql/fieldModel';
+import { buildColumnsQuery, buildJsonPathsQuery } from '../sql/introspection';
 import { quoteDottedPath } from '../sql/queryBuilder';
 import { detectPruneColumn, PruneCandidateColumn } from '../sql/pruneColumn';
 import { runQueryRows } from '../data/runQuery';
@@ -9,12 +9,10 @@ import { SourceConfig } from '../types';
 import { errMsg } from '../errMsg';
 
 // Module-level cache survives re-renders; cleared on explicit refresh(). Keyed by table only —
-// Map-key/JSON-path discovery (formerly Phase B/C, time-bucket-scoped) was deleted from this hot
-// path; see the "Delete the presence query and its Available/Empty machinery" item in the perf
-// plan. Attribute keys are now discovered on-demand instead, per Map/JSON column, when the user
-// clicks that column in the sidebar (FieldKeysPopover, backed by sql/keys.ts) — not scanned here
-// at mount, and not derived from hydrated rows either (that row-derived approach was itself later
-// replaced by the on-demand popover; see the "on-demand nested-browse" plan).
+// Map *keys* stay on-demand (FieldKeysPopover, backed by sql/keys.ts): reading them costs a scan of
+// real row data no matter how the query is written, so they're only paid for when the user clicks
+// that column. JSON *paths* are back here at mount (Phase C below) because ClickHouse can answer
+// `distinctJSONPaths` from part metadata — see buildJsonPathsQuery's doc comment.
 const columnCache = new Map<string, FieldModel[]>();
 // Raw system.columns rows backing columnCache's entry, kept alongside it (same key, same
 // lifetime/invalidation) purely so detectPruneColumn can re-run against the widened columns
@@ -27,12 +25,26 @@ function columnCacheKey(config: SourceConfig, table: string): string {
 }
 
 /**
- * Runs `fn` over `items` with at most `limit` in flight at once. Formerly used by this file's own
- * Phase B/C (Map-key/JSON-path) discovery, deleted from the mount-time hot path — see the perf
- * plan. Still a general-purpose utility, used by CreateDataViewModal's explicit "Guess with AI"
- * JSON-path scan (an on-demand user action, not mount-time discovery), so it stays exported here
- * rather than being deleted along with its original call site. `fn` is expected to handle its own
- * errors — a rejection from `fn` propagates out of this function same as Promise.all.
+ * Discovered path list per native-JSON column. Deliberately *not* time-bucket-scoped, unlike the
+ * old Phase B/C caches: buildJsonPathsQuery carries no time or filter predicate (a predicate would
+ * cost it the metadata fast path), so its answer can't change with the dashboard's time range —
+ * re-running it on every coarse-bucket change would be pure waste.
+ */
+const jsonPathCache = new Map<string, string[]>();
+
+function jsonPathCacheKey(config: SourceConfig, table: string, jsonColumn: string): string {
+  return `${columnCacheKey(config, table)}:${jsonColumn}`;
+}
+
+/** Max JSON-path discovery queries in flight at once — one per JSON column, so a wide schema
+ *  doesn't open a connection per column at mount. */
+const DISCOVERY_CONCURRENCY = 4;
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight at once. Used by this file's Phase C
+ * (JSON-path discovery) and by CreateDataViewModal's "Guess with AI" JSON-path scan. `fn` is
+ * expected to handle its own errors — a rejection from `fn` propagates out of this function same
+ * as Promise.all.
  */
 export async function runWithConcurrencyLimit<T, R>(
   items: T[],
@@ -58,6 +70,35 @@ export function coarseTimeBucket(timeRange: TimeRange): string {
   }
   const snap = (ms: number) => Math.floor(ms / 300_000) * 300_000;
   return `${snap(timeRange.from.valueOf())}|${snap(timeRange.to.valueOf())}`;
+}
+
+/**
+ * One JSON column's full path list, straight from `distinctJSONPaths`. The query returns a single
+ * `toJSONString(...)` cell rather than an `Array(String)` (see buildJsonPathsQuery) so the result
+ * doesn't depend on how the datasource marshals array columns into a DataFrame — hence the parse
+ * here. A malformed/absent cell throws, and the caller turns that into a per-column error.
+ */
+async function fetchJsonPaths(
+  config: SourceConfig,
+  table: string,
+  jsonColumn: string,
+  timeRange: TimeRange
+): Promise<string[]> {
+  const rows = await runQueryRows({
+    datasourceUid: config.datasourceUid,
+    sql: buildJsonPathsQuery(config, jsonColumn, { table }),
+    timeRange,
+    op: 'jsonPaths',
+  });
+  const cell = rows.length > 0 ? String(rows[0]['paths'] ?? '') : '';
+  if (!cell) {
+    return [];
+  }
+  const parsed = JSON.parse(cell);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.map((p) => String(p)).filter((p) => p.length > 0);
 }
 
 interface FieldsContextValue {
@@ -99,12 +140,17 @@ export interface FieldDiscoveryResult extends FieldsContextValue {
 }
 
 /**
- * Discovers top-level columns for a table (system.columns, cached per table). Map-key/JSON-path
- * discovery used to run here too (former Phase B/C) — deleted from this hot path; see the perf
- * plan's "Delete the presence query and its Available/Empty machinery." `buildMapKeysQuery`/
- * `buildJsonPathsQuery` (introspection.ts) are no longer unused: FieldKeysPopover (FieldSidebar/)
- * calls them on-demand, scoped to the current search/filters/time range, when the user clicks a
- * Map/JSON column this function published — see the "on-demand nested-browse" plan.
+ * Discovers the fields of a table, in three phases:
+ *
+ *   A. top-level columns — one `system.columns` query, cached per table;
+ *   B. Tuple elements — synchronous parse of the type strings A already fetched, no query;
+ *   C. paths inside native JSON columns — one `distinctJSONPaths` query per JSON column, cached
+ *      per column, published as first-class `source: 'json'` fields.
+ *
+ * Map keys are the deliberate exception: they stay on-demand (FieldKeysPopover → sql/keys.ts,
+ * `buildMapKeysQuery`), because listing them always costs a scan of real row data, while Phase C's
+ * query is answered from part metadata (see buildJsonPathsQuery's doc comment for the exact
+ * conditions that keeps true — chiefly: it must carry no WHERE).
  */
 export function useFieldDiscovery(
   config: SourceConfig,
@@ -138,6 +184,14 @@ export function useFieldDiscovery(
     if (invalidateColumns) {
       columnCache.delete(cKey);
       rawColumnCache.delete(cKey);
+      // Phase C's cache is keyed per column (`<cKey>:<column>`), so an explicit refresh has to drop
+      // every entry under this table — otherwise a schema change that adds a JSON path would keep
+      // serving the stale list for the rest of the session.
+      for (const key of [...jsonPathCache.keys()]) {
+        if (key.startsWith(`${cKey}:`)) {
+          jsonPathCache.delete(key);
+        }
+      }
     }
 
     // Top-level columns (time-independent, cached per table).
@@ -197,8 +251,8 @@ export function useFieldDiscovery(
       return;
     }
 
-    // Tuple elements — unlike Map keys / JSON paths (deleted from this hot path), no query is
-    // needed: a Tuple's element list is fully determined by the type string already fetched
+    // Phase B — Tuple elements. Unlike Map keys or JSON paths, no query is needed: a Tuple's
+    // element list is fully determined by the type string Phase A already fetched
     // (system.columns), so this is a synchronous parse, not a scan.
     // See parseTupleElements' doc comment (sql/fieldModel.ts) for the one-level-flatten boundary.
     const tupleFields: FieldModel[] = [];
@@ -221,12 +275,80 @@ export function useFieldDiscovery(
 
     const detected = detectPruneColumn(rawColumns, config.columns.timestamp) ?? '';
 
-    if (runRef.current === runId) {
-      setFields([...columns, ...tupleFields]);
-      setLoading(false);
-      setError(null);
-      setDetectedPartitionTimestamp(detected);
+    // Publish what's already known before Phase C runs, so the sidebar paints immediately instead
+    // of waiting on a round-trip per JSON column. `loading` deliberately stays true until Phase C
+    // settles — LogDetailDrawer blocks on it, and BreakdownPicker's severity guard reads it.
+    if (runRef.current !== runId) {
+      return;
     }
+    setFields([...columns, ...tupleFields]);
+    setError(null);
+    setDetectedPartitionTimestamp(detected);
+
+    // Phase C — paths inside native JSON columns, one query per column, cached per column for the
+    // session (the query is time- and filter-independent). Each path becomes a first-class field,
+    // so the sidebar, KQL field/value completion, filter editor and add-as-column all pick it up
+    // from `fields` with no further work. Types come from the column's own declared JSON(...)
+    // paths, not from the query: `distinctJSONPathsAndTypes` isn't covered by the subcolumn
+    // optimization the bare variant relies on, so asking for types would cost a full column scan.
+    const jsonCols = columns.filter((c) => c.type === 'json');
+    if (jsonCols.length === 0) {
+      setLoading(false);
+      return;
+    }
+
+    const perCol = await runWithConcurrencyLimit(jsonCols, DISCOVERY_CONCURRENCY, async (col) => {
+      const jKey = jsonPathCacheKey(config, resolvedTable, col.name);
+      const cached = jsonPathCache.get(jKey);
+      if (cached) {
+        return { col, paths: cached, error: null as string | null };
+      }
+      try {
+        const paths = await fetchJsonPaths(config, resolvedTable, col.name, timeRange);
+        jsonPathCache.set(jKey, paths);
+        return { col, paths, error: null as string | null };
+      } catch (e) {
+        // One unreadable JSON column must not cost the user every other field — record it and
+        // publish the rest, same as the pre-0.8.0 discovery did.
+        return { col, paths: [] as string[], error: errMsg(e) };
+      }
+    });
+
+    if (runRef.current !== runId) {
+      return;
+    }
+
+    const jsonFields: FieldModel[] = [];
+    for (const { col, paths } of perCol) {
+      const declaredTypes = new Map(parseJsonTypedPaths(col.rawType ?? '').map((p) => [p.path, p.type]));
+      for (const path of paths) {
+        const chType = declaredTypes.get(path);
+        jsonFields.push({
+          id: `json:${col.name}:${path}`,
+          name: path,
+          displayName: `${col.name}.${path}`,
+          sqlExpr: quoteDottedPath(col.name, path),
+          // Dynamic (undeclared) paths have no type here. 'string' is only cosmetic — generated SQL
+          // never reads FieldModel.type: equality always string-quotes (kql/toSql.ts's equalsSql)
+          // and numeric ranges cast on `kind === 'json'`, which comes from `source`, not `type`.
+          type: chType ? inferFieldType(chType) : 'string',
+          source: 'json',
+          jsonColumn: col.name,
+          jsonPath: path,
+        });
+      }
+    }
+
+    const failedCols = perCol.filter((r) => r.error).map((r) => r.col.name);
+    // Columns stay first in the published array: buildFieldIndex (sql/fields.ts) is first-wins on
+    // `byName`, so a real column keeps its bare name against a same-named JSON path.
+    setFields([...columns, ...tupleFields, ...jsonFields]);
+    setError(
+      failedCols.length > 0
+        ? `Field discovery failed for: ${failedCols.join(', ')}. Some JSON attribute fields may be missing.`
+        : null
+    );
+    setLoading(false);
   }
 
   const refresh = () => loadFields(true);

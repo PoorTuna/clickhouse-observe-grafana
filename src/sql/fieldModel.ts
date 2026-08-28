@@ -165,3 +165,55 @@ export function parseTupleElements(
   }
   return leaves;
 }
+
+/** Strips ClickHouse identifier backtick quoting (`` `a b` `` → `a b`, doubled `` `` `` → `` ` ``). */
+function unquoteIdent(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('`') && trimmed.endsWith('`') && trimmed.length >= 2) {
+    return trimmed.slice(1, -1).replace(/``/g, '`');
+  }
+  return trimmed;
+}
+
+/**
+ * Parses the *declared* paths out of a native JSON column's type string, e.g.
+ * `JSON(user.id UInt32, `odd name` String, max_dynamic_paths=8, SKIP secret, SKIP REGEXP '^tmp')`
+ * → `[{ path: 'user.id', type: 'UInt32' }, { path: 'odd name', type: 'String' }]`.
+ *
+ * Exists because path *discovery* (`distinctJSONPaths`, sql/introspection.ts) returns no types —
+ * the typed variant of that function isn't covered by the subcolumn optimization the bare one
+ * depends on, so asking ClickHouse for types would cost a full column scan. Every path a schema
+ * actually declares already has its type in `system.columns.type`, which Phase A fetches anyway,
+ * so this recovers types for free for the declared subset; dynamic paths stay untyped (callers
+ * fall back to 'string').
+ *
+ * Non-path entries inside `JSON(...)` are skipped: `max_dynamic_paths=N` / `max_dynamic_types=N`
+ * hints and `SKIP path` / `SKIP REGEXP '...'` exclusions. Reuses `splitTopLevel` for the same
+ * reason parseTupleLevel does — a declared path's own type can contain commas
+ * (`Decimal(10, 2)`, a nested `Tuple(...)`).
+ */
+export function parseJsonTypedPaths(chType: string): Array<{ path: string; type: string }> {
+  const match = /^JSON\((.*)\)$/s.exec(chType.trim());
+  if (!match) {
+    // Bare `JSON`, or the legacy `Object('json')` spelling — no declared paths either way.
+    return [];
+  }
+  const paths: Array<{ path: string; type: string }> = [];
+  for (const part of splitTopLevel(match[1])) {
+    const trimmed = part.trim();
+    if (!trimmed || /^SKIP\b/i.test(trimmed)) {
+      continue;
+    }
+    // `name Type` — a declared path name may itself be dotted (nested) or backtick-quoted.
+    const nameMatch = /^(`(?:[^`]|``)+`|[A-Za-z_][A-Za-z0-9_.]*)\s+(.+)$/.exec(trimmed);
+    if (!nameMatch) {
+      continue; // `max_dynamic_paths=8` and friends: a hint, not a `name Type` pair.
+    }
+    const type = nameMatch[2].trim();
+    if (type.startsWith('=')) {
+      continue; // same hint, written with spaces around the `=`.
+    }
+    paths.push({ path: unquoteIdent(nameMatch[1]), type });
+  }
+  return paths;
+}

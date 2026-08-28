@@ -1,11 +1,14 @@
 /**
  * Unit tests for native ClickHouse JSON-column field support:
  * - inferFieldType recognizes the JSON type (and its legacy Object('json') spelling).
- * - buildJsonPathsQuery mirrors buildMapKeysQuery's bounded sampled-CTE shape.
+ * - buildJsonPathsQuery stays a *bare* distinctJSONPaths query — the absence assertions below are
+ *   the regression guard for ClickHouse's paths-only subcolumn optimization, which is disabled the
+ *   moment the query grows a WHERE/PREWHERE/GROUP BY.
+ * - parseJsonTypedPaths recovers declared path types from the column's own JSON(...) type.
  * - buildFieldIndex + resolveField correctly resolve JSON paths by name and by sqlExpr passthrough.
  */
 
-import { inferFieldType, FieldModel } from '../fieldModel';
+import { inferFieldType, parseJsonTypedPaths, FieldModel } from '../fieldModel';
 import { buildJsonPathsQuery } from '../introspection';
 import { DEFAULT_QUERY_TIMEOUT_SECONDS } from '../settings';
 import { buildFieldIndex, resolveField } from '../fields';
@@ -40,49 +43,91 @@ describe('inferFieldType — JSON', () => {
 });
 
 describe('buildJsonPathsQuery', () => {
-  const conditions = [`${config.columns.timestamp} >= $__fromTime AND ${config.columns.timestamp} <= $__toTime`];
-
-  it('wraps the scan in a sample CTE, ordered by timestamp DESC, bounded by LIMIT', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
-    expect(sqlStr).toContain('WITH sample AS');
-    expect(sqlStr).toContain(`ORDER BY ${config.columns.timestamp} DESC`);
-    expect(sqlStr).toContain('LIMIT 500');
-    expect(sqlStr).toContain('JSONAllPathsWithTypes(j)');
+  it('asks for every path in the table via distinctJSONPaths, as one JSON-encoded cell', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).toContain('toJSONString(distinctJSONPaths(Payload))');
+    expect(sqlStr).toContain('"default"."otel_logs"');
   });
 
-  it('scopes the sample by the caller-supplied WHERE conditions (search/filters, not just time)', () => {
-    const scoped = [...conditions, `ServiceName = 'checkout'`];
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions: scoped });
-    expect(sqlStr).toContain('$__fromTime');
-    expect(sqlStr).toContain(`ServiceName = 'checkout'`);
+  it('carries no filter, ordering or bound — the optimization depends on it', () => {
+    // ClickHouse's FunctionToSubcolumnsPass refuses to rewrite distinctJSONPaths into the
+    // paths-only subcolumn read when the query has WHERE/PREWHERE/GROUP BY, so a "helpful" time
+    // predicate here would make this query several times *slower*, not faster. ORDER BY/LIMIT are
+    // pointless on a single-row aggregate and would only muddy that contract.
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).not.toContain('WHERE');
+    expect(sqlStr).not.toContain('PREWHERE');
+    expect(sqlStr).not.toContain('GROUP BY');
+    expect(sqlStr).not.toContain('ORDER BY');
+    expect(sqlStr).not.toContain('LIMIT');
+    expect(sqlStr).not.toContain('$__fromTime');
   });
 
-  it('keeps the timeout guardrail (still throws, not a silent truncation) on top of the LIMIT bound', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
+  it('selects nothing but the paths — a companion count() would be wrong', () => {
+    // Once the rewrite fires, the special subcolumn yields one row per read block, so a
+    // row-counting aggregate in the same query reports block count. Verified on CH 26.3.17.4:
+    // count() came back 24 for a 50k-row table with the optimization on.
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).not.toContain('count(');
+  });
+
+  it('asks for the subcolumn optimization explicitly', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).toContain('optimize_functions_to_subcolumns = 1');
+  });
+
+  it('does not send enable_analyzer (unknown setting names fail the whole query on older servers)', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).not.toContain('enable_analyzer');
+    expect(sqlStr).not.toContain('allow_experimental_analyzer');
+  });
+
+  it('keeps the timeout guardrail (still throws, never a silent truncation)', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
     expect(sqlStr).toContain(`max_execution_time = ${DEFAULT_QUERY_TIMEOUT_SECONDS}`);
     expect(sqlStr).toContain("timeout_overflow_mode = 'throw'");
   });
 
-  it('omits ORDER BY (but still applies LIMIT) when no timestamp column is mapped', () => {
-    const noTsConfig: SourceConfig = { ...config, columns: { ...config.columns, timestamp: '' } };
-    const sqlStr = buildJsonPathsQuery(noTsConfig, 'Payload', { table: config.logsTable, conditions: [] });
-    expect(sqlStr).not.toContain('ORDER BY');
-    expect(sqlStr).toContain('LIMIT 500');
-  });
-
   it('respects a custom table', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: 'custom_table', conditions });
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: 'custom_table' });
     expect(sqlStr).toContain('"default"."custom_table"');
   });
 
-  it('respects a custom sampleSize', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions, sampleSize: 1000 });
-    expect(sqlStr).toContain('LIMIT 1000');
+  it('includes select_sequential_consistency by default', () => {
+    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable });
+    expect(sqlStr).toContain('select_sequential_consistency = 1');
+  });
+});
+
+describe('parseJsonTypedPaths', () => {
+  it('returns the declared paths with their types', () => {
+    expect(parseJsonTypedPaths('JSON(user.id UInt32, name String)')).toEqual([
+      { path: 'user.id', type: 'UInt32' },
+      { path: 'name', type: 'String' },
+    ]);
   });
 
-  it('includes select_sequential_consistency by default', () => {
-    const sqlStr = buildJsonPathsQuery(config, 'Payload', { table: config.logsTable, conditions });
-    expect(sqlStr).toContain('select_sequential_consistency = 1');
+  it('keeps a declared type that contains commas intact', () => {
+    expect(parseJsonTypedPaths('JSON(amount Decimal(10, 2), tags Array(String))')).toEqual([
+      { path: 'amount', type: 'Decimal(10, 2)' },
+      { path: 'tags', type: 'Array(String)' },
+    ]);
+  });
+
+  it('unquotes backticked path names', () => {
+    expect(parseJsonTypedPaths('JSON(`odd name` String)')).toEqual([{ path: 'odd name', type: 'String' }]);
+  });
+
+  it('skips hints and SKIP clauses', () => {
+    expect(
+      parseJsonTypedPaths("JSON(a String, max_dynamic_paths=8, max_dynamic_types = 4, SKIP secret, SKIP REGEXP '^tmp')")
+    ).toEqual([{ path: 'a', type: 'String' }]);
+  });
+
+  it('returns nothing for an untyped or non-JSON column type', () => {
+    expect(parseJsonTypedPaths('JSON')).toEqual([]);
+    expect(parseJsonTypedPaths("Object('json')")).toEqual([]);
+    expect(parseJsonTypedPaths('Map(String, String)')).toEqual([]);
   });
 });
 

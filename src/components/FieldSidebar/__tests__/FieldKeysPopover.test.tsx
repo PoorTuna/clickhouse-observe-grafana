@@ -1,9 +1,10 @@
 /**
- * FieldKeysPopover: the on-demand Map/JSON key-browse popover (see the "Logs Explorer field
- * sidebar: on-demand Map/JSON key browsing" plan, Item 3). Covers loading/error/empty states, the
- * key list render for both Map and JSON columns, and click-through to a leaf FieldModel with the
- * same id/sqlExpr scheme rowFields.ts used to produce (map:${col}:${key} / ${col}['key'],
- * json:${col}:${path} / quoteDottedPath).
+ * FieldKeysPopover: the on-demand Map key-browse popover. Covers loading/error/empty states, the
+ * key list render, and click-through to a leaf FieldModel with discovery's own id/sqlExpr scheme
+ * (map:${col}:${key} / ${col}['key']).
+ *
+ * JSON columns never reach this popover: their paths are discovered for the whole table up front
+ * (FieldsContext Phase C, covered in FieldsContext.test.tsx) and rendered as ordinary fields.
  */
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -41,15 +42,6 @@ const mapField: FieldModel = {
   displayName: 'LogAttributes',
   sqlExpr: 'LogAttributes',
   type: 'map',
-  source: 'column',
-};
-
-const jsonField: FieldModel = {
-  id: 'col:Payload',
-  name: 'Payload',
-  displayName: 'Payload',
-  sqlExpr: 'Payload',
-  type: 'json',
   source: 'column',
 };
 
@@ -98,19 +90,7 @@ describe('FieldKeysPopover', () => {
     expect(screen.getByText(/discovered from 42 records/i)).toBeInTheDocument();
   });
 
-  it('renders the discovered JSON paths with their reported type', async () => {
-    mockRunQueryRows.mockResolvedValue([
-      { path: 'user.id', type: 'Int64', total: 10 },
-      { path: 'user.name', type: 'String', total: 10 },
-    ]);
-    renderPopover(jsonField, jest.fn());
-    await waitFor(() => expect(screen.getByText('user.id')).toBeInTheDocument());
-    expect(screen.getByText('Int64')).toBeInTheDocument();
-    expect(screen.getByText('user.name')).toBeInTheDocument();
-    expect(screen.getByText('String')).toBeInTheDocument();
-  });
-
-  it('clicking a Map key calls onSelectKey with the rowFields.ts id/sqlExpr scheme', async () => {
+  it('clicking a Map key calls onSelectKey with the discovery id/sqlExpr scheme', async () => {
     mockRunQueryRows.mockResolvedValue([{ k: 'http.method', total: 5 }]);
     const onSelectKey = jest.fn();
     renderPopover(mapField, onSelectKey);
@@ -126,20 +106,4 @@ describe('FieldKeysPopover', () => {
     );
   });
 
-  it('clicking a JSON path calls onSelectKey with the rowFields.ts id/sqlExpr scheme', async () => {
-    mockRunQueryRows.mockResolvedValue([{ path: 'user.id', type: 'Int64', total: 5 }]);
-    const onSelectKey = jest.fn();
-    renderPopover(jsonField, onSelectKey);
-    await waitFor(() => expect(screen.getByText('user.id')).toBeInTheDocument());
-    screen.getByText('user.id').closest('button')!.click();
-    expect(onSelectKey).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'json:Payload:user.id',
-        sqlExpr: 'Payload.user.id',
-        source: 'json',
-        jsonColumn: 'Payload',
-        jsonPath: 'user.id',
-      })
-    );
-  });
 });

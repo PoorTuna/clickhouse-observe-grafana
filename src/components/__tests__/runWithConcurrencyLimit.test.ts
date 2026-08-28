@@ -1,8 +1,8 @@
 /**
- * Field discovery (Phase B/C in FieldsContext.tsx) used to fire one scan query per Map/JSON
- * column via a plain Promise.all — unbounded concurrency. runWithConcurrencyLimit staggers that
- * to at most N in flight at once (see DISCOVERY_CONCURRENCY), without changing which columns get
- * discovered or the per-query result.
+ * Field discovery (Phase C in FieldsContext.tsx) fires one query per native-JSON column. A plain
+ * Promise.all would run them all at once; runWithConcurrencyLimit staggers that to at most N in
+ * flight (see DISCOVERY_CONCURRENCY), without changing which columns get discovered or the
+ * per-query result.
  */
 import { runWithConcurrencyLimit } from '../FieldsContext';
 

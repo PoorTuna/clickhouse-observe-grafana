@@ -20,7 +20,7 @@ import { ColumnMappingForm } from '../ColumnMappingForm';
 import { COL_FIELDS } from '../../columnFields';
 import { guessColumnMapping, TableColumn } from '../../ai/columnGuess';
 import { expandColumnCandidates, JsonPathsByColumn } from '../../ai/columnCandidates';
-import { inferFieldType } from '../../sql/fieldModel';
+import { inferFieldType, parseJsonTypedPaths } from '../../sql/fieldModel';
 import { errMsg } from '../../errMsg';
 
 interface CreateDataViewModalProps {
@@ -102,7 +102,8 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
   // "Pinned columns" — extra non-core columns this view loads with the grid by default (see
   // SourceConfig.pinnedColumns). Stores selected FieldModel ids; order = selection order =
   // display order. Field discovery below (same hook the sidebar/drawer use) supplies the options,
-  // including Map/JSON leaf paths like "LogAttributes.http.method" — not just top-level columns.
+  // including JSON paths like "Payload.user.id" — not just top-level columns. (Map keys aren't
+  // discovered up front, so they can't be pinned here; see FieldsContext's phase list.)
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [showPinned, setShowPinned] = useState(false);
   // Advanced query settings — defaults match DEFAULT_SOURCE_CONFIG so a regular user creating a
@@ -153,7 +154,7 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
 
   // Field discovery for the "Pinned columns" picker — same hook FieldSidebar/LogsExplorer use,
   // so a pinned selection is discovered exactly like a manually-added sidebar field (including
-  // Map-key and JSON-path leaves). Early-returns internally when datasourceUid is empty, so this
+  // JSON-path leaves; Map keys stay on-demand). Early-returns internally when datasourceUid is empty, so this
   // is a no-op until step 1 is complete.
   const pinnableFieldsConfig: SourceConfig = useMemo(
     () => ({ ...DEFAULT_SOURCE_CONFIG, datasourceUid, database, logsTable, columns: mapping }),
@@ -299,7 +300,8 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
 
       // JSON path discovery — non-blocking: fires after the step has already rendered with the
       // tuple-expanded (but still JSON-container) candidate list, and doesn't hold up loadingCols.
-      // Worst case on a slow/huge JSON column is DISCOVERY_SETTINGS' own 15s cap, not a modal freeze.
+      // The query itself is answered from part metadata (see buildJsonPathsQuery); worst case on an
+      // older server that lacks that optimization is the shared query timeout, not a modal freeze.
       const jsonCols = rawCols.filter((c) => inferFieldType(c.type) === 'json').map((c) => c.name);
       if (jsonCols.length > 0) {
         const scanCfg: SourceConfig = {
@@ -308,17 +310,27 @@ export function CreateDataViewModal({ isOpen, onDismiss, editingView }: CreateDa
           database: db,
           logsTable: table,
         };
+        // Types come from each column's own declared JSON(...) paths, not from the query — the
+        // typed variant of distinctJSONPaths isn't optimized, so asking ClickHouse for them would
+        // cost a full column scan. Dynamic paths stay untyped ('').
+        const rawTypeByCol = new Map(rawCols.map((c) => [c.name, c.type]));
         runWithConcurrencyLimit(jsonCols, 4, async (jsonCol) => {
           try {
             const pathRows = await runQueryRows({
               datasourceUid: uid,
-              sql: buildJsonPathsQuery(scanCfg, jsonCol, { table, conditions: [] }),
+              sql: buildJsonPathsQuery(scanCfg, jsonCol, { table }),
               timeRange: schemaTimeRange(),
               op: 'wizardJsonPaths',
             });
-            const paths = pathRows
-              .map((r) => ({ path: String(r['path'] ?? ''), chType: String(r['type'] ?? '') }))
-              .filter((p) => p.path);
+            const cell = pathRows.length > 0 ? String(pathRows[0]['paths'] ?? '') : '';
+            const discovered = cell ? JSON.parse(cell) : [];
+            const declaredTypes = new Map(
+              parseJsonTypedPaths(rawTypeByCol.get(jsonCol) ?? '').map((p) => [p.path, p.type])
+            );
+            const paths = (Array.isArray(discovered) ? discovered : [])
+              .map((p) => String(p))
+              .filter((path) => path.length > 0)
+              .map((path) => ({ path, chType: declaredTypes.get(path) ?? '' }));
             return { jsonCol, paths };
           } catch {
             return { jsonCol, paths: [] as Array<{ path: string; chType: string }> };

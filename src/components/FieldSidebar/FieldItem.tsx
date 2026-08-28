@@ -40,10 +40,11 @@ export function FieldItem({
   const rowRef = useRef<HTMLDivElement>(null);
 
   const icon = FIELD_TYPE_ICONS[field.type] ?? 'question-circle';
-  // Map/JSON *container* columns (Phase A discovery, not a row-derived leaf key) get the on-demand
-  // key-browse popover instead of top-values — there's nothing to show "top values" of for a
-  // container column itself.
-  const isKeyBrowsable = field.source === 'column' && (field.type === 'map' || field.type === 'json');
+  // Map *container* columns get the on-demand key-browse popover instead of top-values — there's
+  // nothing to show "top values" of for a container column itself. JSON containers are not
+  // browsable here: their paths are discovered up front (FieldsContext Phase C) and rendered as
+  // ordinary field rows, and the container row itself never reaches the list (FieldSidebar).
+  const isKeyBrowsable = field.source === 'column' && field.type === 'map';
 
   const openPopover = () => {
     if (rowRef.current) {

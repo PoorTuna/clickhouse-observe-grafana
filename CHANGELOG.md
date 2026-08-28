@@ -10,6 +10,39 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.9.0] — 2026-08-28
+
+### Changed
+
+- **JSON paths are first-class fields again.** Every path inside a native `JSON` column is
+  discovered once per table at mount and published as its own field, so it shows up in the field
+  sidebar, KQL field autocomplete, value completions, the filter editor and add-as-column — instead
+  of hiding behind the on-demand key popover 0.8.0 put it behind. The discovery query is a bare
+  `distinctJSONPaths(col)`: ClickHouse 25.12+ answers that from the column's paths metadata
+  (object-structure + shared-data path substreams) rather than reading any values, but **only** when
+  the query carries no `WHERE`/`PREWHERE`/`GROUP BY` — a time predicate there costs the fast path and
+  makes the same query several times slower. It is cached per column for the session and, being
+  time- and filter-independent, is not re-run when the dashboard time range changes.
+- **Map keys stay on-demand.** A `Map(String, String)` column has no paths metadata — listing its
+  keys always scans row data — so it keeps 0.8.0's bounded, filter-scoped sample, paid for only when
+  the user opens that column. The key popover is now Map-only.
+- **JSON container rows are hidden from the sidebar list.** With every path listed as its own field,
+  the container row would only offer top-values over a whole JSON column. It stays in the discovered
+  field set, which the log-detail drawer still uses to flatten dotted-path rows.
+- **JSON path types come from the column's declared `JSON(...)` paths** (parsed from
+  `system.columns`), not from the discovery query: `distinctJSONPathsAndTypes` is not covered by the
+  same optimization and would cost a full column scan. Dynamic paths are reported as strings, which
+  affects only the sidebar icon and completion hints — generated SQL never depends on it.
+
+### Notes
+
+- On ClickHouse older than 25.12 the path query has no optimized form and falls back to a full JSON
+  column read per column on a cold load, bounded by the view's `queryTimeoutSeconds` (default 25s).
+- The path list is table-wide, so a path that exists nowhere in the selected time range still
+  appears in the sidebar; its top-values popover will come back empty.
+
+---
+
 ## [0.8.0] — 2026-08-18
 
 ### Changed

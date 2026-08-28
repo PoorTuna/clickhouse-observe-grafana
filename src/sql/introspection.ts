@@ -99,45 +99,60 @@ export function buildMapKeysQuery(
   );
 }
 
+/** Options for buildJsonPathsQuery — deliberately narrower than KeyDiscoveryOpts: this query takes
+ *  no filter conditions and no sample size, because either one would defeat the optimization it
+ *  depends on (see below). */
+export interface JsonPathDiscoveryOpts {
+  /** Table to read from (e.g. config.logsTable). */
+  table: string;
+}
+
 /**
- * Discover distinct paths (+ their ClickHouse type) for a native JSON column, scoped to the same
- * bounded sample-CTE shape as `buildMapKeysQuery` — see its doc comment for why.
+ * Discover every distinct path in a native JSON column, across the whole table.
  *
- * JSONAllPathsWithTypes covers both type-hinted paths (declared in the column's JSON(...) type)
- * and dynamic paths (inferred per-row) — CH reports both through the same function, so no separate
- * query is needed to distinguish them. Returns one row per (path, type) pair; a path can appear
- * more than once if different rows observed different dynamic types for it — callers should
- * dedupe by path (first-seen wins).
+ * Unlike `buildMapKeysQuery` this is *not* a bounded sample, and it is deliberately unfiltered:
+ * ClickHouse (25.12+, PR #92196) rewrites `distinctJSONPaths(col)` in `FunctionToSubcolumnsPass`
+ * into a read of a special paths-only subcolumn — the object-structure substream plus the
+ * shared-data paths, never the values — which answers "what paths exist" for roughly the cost of
+ * reading part metadata. That rewrite fires only when:
+ *
+ *   - `optimize_functions_to_subcolumns = 1` (sent below, in case a profile turned it off), and
+ *   - the query has **no WHERE, PREWHERE or GROUP BY** — `canOptimizeWithWherePrewhereOrGroupBy`
+ *     singles this function out, because a filtered path list can't be answered from metadata.
+ *
+ * So a time/filter predicate here doesn't make the query cheaper, it makes it ~5x more expensive:
+ * it forfeits the metadata path and falls back to reading the whole JSON column for every matching
+ * row (measured on a user's table: ~3-5s bare vs 20s+ with a time filter). Hence: no conditions, no
+ * ORDER BY, no LIMIT — and the tests in `json_fields.test.ts` assert their absence on purpose.
+ *
+ * `enable_analyzer` is intentionally *not* sent: that pass is analyzer-only, but the setting was
+ * renamed from `allow_experimental_analyzer` in the 24.x line, and an unknown setting name fails
+ * the whole query on an older server. The analyzer is on by default anyway (24.3+).
+ *
+ * Nothing else may be selected alongside the paths — in particular no `count()`. Once the rewrite
+ * fires, the special subcolumn materializes one row per read block, so a row-counting aggregate in
+ * the same query returns the block count, not the row count. Measured on CH 26.3.17.4 against a
+ * 50 000-row table: `SELECT count(), distinctJSONPaths(p) FROM t` returns 24 with
+ * `optimize_functions_to_subcolumns = 1` and 50 000 with it off. That's why this query has no
+ * "discovered from N records" companion the way buildMapKeysQuery does.
+ *
+ * The result is wrapped in `toJSONString(...)` so it comes back as one scalar String cell rather
+ * than an `Array(String)` whose DataFrame marshalling would be datasource-specific; callers
+ * `JSON.parse` it. Paths come back sorted, and carry no type information — `distinctJSONPathsAndTypes`
+ * is *not* covered by the same optimization, so types for declared paths come from parsing the
+ * column's own `JSON(...)` type instead (see `parseJsonTypedPaths` in sql/fieldModel.ts).
  */
 export function buildJsonPathsQuery(
   config: SourceConfig,
   jsonColumn: string,
-  opts: KeyDiscoveryOpts
+  opts: JsonPathDiscoveryOpts
 ): string {
-  const { table, conditions, sampleSize = 500 } = opts;
-  const tbl = `"${config.database}"."${table}"`;
-  const tsCol = config.columns.timestamp;
-  const condClause = conditions.length > 0 ? `  WHERE ${conditions.join(' AND ')}` : null;
-  // JSONAllPathsWithTypes(...) returns Map(String, String) (path -> type). Evaluate it once per
-  // sampled row (aliased `m`) instead of calling it twice at the outer level (once for mapKeys,
-  // once for mapValues) — paying for the same dynamic-path introspection twice per row is the
-  // expensive part of this query.
+  const tbl = `"${config.database}"."${opts.table}"`;
   return withSettings(
     [
-      `WITH sample AS (`,
-      `  SELECT ${jsonColumn} AS j`,
-      `  FROM ${tbl}`,
-      condClause,
-      tsCol ? `  ORDER BY ${tsCol} DESC` : null,
-      `  LIMIT ${sampleSize}`,
-      `)`,
-      `SELECT DISTINCT pt.1 AS path, pt.2 AS type, (SELECT count() FROM sample) AS total`,
-      `FROM (`,
-      `  SELECT JSONAllPathsWithTypes(j) AS m`,
-      `  FROM sample`,
-      `)`,
-      `ARRAY JOIN arrayZip(mapKeys(m), mapValues(m)) AS pt`,
+      `SELECT toJSONString(distinctJSONPaths(${jsonColumn})) AS paths`,
+      `FROM ${tbl}`,
     ],
-    [...discoverySettings(config), ...configSettingsFragments(config)]
+    ['optimize_functions_to_subcolumns = 1', ...discoverySettings(config), ...configSettingsFragments(config)]
   );
 }

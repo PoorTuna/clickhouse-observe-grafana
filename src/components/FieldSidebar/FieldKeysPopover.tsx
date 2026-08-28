@@ -2,10 +2,10 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import { css } from '@emotion/css';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
 import { Icon, useStyles2, useTheme2 } from '@grafana/ui';
-import { FieldModel, inferFieldType } from '../../sql/fieldModel';
+import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { fieldTypeColor } from './fieldTypeColors';
-import { buildWhereConditions, quoteDottedPath, quoteString } from '../../sql/queryBuilder';
+import { buildWhereConditions, quoteString } from '../../sql/queryBuilder';
 import { buildFieldIndex } from '../../sql/fields';
 import { KeyEntry, loadColumnKeys, keysCache, buildKeysCacheKey } from '../../sql/keys';
 import { LogsQueryState, SourceConfig } from '../../types';
@@ -14,45 +14,33 @@ import { SourceConfigContext } from '../App/App';
 import { useFields } from '../FieldsContext';
 
 /**
- * Kibana-style on-demand key browse for a Map or JSON *container* column in the sidebar — see the
- * "Logs Explorer field sidebar: on-demand Map/JSON key browsing" plan. Fires one bounded, sampled
- * query (buildMapKeysQuery/buildJsonPathsQuery) scoped to the current search/filters/time range,
- * then lets the user click a discovered key to open the existing FieldStatsPopover (top values) for
- * it — this component only lists keys, it never itself queries value distributions.
+ * Kibana-style on-demand key browse for a Map *container* column in the sidebar. Fires one bounded,
+ * sampled query (buildMapKeysQuery) scoped to the current search/filters/time range, then lets the
+ * user click a discovered key to open the existing FieldStatsPopover (top values) for it — this
+ * component only lists keys, it never itself queries value distributions.
+ *
+ * Map only: a JSON column's paths are discovered for the whole table up front and published as
+ * ordinary fields (FieldsContext Phase C), so a JSON column never opens this popover.
  */
 
-/** Builds the leaf FieldModel for a discovered key/path — same id/sqlExpr scheme rowFields.ts used
- *  (`map:${col}:${key}` / `${col}[quoteString(key)]`, `json:${col}:${path}` / quoteDottedPath),
- *  so this converges with any other code path that already knows about the same attribute field
- *  (LogDetailDrawer's toggleAsColumn lookup, etc). */
+/** Builds the leaf FieldModel for a discovered Map key — same id/sqlExpr scheme discovery itself
+ *  uses (`map:${col}:${key}` / `${col}[quoteString(key)]`), so this converges with any other code
+ *  path that already knows about the same attribute field (LogDetailDrawer's toggleAsColumn
+ *  lookup, etc). */
 function buildLeafField(column: FieldModel, entry: KeyEntry): FieldModel {
-  if (column.type === 'map') {
-    const id = `map:${column.name}:${entry.key}`;
-    return {
-      id,
-      name: entry.key,
-      displayName: `${column.name}.${entry.key}`,
-      sqlExpr: `${column.name}[${quoteString(entry.key)}]`,
-      type: 'string',
-      source: 'map',
-      mapColumn: column.name,
-    };
-  }
-  const id = `json:${column.name}:${entry.key}`;
   return {
-    id,
+    id: `map:${column.name}:${entry.key}`,
     name: entry.key,
     displayName: `${column.name}.${entry.key}`,
-    sqlExpr: quoteDottedPath(column.name, entry.key),
-    type: entry.type ? inferFieldType(entry.type) : 'string',
-    source: 'json',
-    jsonColumn: column.name,
-    jsonPath: entry.key,
+    sqlExpr: `${column.name}[${quoteString(entry.key)}]`,
+    type: 'string',
+    source: 'map',
+    mapColumn: column.name,
   };
 }
 
 interface FieldKeysPopoverProps {
-  /** The Map/JSON container column (field.source === 'column', field.type === 'map' | 'json'). */
+  /** The Map container column (field.source === 'column', field.type === 'map'). */
   field: FieldModel;
   queryState: LogsQueryState;
   timeRange: TimeRange;
@@ -72,8 +60,6 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
-
-  const columnType: 'map' | 'json' = field.type === 'json' ? 'json' : 'map';
 
   const load = useCallback(async () => {
     if (!config.datasourceUid) {
@@ -97,7 +83,7 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
     setLoading(true);
     setError(null);
     try {
-      const result = await loadColumnKeys(config, field.name, columnType, opts);
+      const result = await loadColumnKeys(config, field.name, opts);
       if (!mountedRef.current) {
         return;
       }
@@ -112,7 +98,7 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
         setLoading(false);
       }
     }
-  }, [config, field.name, columnType, queryState, timeRange, fieldIndex]);
+  }, [config, field.name, queryState, timeRange, fieldIndex]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -153,7 +139,6 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
           {keys.map((k) => (
             <button key={k.key} className={styles.row} onClick={() => onSelectKey(buildLeafField(field, k))}>
               <span className={styles.keyName}>{k.key}</span>
-              {k.type && <span className={styles.keyType}>{k.type}</span>}
               <Icon name="angle-right" size="xs" className={styles.rowChevron} />
             </button>
           ))}
@@ -258,11 +243,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     white-space: nowrap;
     font-family: ${theme.typography.fontFamilyMonospace};
     font-size: 13px;
-  `,
-  keyType: css`
-    color: ${theme.colors.text.disabled};
-    font-size: 12px;
-    flex-shrink: 0;
   `,
   rowChevron: css`
     flex-shrink: 0;

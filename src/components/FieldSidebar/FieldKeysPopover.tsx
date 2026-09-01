@@ -5,9 +5,9 @@ import { Icon, useStyles2, useTheme2 } from '@grafana/ui';
 import { FieldModel } from '../../sql/fieldModel';
 import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { fieldTypeColor } from './fieldTypeColors';
-import { buildWhereConditions, quoteString } from '../../sql/queryBuilder';
+import { buildWhereConditions } from '../../sql/queryBuilder';
 import { buildFieldIndex } from '../../sql/fields';
-import { KeyEntry, loadColumnKeys, keysCache, buildKeysCacheKey } from '../../sql/keys';
+import { KeyEntry, loadColumnKeys, peekColumnKeys, buildMapKeyField } from '../../sql/keys';
 import { LogsQueryState, SourceConfig } from '../../types';
 import { errMsg } from '../../errMsg';
 import { SourceConfigContext } from '../App/App';
@@ -21,23 +21,11 @@ import { useFields } from '../FieldsContext';
  *
  * Map only: a JSON column's paths are discovered for the whole table up front and published as
  * ordinary fields (FieldsContext Phase C), so a JSON column never opens this popover.
+ *
+ * Shares its fetch + cache (loadColumnKeys/keysCache, sql/keys.ts) with the search bar's
+ * dot-drilldown map-key autocomplete (SearchBar.tsx) — browsing a column from either surface warms
+ * the other.
  */
-
-/** Builds the leaf FieldModel for a discovered Map key — same id/sqlExpr scheme discovery itself
- *  uses (`map:${col}:${key}` / `${col}[quoteString(key)]`), so this converges with any other code
- *  path that already knows about the same attribute field (LogDetailDrawer's toggleAsColumn
- *  lookup, etc). */
-function buildLeafField(column: FieldModel, entry: KeyEntry): FieldModel {
-  return {
-    id: `map:${column.name}:${entry.key}`,
-    name: entry.key,
-    displayName: `${column.name}.${entry.key}`,
-    sqlExpr: `${column.name}[${quoteString(entry.key)}]`,
-    type: 'string',
-    source: 'map',
-    mapColumn: column.name,
-  };
-}
 
 interface FieldKeysPopoverProps {
   /** The Map container column (field.source === 'column', field.type === 'map'). */
@@ -71,8 +59,7 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
       timeRange,
       cacheKey: JSON.stringify([queryState.search, queryState.filters]),
     };
-    const cacheKey = buildKeysCacheKey(config.datasourceUid, field.name, timeRange, opts);
-    const cached = keysCache.get(cacheKey);
+    const cached = peekColumnKeys(config.datasourceUid, field.name, timeRange, opts);
     if (cached) {
       setKeys(cached.keys);
       setTotal(cached.total);
@@ -137,7 +124,7 @@ export function FieldKeysPopover({ field, queryState, timeRange, onSelectKey }: 
       {!loading && !error && (
         <div className={styles.list}>
           {keys.map((k) => (
-            <button key={k.key} className={styles.row} onClick={() => onSelectKey(buildLeafField(field, k))}>
+            <button key={k.key} className={styles.row} onClick={() => onSelectKey(buildMapKeyField(field.name, k))}>
               <span className={styles.keyName}>{k.key}</span>
               <Icon name="angle-right" size="xs" className={styles.rowChevron} />
             </button>

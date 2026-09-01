@@ -1,6 +1,6 @@
 -- Seed sample OTel logs (2000 rows spanning last ~100 minutes)
 INSERT INTO default.otel_logs
-    (Timestamp, TraceId, SpanId, SeverityText, SeverityNumber, ServiceName, Body, ResourceAttributes, LogAttributes, Payload)
+    (Timestamp, TraceId, SpanId, SeverityText, SeverityNumber, ServiceName, Body, ResourceAttributes, ScopeAttributes, LogAttributes, Payload)
 SELECT
     toDateTime64(addSeconds(now(), -(toInt64(number) * 3)), 9) AS Timestamp,
     lower(hex(rand64(number)))                                  AS TraceId,
@@ -22,9 +22,12 @@ SELECT
     map(
         'service.name',    ['payment-gateway','order-service','catalog-api','auth-service','cart-service'][1 + (number % 5)],
         'service.version', concat('1.', toString(number % 4), '.', toString(number % 10)),
-        'k8s.namespace.name', 'production',
+        'k8s.namespace.name', ['production','staging','dev'][1 + (number % 3)],
         'k8s.pod.name',    concat('pod-', toString(number % 20))
     )                                                           AS ResourceAttributes,
+    map(
+        'deployment.environment', ['production','staging'][1 + (number % 2)]
+    )                                                           AS ScopeAttributes,
     map(
         'http.method',      ['GET','POST','PUT','DELETE'][1 + (number % 4)],
         'http.status_code', toString(if(number % 20 = 0, 500, if(number % 15 = 0, 404, 200))),

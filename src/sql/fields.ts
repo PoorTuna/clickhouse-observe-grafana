@@ -1,6 +1,6 @@
 import { SourceConfig } from '../types';
 import { FieldModel } from './fieldModel';
-import { looksLikeMapAccessor } from './queryBuilder';
+import { looksLikeMapAccessor, quoteString } from './queryBuilder';
 
 export type FieldKind = 'text' | 'exact' | 'map' | 'json';
 
@@ -31,12 +31,20 @@ export interface FieldIndex {
    *  since a full displayName names its source column explicitly and isn't the "guess which Map
    *  a bare key came from" case `byName` deliberately refuses for Map (see resolveField below). */
   byDisplayName: Map<string, FieldModel>;
+  /** Map *container* columns only (source === 'column', type === 'map'), keyed by their original-
+   *  case name. Backs resolveField's `<mapColumn>.<key>` fallback below: a Map column's leaf keys
+   *  are never individually discovered/published the way JSON paths are (listing them costs a row
+   *  scan — see sql/keys.ts), so a dotted name the user typed or accepted from the search bar's
+   *  on-demand key browse (SearchBar.tsx) needs to resolve even when that exact key never made it
+   *  into `fields`. */
+  mapColumns: FieldModel[];
 }
 
 export function buildFieldIndex(fields: FieldModel[]): FieldIndex {
   const bySqlExpr = new Map<string, FieldModel>();
   const byName = new Map<string, FieldModel>();
   const byDisplayName = new Map<string, FieldModel>();
+  const mapColumns: FieldModel[] = [];
   for (const field of fields) {
     bySqlExpr.set(field.sqlExpr, field);
     byName.set(field.name.toLowerCase(), field);
@@ -47,8 +55,31 @@ export function buildFieldIndex(fields: FieldModel[]): FieldIndex {
     if (!byDisplayName.has(dn)) {
       byDisplayName.set(dn, field);
     }
+    if (field.source === 'column' && field.type === 'map') {
+      mapColumns.push(field);
+    }
   }
-  return { bySqlExpr, byName, byDisplayName };
+  return { bySqlExpr, byName, byDisplayName, mapColumns };
+}
+
+/**
+ * Matches `rawField` against `<mapColumn>.<rest>` for every discovered Map container column,
+ * returning the LONGEST matching container name — the deterministic tie-break for the (legal,
+ * rare) case of a schema having both a Map column `A` and another column literally named `A.B`:
+ * the longer, more specific name wins, same rule resolveField already applies via
+ * byDisplayName/byName precedence over this fallback.
+ */
+function matchMapKeyPath(rawField: string, mapColumns: FieldModel[]): { column: FieldModel; key: string } | null {
+  let best: { column: FieldModel; key: string } | null = null;
+  for (const column of mapColumns) {
+    const prefix = `${column.name}.`;
+    if (rawField.length > prefix.length && rawField.toLowerCase().startsWith(prefix.toLowerCase())) {
+      if (!best || column.name.length > best.column.name.length) {
+        best = { column, key: rawField.slice(prefix.length) };
+      }
+    }
+  }
+  return best;
 }
 
 function kindForField(field: FieldModel, config: SourceConfig): FieldKind {
@@ -95,6 +126,19 @@ export function resolveField(rawField: string, config: SourceConfig, index?: Fie
     // already matches what a user would naturally type, so it's not a guess in the same sense.
     if (byName && byName.source !== 'map') {
       return { sqlExpr: byName.sqlExpr, kind: kindForField(byName, config) };
+    }
+
+    // `<mapColumn>.<key>` — the natural dotted form the search bar's dot-drilldown autocomplete
+    // inserts (SearchBar.tsx) and a user would type by hand, for a key that was never individually
+    // discovered (Map keys are sample-scoped and live in sql/keys.ts's cache, not in `fields` — see
+    // that module's doc comment for why). Without this, such a name misses every lookup above and
+    // used to silently degrade to a body ILIKE search (kql/toSql.ts) instead of the Map lookup it
+    // obviously means — a real key typed correctly returned zero rows with no error. Checked last,
+    // after byDisplayName/byName, so a real column, Tuple element, or JSON path with the same
+    // dotted shape always wins first.
+    const mapKeyMatch = matchMapKeyPath(raw, index.mapColumns);
+    if (mapKeyMatch) {
+      return { sqlExpr: `${mapKeyMatch.column.name}[${quoteString(mapKeyMatch.key)}]`, kind: 'map' };
     }
   }
 

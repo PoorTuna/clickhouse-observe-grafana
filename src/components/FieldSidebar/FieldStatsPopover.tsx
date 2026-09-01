@@ -7,7 +7,7 @@ import { FIELD_TYPE_ICONS } from './fieldIcons';
 import { fieldTypeColor } from './fieldTypeColors';
 import { buildWhereConditions } from '../../sql/queryBuilder';
 import { buildFieldIndex } from '../../sql/fields';
-import { buildValuesCacheKey, fetchFieldValuesWithTotal, valuesCache } from '../../sql/kql/_values';
+import { buildValuesCacheKey, fetchFieldValuesWithTotal, isValuesCacheEntryFresh, valuesCache } from '../../sql/kql/_values';
 import { makeFilter } from '../../sql/filters';
 import { FilterPill, LogsQueryState, SourceConfig } from '../../types';
 import { errMsg } from '../../errMsg';
@@ -75,7 +75,7 @@ export function FieldStatsPopover({
     const opts = toValuesOpts(config, queryState, timeRange, fieldIndex);
     const key = buildValuesCacheKey(config.datasourceUid, field.sqlExpr, timeRange, opts);
     const cached = valuesCache.get(key);
-    if (cached) {
+    if (cached && isValuesCacheEntryFresh(cached)) {
       setValues(cached.values.map((v) => ({ ...v, pct: cached.total > 0 ? (v.count / cached.total) * 100 : 0 })));
       setTotal(cached.total);
       setLoading(false);
@@ -98,7 +98,7 @@ export function FieldStatsPopover({
         pct: sampleTotal > 0 ? (v.count / sampleTotal) * 100 : 0,
       }));
 
-      valuesCache.set(key, { values: rawValues, total: sampleTotal });
+      valuesCache.set(key, { values: rawValues, total: sampleTotal, fetchedAt: Date.now() });
       setValues(mapped);
       setTotal(sampleTotal);
     } catch (e) {

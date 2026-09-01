@@ -2,9 +2,13 @@
  * KQL search bar with autocomplete.
  *
  * Suggestion types:
- *   field       – field names from useFields(), insert "name " (trailing space)
+ *   field       – field names from useFields(), insert "name " (trailing space); a Map container
+ *                 field inserts "name." instead (no space) and drills into mapkey suggestions
  *   operator    – :  :*  >=  <=  >  <   with exact insert-text
  *   value       – top values fetched from ClickHouse (debounced 250ms, cached)
+ *   mapkey      – a Map column's leaf keys, fetched lazily on first drilldown into that column
+ *                 (sql/keys.ts, no debounce — typing after the dot filters the fetched list
+ *                 locally, it does not re-query)
  *   conjunction – "and " / "or "
  */
 
@@ -21,7 +25,9 @@ import { Icon, IconButton, useStyles2 } from '@grafana/ui';
 import { useFields } from './FieldsContext';
 import { getSuggestions, resolveValueContext, Suggestion } from '../sql/kql/suggest';
 import { FieldValue } from '../sql/kql/_values';
+import { KeysResult } from '../sql/keys';
 import { parseKql, KqlSyntaxError } from '../sql/kql';
+import { errMsg } from '../errMsg';
 
 interface SearchBarProps {
   value: string;
@@ -29,6 +35,10 @@ interface SearchBarProps {
   onSearch: () => void;
   /** Page-supplied value lookup (bound to the page's own table/filters). */
   loadValues: (sqlExpr: string) => Promise<FieldValue[]>;
+  /** Page-supplied Map key lookup (bound to the page's own table/filters) — same shared
+   *  sql/keys.ts cache the field sidebar's FieldKeysPopover reads, so browsing a column from
+   *  either surface warms the other. */
+  loadMapKeys: (mapColumn: string) => Promise<KeysResult>;
   placeholder?: string;
 }
 
@@ -37,6 +47,7 @@ const SUGGESTION_TYPE_LABEL: Record<Suggestion['type'], string> = {
   field: 'field',
   operator: 'op',
   value: 'value',
+  mapkey: 'key',
   conjunction: 'and/or',
 };
 
@@ -45,6 +56,7 @@ export function SearchBar({
   onChange,
   onSearch,
   loadValues,
+  loadMapKeys,
   placeholder = 'Filter logs with KQL  ·  level:error and service:payment*  ·  responseTime > 500',
 }: SearchBarProps) {
   const styles = useStyles2(getStyles);
@@ -57,10 +69,32 @@ export function SearchBar({
   // Kibana-style "reject the query, don't guess" — set only when commit() fails to parse the
   // current input as KQL. The search is not run and results on screen stay as they are.
   const [parseError, setParseError] = useState<string | null>(null);
+  // Drives the "Listing keys…" / error / "from N sampled records" rows for the currently
+  // drilled-into Map column. Kept separate from `suggestions` (which only holds selectable rows)
+  // since these are informational, non-selectable.
+  const [mapKeyState, setMapKeyState] = useState<{
+    column: string;
+    loading: boolean;
+    error: string | null;
+    total: number;
+  } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  // Per-column key cache for THIS search bar instance, mirroring `values` — fetched once per
+  // column (sql/keys.ts's own module-level cache makes repeat fetches across instances/pages
+  // cheap regardless). Not React state: mutating it doesn't need to re-render on its own, only the
+  // getSuggestions() re-run after a fetch does, which already flows through setSuggestions.
+  const keysByColumnRef = useRef<Map<string, KeysResult>>(new Map());
+  // Columns with a fetch currently in flight — guards against firing a second loadMapKeys for the
+  // same column while the user keeps typing the key prefix (keysByColumnRef alone only closes that
+  // gap once the first fetch resolves).
+  const pendingMapKeyColumnsRef = useRef<Set<string>>(new Set());
+  // Monotonic token guarding both async passes (value fetch, map-key fetch) — without it a slow
+  // fetch triggered by a stale keystroke can overwrite a newer sync result after the user has
+  // since moved on (mountedRef alone only guards against unmount, not against being superseded).
+  const requestSeqRef = useRef(0);
 
   // Sync when external value changes (e.g. loading a saved search) — `value` is the
   // external/controlled prop, `inputValue` the local draft; this mirrors external -> local.
@@ -76,51 +110,112 @@ export function SearchBar({
 
   // ── Suggestion computation ─────────────────────────────────────────────────
 
+  const keyListsSnapshot = useCallback((): Map<string, string[]> => {
+    const out = new Map<string, string[]>();
+    for (const [col, res] of keysByColumnRef.current) {
+      out.set(col, res.keys.map((k) => k.key));
+    }
+    return out;
+  }, []);
+
   const computeSuggestions = useCallback(
     async (query: string, cursor: number) => {
+      const seq = ++requestSeqRef.current;
+
       if (!query && cursor === 0) {
         // Empty bar: show all fields
-        const result = getSuggestions(query, cursor, fields, []);
-        if (mountedRef.current) {
+        const result = getSuggestions(query, cursor, fields, [], keyListsSnapshot());
+        if (mountedRef.current && requestSeqRef.current === seq) {
           setSuggestions(result.suggestions.slice(0, 12));
           setHighlightIdx(-1);
           setOpen(result.suggestions.length > 0);
+          setMapKeyState(null);
         }
         return;
       }
 
-      // Sync pass: fields / operators / conjunctions — no async needed
-      const syncResult = getSuggestions(query, cursor, fields, []);
+      // Sync pass: fields / operators / conjunctions / already-loaded map keys — no async needed
+      const syncResult = getSuggestions(query, cursor, fields, [], keyListsSnapshot());
 
-      if (mountedRef.current) {
+      if (mountedRef.current && requestSeqRef.current === seq) {
         setSuggestions(syncResult.suggestions.slice(0, 12));
         setHighlightIdx(-1);
-        setOpen(syncResult.suggestions.length > 0 || Boolean(syncResult.valueContext));
+        setOpen(
+          syncResult.suggestions.length > 0 ||
+            Boolean(syncResult.valueContext) ||
+            Boolean(syncResult.mapKeyContext)
+        );
       }
 
-      // Async pass: fetch values if we're in a value context
+      // Async pass: fetch values if we're in a value context (debounced — fires on every
+      // keystroke of a value prefix, so worth coalescing).
       const vctx = syncResult.valueContext ?? resolveValueContext(query, cursor, fields);
-      if (!vctx) {
+      if (vctx) {
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+        }
+        debounceRef.current = setTimeout(async () => {
+          const fetched = await loadValues(vctx.sqlExpr);
+          if (!mountedRef.current || requestSeqRef.current !== seq) {
+            return;
+          }
+          // Re-run suggestions with now-loaded values
+          const withValues = getSuggestions(query, cursor, fields, fetched, keyListsSnapshot());
+          setSuggestions(withValues.suggestions.slice(0, 12));
+          setHighlightIdx(-1);
+          setOpen(withValues.suggestions.length > 0);
+        }, 250);
+      }
+
+      // Async pass: fetch a Map column's keys if we're drilled into one. No debounce — this fires
+      // once per column (guarded by keysByColumnRef/pendingMapKeyColumnsRef below), and every
+      // further keystroke of the key prefix is a local filter over the already-fetched list
+      // (mapKeySuggestions, sql/kql/suggest.ts), not a new query.
+      const mctx = syncResult.mapKeyContext;
+      if (!mctx) {
+        if (mountedRef.current && requestSeqRef.current === seq) {
+          setMapKeyState(null);
+        }
         return;
       }
 
-      // Debounce the value fetch
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
+      const cachedKeys = keysByColumnRef.current.get(mctx.column);
+      if (cachedKeys) {
+        if (mountedRef.current && requestSeqRef.current === seq) {
+          setMapKeyState({ column: mctx.column, loading: false, error: null, total: cachedKeys.total });
+        }
+        return;
       }
-      debounceRef.current = setTimeout(async () => {
-        const fetched = await loadValues(vctx.sqlExpr);
-        if (!mountedRef.current) {
+
+      if (mountedRef.current && requestSeqRef.current === seq) {
+        setMapKeyState({ column: mctx.column, loading: true, error: null, total: 0 });
+      }
+
+      if (pendingMapKeyColumnsRef.current.has(mctx.column)) {
+        return; // already in flight from an earlier keystroke on this same column
+      }
+      pendingMapKeyColumnsRef.current.add(mctx.column);
+      try {
+        const result = await loadMapKeys(mctx.column);
+        keysByColumnRef.current.set(mctx.column, result);
+        if (!mountedRef.current || requestSeqRef.current !== seq) {
           return;
         }
-        // Re-run suggestions with now-loaded values
-        const withValues = getSuggestions(query, cursor, fields, fetched);
-        setSuggestions(withValues.suggestions.slice(0, 12));
+        setMapKeyState({ column: mctx.column, loading: false, error: null, total: result.total });
+        // Re-run suggestions with now-loaded keys
+        const withKeys = getSuggestions(query, cursor, fields, [], keyListsSnapshot());
+        setSuggestions(withKeys.suggestions.slice(0, 12));
         setHighlightIdx(-1);
-        setOpen(withValues.suggestions.length > 0);
-      }, 250);
+        setOpen(withKeys.suggestions.length > 0 || Boolean(withKeys.mapKeyContext));
+      } catch (e) {
+        if (mountedRef.current && requestSeqRef.current === seq) {
+          setMapKeyState({ column: mctx.column, loading: false, error: errMsg(e), total: 0 });
+        }
+      } finally {
+        pendingMapKeyColumnsRef.current.delete(mctx.column);
+      }
     },
-    [fields, loadValues]
+    [fields, loadValues, loadMapKeys, keyListsSnapshot]
   );
 
   // ── Input handlers ────────────────────────────────────────────────────────
@@ -168,6 +263,7 @@ export function SearchBar({
       } catch (e) {
         setSuggestions([]);
         setOpen(false);
+        setMapKeyState(null);
         setParseError(e instanceof KqlSyntaxError ? e.message : String(e));
         return;
       }
@@ -175,6 +271,7 @@ export function SearchBar({
     setParseError(null);
     setSuggestions([]);
     setOpen(false);
+    setMapKeyState(null);
     onChange(inputValue);
     onSearch();
   }, [inputValue, onChange, onSearch]);
@@ -227,6 +324,7 @@ export function SearchBar({
     setParseError(null);
     setSuggestions([]);
     setOpen(false);
+    setMapKeyState(null);
     onChange('');
     onSearch();
   };
@@ -270,8 +368,10 @@ export function SearchBar({
           </button>
         )}
 
-        {/* Suggestion dropdown */}
-        {open && suggestions.length > 0 && (
+        {/* Suggestion dropdown — also shown with zero `suggestions` while a Map column's keys are
+            still loading (or failed), so the "Listing keys…" / error row has somewhere to render;
+            plain field/operator/value/conjunction suggestions never carry mapKeyState. */}
+        {open && (suggestions.length > 0 || mapKeyState) && (
           <ul className={styles.dropdown} role="listbox">
             {suggestions.map((s, idx) => (
               <li
@@ -293,6 +393,20 @@ export function SearchBar({
                 )}
               </li>
             ))}
+
+            {mapKeyState?.loading && (
+              <li className={styles.mapKeyStatus}>Listing keys…</li>
+            )}
+            {mapKeyState?.error && (
+              <li className={`${styles.mapKeyStatus} ${styles.mapKeyError}`}>{mapKeyState.error}</li>
+            )}
+            {mapKeyState && !mapKeyState.loading && !mapKeyState.error && (
+              <li className={styles.mapKeyCaption}>
+                {mapKeyState.total > 0
+                  ? `from ${mapKeyState.total.toLocaleString()} sampled records`
+                  : 'No keys found in the sampled rows'}
+              </li>
+            )}
           </ul>
         )}
 
@@ -448,6 +562,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: ${theme.colors.secondary?.transparent ?? theme.colors.action.selected};
     color: ${theme.colors.text.secondary};
   `,
+  badge_mapkey: css`
+    background: ${theme.colors.info?.transparent ?? theme.colors.primary.transparent};
+    color: ${theme.colors.info?.text ?? theme.colors.primary.text};
+  `,
   itemText: css`
     flex: 1;
     color: ${theme.colors.text.primary};
@@ -461,5 +579,21 @@ const getStyles = (theme: GrafanaTheme2) => ({
     font-size: 11px;
     white-space: nowrap;
     flex-shrink: 0;
+  `,
+
+  // ── Map-key drilldown status rows (non-selectable) ─────────────────────────
+  mapKeyStatus: css`
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
+    font-size: ${theme.typography.bodySmall.fontSize};
+    color: ${theme.colors.text.secondary};
+  `,
+  mapKeyError: css`
+    color: ${theme.colors.error.text};
+  `,
+  mapKeyCaption: css`
+    padding: ${theme.spacing(0.5)} ${theme.spacing(1.5)};
+    font-size: 11px;
+    font-style: italic;
+    color: ${theme.colors.text.disabled};
   `,
 });

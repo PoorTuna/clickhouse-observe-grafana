@@ -15,7 +15,7 @@ import { FieldsContext } from '../../FieldsContext';
 import { DEFAULT_SOURCE_CONFIG, LogsQueryState, DEFAULT_LOGS_QUERY_STATE, SourceConfig } from '../../../types';
 import { FieldModel } from '../../../sql/fieldModel';
 import { TimeRange, dateTime } from '@grafana/data';
-import { keysCache } from '../../../sql/keys';
+import { __resetKeysCacheForTests } from '../../../sql/keys';
 
 jest.mock('../../../data/runQuery');
 
@@ -58,7 +58,7 @@ function renderPopover(field: FieldModel, onSelectKey: (f: FieldModel) => void) 
 describe('FieldKeysPopover', () => {
   beforeEach(() => {
     mockRunQueryRows.mockReset();
-    keysCache.clear();
+    __resetKeysCacheForTests();
   });
 
   it('shows a loading state before the key query resolves', () => {

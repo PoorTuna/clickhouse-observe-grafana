@@ -26,6 +26,7 @@ import { SpanHandle } from '../diag/types';
 import { buildLogsQuery, buildLogDetailQuery, buildVolumeQuery, buildWhereConditions, resolveVolumeBreakdown, logRowKey, CORE_ALIAS } from '../sql/queryBuilder';
 import { buildFieldIndex } from '../sql/fields';
 import { loadFieldValues } from '../sql/kql/_values';
+import { loadColumnKeys } from '../sql/keys';
 import { addFilterPill, makeFilter } from '../sql/filters';
 import { AddFilterPopover } from '../components/AddFilter/AddFilterPopover';
 import { SourceConfigContext, DataViewContext } from '../components/App/App';
@@ -1037,6 +1038,27 @@ export function LogsExplorer() {
     [config, queryState, timeRange, fieldIndex]
   );
 
+  // Search bar's Map-key dot-drilldown (SearchBar.tsx) — same filter-scoped opts shape and same
+  // shared sql/keys.ts cache as the field sidebar's FieldKeysPopover, so browsing a column from
+  // either surface warms the other instead of firing a second query.
+  const logsLoadMapKeys = useCallback(
+    (mapColumn: string) => {
+      let conditions: string[];
+      try {
+        conditions = buildWhereConditions(config, queryState, fieldIndex);
+      } catch {
+        conditions = buildWhereConditions(config, { ...queryState, search: '' }, fieldIndex);
+      }
+      return loadColumnKeys(config, mapColumn, {
+        table: config.logsTable,
+        conditions,
+        timeRange,
+        cacheKey: JSON.stringify([queryState.search, queryState.filters]),
+      });
+    },
+    [config, queryState, timeRange, fieldIndex]
+  );
+
   const onToggleColumn = (col: SelectedColumn) => {
     if (effectiveColumns.some((c) => c.id === col.id)) {
       dispatch({ type: 'REMOVE_COLUMN', id: col.id, columns: effectiveColumns });
@@ -1262,6 +1284,7 @@ export function LogsExplorer() {
               onChange={(v) => dispatch({ type: 'SET_SEARCH', value: v })}
               onSearch={() => {}}
               loadValues={logsLoadValues}
+              loadMapKeys={logsLoadMapKeys}
             />
           </div>
           {/* Grouped so they wrap together as one atomic unit when the row runs out of width —

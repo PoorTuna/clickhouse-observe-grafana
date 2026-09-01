@@ -4,18 +4,28 @@
  *   field       – matching field names, insert "fieldName " (trailing space)
  *   operator    – :  >=  <=  >  <  :*   with exact insert-text + descriptions
  *   value       – top distinct values from ClickHouse, insert '"value" ' (quoted)
+ *   mapkey      – a Map column's leaf keys, insert "mapCol.key " (trailing space); accepting a Map
+ *                 *container* field (fieldSuggestions, below) instead inserts "mapCol." with no
+ *                 trailing space, so the same token immediately becomes a mapkey prefix
  *   conjunction – "and " / "or "
  *
- * getSuggestions() is synchronous (uses already-loaded values).
+ * getSuggestions() is synchronous (uses already-loaded values/keys).
  * resolveValueContext() exposes which field + prefix needs an async value fetch.
+ * A returned SuggestResult.mapKeyContext exposes which Map column + key-prefix needs an async key
+ * fetch — same shape/contract as valueContext, just backed by sql/keys.ts's loadColumnKeys instead
+ * of kql/_values.ts's loadFieldValues. Map keys are never published into the discovered `fields`
+ * list (they're sample-scoped, not schema — see sql/keys.ts's doc comment), so this engine accepts
+ * them as a separate, caller-supplied lookup rather than finding them in `fields` the way a JSON
+ * path or Tuple element already does.
  */
 
 import { lex } from './_lexer';
 import { FieldModel } from '../fieldModel';
 import { FieldValue } from './_values';
 import { escapeKqlIdent } from './_escape';
+import { quoteString } from '../queryBuilder';
 
-export type SuggestionType = 'field' | 'operator' | 'value' | 'conjunction';
+export type SuggestionType = 'field' | 'operator' | 'value' | 'mapkey' | 'conjunction';
 
 export interface Suggestion {
   type: SuggestionType;
@@ -35,9 +45,18 @@ export interface ValueContext {
   replaceEnd: number;   // = cursor
 }
 
+/** Describes which Map column's key list is still needed from sql/keys.ts's loadColumnKeys. */
+export interface MapKeyContext {
+  column: string;       // the Map container column's name
+  prefix: string;       // key text already typed after "column."
+  replaceStart: number; // start of the whole "column.prefix" token
+  replaceEnd: number;   // = cursor
+}
+
 export interface SuggestResult {
   suggestions: Suggestion[];
   valueContext?: ValueContext;
+  mapKeyContext?: MapKeyContext;
 }
 
 // ── Operator table ───────────────────────────────────────────────────────
@@ -66,12 +85,15 @@ const CONJUNCTIONS = [
  * @param cursor   Cursor position (0 = start of string)
  * @param fields   Available field models (from useFields())
  * @param values   Pre-fetched values to inject (pass [] until async fetch completes)
+ * @param mapKeys  Pre-fetched Map key lists, keyed by container column name (pass an empty/absent
+ *                 entry until the async key fetch for that column completes — mirrors `values`)
  */
 export function getSuggestions(
   query: string,
   cursor: number,
   fields: FieldModel[],
-  values: FieldValue[] = []
+  values: FieldValue[] = [],
+  mapKeys?: Map<string, string[]>
 ): SuggestResult {
   const text = query.slice(0, cursor);
   const tailsSpace = /\s$/.test(text);
@@ -142,6 +164,49 @@ export function getSuggestions(
 
   // ── IDENT being typed (no trailing space) ─────────────────────────────────
   if (last.type === 'IDENT' && !tailsSpace) {
+    // Dot-drilldown into a Map column's keys — "LogAttributes." (just accepted the container
+    // suggestion) or "LogAttributes.htt" (typing a key). Checked before the afterConjOrStart split
+    // below since it applies at every position an IDENT can start (query start, after and/or/not,
+    // after a paren) the same way. Unlike resolveField's matchMapKeyPath (sql/fields.ts), an empty
+    // key prefix ("LogAttributes." with nothing after the dot) still matches here — that's exactly
+    // the state right after accepting the container suggestion, when the key list should already
+    // start populating.
+    const mapMatch = matchMapKeyPrefix(last.value, fields);
+    if (mapMatch) {
+      const mapKeyCtx: MapKeyContext = {
+        column: mapMatch.column,
+        prefix: mapMatch.keyPrefix,
+        replaceStart: last.start,
+        replaceEnd: cursor,
+      };
+      const loadedKeys = mapKeys?.get(mapMatch.column);
+      const keySugg =
+        loadedKeys !== undefined
+          ? mapKeySuggestions(mapMatch.column, loadedKeys, mapMatch.keyPrefix, last.start, cursor)
+          : [];
+      // Escape hatch: with nothing typed after the dot yet, also offer accepting the whole map
+      // as-is (undoes the dot, same as pre-drilldown) — keeps "LogAttributes:*" reachable without
+      // forcing the user to backspace over the dot first.
+      const wholeMapSugg =
+        mapMatch.keyPrefix === ''
+          ? [
+              {
+                type: 'field' as const,
+                text: mapMatch.column,
+                description: 'map · whole column',
+                insertText: escapeKqlIdent(mapMatch.column) + ' ',
+                replaceStart: last.start,
+                replaceEnd: cursor,
+              },
+            ]
+          : [];
+      // Still append ordinary field matches for the same typed text — a real dotted column or a
+      // JSON/Tuple path that happens to share this prefix must keep showing, not be shadowed by
+      // the Map-key context.
+      const fieldSugg = fieldSuggestions(fields, last.value, last.start, cursor);
+      return { suggestions: [...keySugg, ...wholeMapSugg, ...fieldSugg], mapKeyContext: mapKeyCtx };
+    }
+
     const afterConjOrStart =
       !prev ||
       prev.type === 'AND' ||
@@ -208,20 +273,82 @@ function fieldSuggestions(
       const bStarts = b.name.toLowerCase().startsWith(lp) || b.displayName.toLowerCase().startsWith(lp) ? 0 : 1;
       return aStarts - bStarts || a.name.localeCompare(b.name);
     })
-    .map<Suggestion>((f) => ({
-      type: 'field',
-      // Shown as-is to the user: for a Map/JSON key this is prefixed with its source column
-      // ("ResourceAttributes.k8s.namespace.name") — same reasoning as the field sidebar, so this
-      // never reads like a standalone top-level column that was made up.
-      text: f.displayName,
-      description: f.type,
-      // Insert exactly what's shown — the displayName, escaped so it round-trips through the
-      // lexer as one token (see _escape.ts). Previously this inserted the bare leaf key (or, for
-      // Map fields, the bracket-accessor sqlExpr) instead of the prefixed name the user typed and
-      // saw highlighted, silently deleting the "ResourceAttributes." / "Payload." prefix on
-      // accept. resolveField (fields.ts) now resolves a full displayName directly — including for
-      // Map fields, via its byDisplayName index — so no accessor rewrite is needed here anymore.
-      insertText: escapeKqlIdent(f.displayName) + ' ',
+    .map<Suggestion>((f) => {
+      // A Map *container* column (source==='column', type==='map') has no single "value" of its
+      // own to complete against — accepting it opens the dot-drilldown into its keys instead of
+      // ending the field, so it inserts a trailing "." with no space rather than the usual
+      // trailing space. The next getSuggestions() call (fired right after, see SearchBar's
+      // applySuggestion) then matches matchMapKeyPrefix and switches into mapkey suggestions.
+      const isMapContainer = f.source === 'column' && f.type === 'map';
+      const displayed = isMapContainer ? `${f.displayName}.` : f.displayName;
+      return {
+        type: 'field',
+        // Shown as-is to the user: for a Map/JSON key this is prefixed with its source column
+        // ("ResourceAttributes.k8s.namespace.name") — same reasoning as the field sidebar, so this
+        // never reads like a standalone top-level column that was made up.
+        text: displayed,
+        description: isMapContainer ? 'map · browse keys' : f.type,
+        // Insert exactly what's shown — the displayName, escaped so it round-trips through the
+        // lexer as one token (see _escape.ts). Previously this inserted the bare leaf key (or, for
+        // Map fields, the bracket-accessor sqlExpr) instead of the prefixed name the user typed and
+        // saw highlighted, silently deleting the "ResourceAttributes." / "Payload." prefix on
+        // accept. resolveField (fields.ts) now resolves a full displayName directly — including for
+        // Map fields, via its byDisplayName index — so no accessor rewrite is needed here anymore.
+        insertText: isMapContainer ? escapeKqlIdent(f.displayName) + '.' : escapeKqlIdent(f.displayName) + ' ',
+        replaceStart,
+        replaceEnd,
+      };
+    });
+}
+
+/**
+ * Matches `text` (the IDENT token currently being typed) against `<mapColumn>.<keyPrefix>` for
+ * every discovered Map container field, longest-container-name-wins on a tie — same rule
+ * resolveField's matchMapKeyPath (sql/fields.ts) uses, kept as a separate, deliberately looser
+ * implementation here: unlike resolveField (which only ever sees a *complete* field reference), an
+ * empty keyPrefix ("LogAttributes." with nothing typed after the dot yet) must still match, since
+ * that's exactly the state immediately after accepting the container suggestion.
+ */
+function matchMapKeyPrefix(text: string, fields: FieldModel[]): { column: string; keyPrefix: string } | null {
+  let best: { column: string; keyPrefix: string } | null = null;
+  for (const f of fields) {
+    if (f.source !== 'column' || f.type !== 'map') {
+      continue;
+    }
+    const prefix = `${f.name}.`;
+    if (text.toLowerCase().startsWith(prefix.toLowerCase())) {
+      if (!best || f.name.length > best.column.length) {
+        best = { column: f.name, keyPrefix: text.slice(prefix.length) };
+      }
+    }
+  }
+  return best;
+}
+
+/** Builds suggestions from an already-fetched Map key list, filtered/ranked by `keyPrefix` the
+ *  same substring + prefix-first way fieldSuggestions ranks field names. */
+function mapKeySuggestions(
+  column: string,
+  keys: string[],
+  keyPrefix: string,
+  replaceStart: number,
+  replaceEnd: number
+): Suggestion[] {
+  const lp = keyPrefix.toLowerCase();
+  return keys
+    .filter((k) => k.toLowerCase().includes(lp))
+    .sort((a, b) => {
+      const aStarts = a.toLowerCase().startsWith(lp) ? 0 : 1;
+      const bStarts = b.toLowerCase().startsWith(lp) ? 0 : 1;
+      return aStarts - bStarts || a.localeCompare(b);
+    })
+    .map<Suggestion>((k) => ({
+      type: 'mapkey',
+      // Full prefixed form, same insert-equals-display contract as fieldSuggestions — accepting a
+      // key never leaves the "column." prefix looking like it belongs to a different field.
+      text: `${column}.${k}`,
+      description: 'key',
+      insertText: escapeKqlIdent(`${column}.${k}`) + ' ',
       replaceStart,
       replaceEnd,
     }));
@@ -283,7 +410,21 @@ function fieldSqlExpr(fieldName: string, fields: FieldModel[]): string {
   // unrelated field that merely shares the same bare name.
   const found =
     fields.find((f) => f.displayName === fieldName) ?? fields.find((f) => f.name === fieldName);
-  return found?.sqlExpr ?? fieldName;
+  if (found) {
+    return found.sqlExpr;
+  }
+  // Not a discovered field — a Map key never is (they're sample-scoped, not published into
+  // `fields`; see sql/keys.ts). "ResourceAttributes.k8s.pod.name" reaches here whether it was
+  // typed by hand or accepted from a mapkey suggestion (accepting one only inserts text, it
+  // doesn't add anything to `fields`), so without this fallback the value fetch would run against
+  // the literal string "ResourceAttributes.k8s.pod.name" as if it were a raw SQL expression —
+  // invalid ClickHouse syntax, silently swallowed by loadFieldValues' try/catch into an empty
+  // dropdown. Same longest-prefix rule as matchMapKeyPrefix's own callers.
+  const mapMatch = matchMapKeyPrefix(fieldName, fields);
+  if (mapMatch && mapMatch.keyPrefix !== '') {
+    return `${mapMatch.column}[${quoteString(mapMatch.keyPrefix)}]`;
+  }
+  return fieldName;
 }
 
 /** Look up a typed field's FieldType by the same name-resolution order fieldSqlExpr uses, so the
@@ -291,5 +432,11 @@ function fieldSqlExpr(fieldName: string, fields: FieldModel[]): string {
 function fieldTypeFor(fieldName: string, fields: FieldModel[]): FieldModel['type'] | undefined {
   const found =
     fields.find((f) => f.displayName === fieldName) ?? fields.find((f) => f.name === fieldName);
-  return found?.type;
+  if (found) {
+    return found.type;
+  }
+  // A Map value is always a string (Map(String,String)) — never the 'number' type that would
+  // make valueToSuggestion insert it unquoted.
+  const mapMatch = matchMapKeyPrefix(fieldName, fields);
+  return mapMatch && mapMatch.keyPrefix !== '' ? 'string' : undefined;
 }

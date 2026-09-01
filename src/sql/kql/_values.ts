@@ -13,7 +13,7 @@
 import { TimeRange } from '@grafana/data';
 import { buildFieldTopValuesQuery } from '../queryBuilder';
 import { runQueryRows } from '../../data/runQuery';
-import { coarseTimeBucket } from '../../components/FieldsContext';
+import { coarseTimeBucket } from '../timeBucket';
 import { SourceConfig } from '../../types';
 
 export interface FieldValue {
@@ -48,11 +48,42 @@ export interface LoadFieldValuesOpts {
 // just wrapped) so a caller that needs different error handling than loadFieldValuesWithTotal's
 // swallow-and-return-empty (see FieldStatsPopover, which surfaces a real error banner instead of
 // reading a query failure as "no values") can still read/write the same cache entries directly.
-export const valuesCache = new Map<string, FieldValuesWithTotal>();
+interface CachedFieldValues extends FieldValuesWithTotal {
+  fetchedAt: number;
+}
+
+export const valuesCache = new Map<string, CachedFieldValues>();
+
+/** Same TTL rationale as sql/keys.ts's KEYS_TTL_MS: a value list is sampled from current row data,
+ *  and `coarseTimeBucket` is a stable string for relative time ranges, so without a TTL a value
+ *  that starts appearing after the sample was taken stays invisible for the rest of the session. */
+export const VALUES_TTL_MS = 120_000;
+
+const inFlight = new Map<string, Promise<FieldValuesWithTotal>>();
+
+/** Exported so a caller doing its own cache read (FieldStatsPopover, which needs the throwing
+ *  fetch + a real error banner instead of loadFieldValuesWithTotal's swallow-to-empty) can apply
+ *  the same TTL check instead of re-deriving it. */
+export function isValuesCacheEntryFresh(entry: CachedFieldValues): boolean {
+  return Date.now() - entry.fetchedAt < VALUES_TTL_MS;
+}
 
 export function buildValuesCacheKey(uid: string, sqlExpr: string, timeRange: TimeRange, opts: LoadFieldValuesOpts): string {
   const bucket = coarseTimeBucket(timeRange);
   return `${uid}:${sqlExpr}:${opts.table}:${bucket}:${opts.cacheKey}`;
+}
+
+/** Drops every cached value list for one datasource+table — used by FieldsContext's explicit
+ *  refresh(). Cache keys are `uid:sqlExpr:table:bucket:cacheKey`, so table isn't a prefix — match
+ *  it as a `:table:` segment instead, same approach as sql/keys.ts's clearKeysCacheForTable. */
+export function clearValuesCacheForTable(uid: string, table: string): void {
+  const prefix = `${uid}:`;
+  const marker = `:${table}:`;
+  for (const key of [...valuesCache.keys()]) {
+    if (key.startsWith(prefix) && key.includes(marker)) {
+      valuesCache.delete(key);
+    }
+  }
 }
 
 /**
@@ -100,17 +131,26 @@ export async function loadFieldValuesWithTotal(
 
   const key = buildValuesCacheKey(config.datasourceUid, sqlExpr, opts.timeRange, opts);
   const cached = valuesCache.get(key);
-  if (cached) {
+  if (cached && isValuesCacheEntryFresh(cached)) {
     return cached;
   }
 
-  try {
-    const result = await fetchFieldValuesWithTotal(config, sqlExpr, opts);
-    valuesCache.set(key, result);
-    return result;
-  } catch {
-    return { values: [], total: 0 };
+  const existing = inFlight.get(key);
+  if (existing) {
+    return existing;
   }
+
+  const promise = fetchFieldValuesWithTotal(config, sqlExpr, opts)
+    .then((result) => {
+      valuesCache.set(key, { ...result, fetchedAt: Date.now() });
+      return result;
+    })
+    .catch(() => ({ values: [], total: 0 }))
+    .finally(() => {
+      inFlight.delete(key);
+    });
+  inFlight.set(key, promise);
+  return promise;
 }
 
 /**

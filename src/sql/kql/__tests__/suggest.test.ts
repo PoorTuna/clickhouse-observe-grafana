@@ -188,4 +188,137 @@ describe('getSuggestions', () => {
     expect(suggestions.every((s) => s.type === 'field')).toBe(true);
     expect(suggestions.every((s) => s.text.toLowerCase().includes('se'))).toBe(true);
   });
+
+  // ── Map dot-drilldown ───────────────────────────────────────────────────────
+  describe('Map dot-drilldown', () => {
+    const mapContainer: FieldModel = {
+      id: 'col:LogAttributes',
+      name: 'LogAttributes',
+      displayName: 'LogAttributes',
+      sqlExpr: 'LogAttributes',
+      type: 'map',
+      source: 'column',
+    };
+    const jsonPath: FieldModel = {
+      id: 'json:Payload:LogAttributes.override',
+      name: 'LogAttributes.override',
+      displayName: 'Payload.LogAttributes.override',
+      sqlExpr: `Payload."LogAttributes.override"`,
+      type: 'string',
+      source: 'json',
+      jsonColumn: 'Payload',
+      jsonPath: 'LogAttributes.override',
+    };
+    const withContainer: FieldModel[] = [...fields, mapContainer];
+
+    it('a Map container suggestion inserts a trailing dot, not a trailing space', () => {
+      const { suggestions } = getSuggestions('LogA', 4, withContainer);
+      const s = suggestions.find((sug) => sug.text === 'LogAttributes.');
+      expect(s).toBeDefined();
+      expect(s?.type).toBe('field');
+      expect(s?.insertText).toBe('LogAttributes.');
+      expect(s?.description).toMatch(/browse keys/);
+    });
+
+    it('typing "LogAttributes." with no keys loaded yet returns a mapKeyContext and no key suggestions', () => {
+      const q = 'LogAttributes.';
+      const { suggestions, mapKeyContext } = getSuggestions(q, q.length, withContainer);
+      expect(mapKeyContext).toEqual({ column: 'LogAttributes', prefix: '', replaceStart: 0, replaceEnd: q.length });
+      expect(suggestions.some((s) => s.type === 'mapkey')).toBe(false);
+    });
+
+    it('"LogAttributes." with an empty key prefix also offers the whole-map escape row', () => {
+      const q = 'LogAttributes.';
+      const { suggestions } = getSuggestions(q, q.length, withContainer);
+      const whole = suggestions.find((s) => s.text === 'LogAttributes' && s.description?.includes('whole column'));
+      expect(whole).toBeDefined();
+      expect(whole?.insertText).toBe('LogAttributes ');
+      expect(whole?.replaceStart).toBe(0);
+      expect(whole?.replaceEnd).toBe(q.length);
+    });
+
+    it('once keys are loaded, "LogAttributes." lists them as mapkey suggestions', () => {
+      const q = 'LogAttributes.';
+      const mapKeys = new Map([['LogAttributes', ['http.method', 'http.status_code']]]);
+      const { suggestions } = getSuggestions(q, q.length, withContainer, [], mapKeys);
+      const keySugg = suggestions.filter((s) => s.type === 'mapkey');
+      expect(keySugg.map((s) => s.text).sort()).toEqual(['LogAttributes.http.method', 'LogAttributes.http.status_code']);
+      expect(keySugg[0].insertText).toContain(' '); // trailing space, unlike the container's dot
+      expect(keySugg.every((s) => s.replaceStart === 0 && s.replaceEnd === q.length)).toBe(true);
+    });
+
+    it('typing a key prefix filters the already-loaded key list locally, prefix-first ranked', () => {
+      const q = 'LogAttributes.stat';
+      const mapKeys = new Map([['LogAttributes', ['http.method', 'http.status_code', 'other.status']]]);
+      const { suggestions, mapKeyContext } = getSuggestions(q, q.length, withContainer, [], mapKeys);
+      expect(mapKeyContext?.prefix).toBe('stat');
+      const keySugg = suggestions.filter((s) => s.type === 'mapkey');
+      expect(keySugg.map((s) => s.text)).toEqual(['LogAttributes.http.status_code', 'LogAttributes.other.status']);
+    });
+
+    it('a JSON/other field that happens to share the dotted prefix still shows alongside mapkey suggestions', () => {
+      const q = 'LogAttributes.over';
+      const withBoth = [...withContainer, jsonPath];
+      const { suggestions } = getSuggestions(q, q.length, withBoth, [], new Map());
+      expect(suggestions.some((s) => s.type === 'field' && s.text === jsonPath.displayName)).toBe(true);
+    });
+
+    it('longest matching Map column wins when one column name is a prefix of another field name', () => {
+      const shortContainer: FieldModel = {
+        id: 'col:Log',
+        name: 'Log',
+        displayName: 'Log',
+        sqlExpr: 'Log',
+        type: 'map',
+        source: 'column',
+      };
+      const both = [shortContainer, mapContainer];
+      const q = 'LogAttributes.htt';
+      const { mapKeyContext } = getSuggestions(q, q.length, both);
+      expect(mapKeyContext?.column).toBe('LogAttributes');
+      expect(mapKeyContext?.prefix).toBe('htt');
+    });
+
+    it('a non-Map column with a dotted name is unaffected (no mapKeyContext)', () => {
+      const { mapKeyContext, suggestions } = getSuggestions('Bo', 2, fields);
+      expect(mapKeyContext).toBeUndefined();
+      expect(suggestions.some((s) => s.type === 'mapkey')).toBe(false);
+    });
+
+    // Regression: typing (or accepting a mapkey suggestion for) a full "<mapCol>.<key>:" used to
+    // build a valueContext whose sqlExpr was the literal dotted string itself — fieldSqlExpr only
+    // ever looked the name up in `fields`, and a Map key is never published there (it's
+    // sample-scoped, see sql/keys.ts). loadValues then ran that literal string as if it were a raw
+    // SQL expression — invalid ClickHouse syntax — silently swallowed into an empty value dropdown
+    // with no visible error.
+    it('"<mapColumn>.<key>:" builds a valueContext with the real bracket-accessor sqlExpr, not the literal dotted string', () => {
+      const q = 'LogAttributes.k8s.pod.name:';
+      const { valueContext } = getSuggestions(q, q.length, withContainer);
+      expect(valueContext?.fieldName).toBe('LogAttributes.k8s.pod.name');
+      expect(valueContext?.sqlExpr).toBe("LogAttributes['k8s.pod.name']");
+    });
+
+    it('"<mapColumn>.<key>:" resolves against the correct one of several discovered Map columns', () => {
+      const resourceAttrsContainer: FieldModel = {
+        id: 'col:ResourceAttributes',
+        name: 'ResourceAttributes',
+        displayName: 'ResourceAttributes',
+        sqlExpr: 'ResourceAttributes',
+        type: 'map',
+        source: 'column',
+      };
+      const both = [...withContainer, resourceAttrsContainer];
+      const q = 'ResourceAttributes.k8s.pod.name:';
+      const { valueContext } = getSuggestions(q, q.length, both);
+      expect(valueContext?.sqlExpr).toBe("ResourceAttributes['k8s.pod.name']");
+    });
+
+    it('typed value prefix after the key ("<mapColumn>.<key>:partial") also resolves the real sqlExpr', () => {
+      const q = 'LogAttributes.k8s.pod.name:pod-';
+      const { valueContext } = getSuggestions(q, q.length, withContainer);
+      expect(valueContext?.fieldName).toBe('LogAttributes.k8s.pod.name');
+      expect(valueContext?.sqlExpr).toBe("LogAttributes['k8s.pod.name']");
+      expect(valueContext?.prefix).toBe('pod-');
+    });
+  });
 });

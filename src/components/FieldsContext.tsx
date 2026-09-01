@@ -7,6 +7,14 @@ import { detectPruneColumn, PruneCandidateColumn } from '../sql/pruneColumn';
 import { runQueryRows } from '../data/runQuery';
 import { SourceConfig } from '../types';
 import { errMsg } from '../errMsg';
+import { coarseTimeBucket } from '../sql/timeBucket';
+import { clearKeysCacheForTable } from '../sql/keys';
+import { clearValuesCacheForTable } from '../sql/kql/_values';
+
+// Re-exported for existing importers (FieldSidebar/FieldKeysPopover, sql/keys.ts,
+// sql/kql/_values.ts) — the implementation itself now lives in sql/timeBucket.ts, which this file
+// also depends on, to avoid a cycle with sql/keys.ts (see that module's cache-clear helpers below).
+export { coarseTimeBucket };
 
 // Module-level cache survives re-renders; cleared on explicit refresh(). Keyed by table only —
 // Map *keys* stay on-demand (FieldKeysPopover, backed by sql/keys.ts): reading them costs a scan of
@@ -61,15 +69,6 @@ export async function runWithConcurrencyLimit<T, R>(
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
-}
-
-export function coarseTimeBucket(timeRange: TimeRange): string {
-  // Relative strings (e.g. 'now-1h') → stable key; absolute → round to 5 min.
-  if (typeof timeRange.raw.from === 'string') {
-    return `${timeRange.raw.from}|${timeRange.raw.to}`;
-  }
-  const snap = (ms: number) => Math.floor(ms / 300_000) * 300_000;
-  return `${snap(timeRange.from.valueOf())}|${snap(timeRange.to.valueOf())}`;
 }
 
 /**
@@ -192,6 +191,12 @@ export function useFieldDiscovery(
           jsonPathCache.delete(key);
         }
       }
+      // Map-key and value-suggestion caches are sample-scoped (a LIMIT-bounded read of row data,
+      // not metadata), so an explicit "reload fields" gesture should drop them too — otherwise a
+      // key/value added after the last sample stays invisible even though the user just asked for
+      // fresh data.
+      clearKeysCacheForTable(config.datasourceUid, resolvedTable);
+      clearValuesCacheForTable(config.datasourceUid, resolvedTable);
     }
 
     // Top-level columns (time-independent, cached per table).

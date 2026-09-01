@@ -10,6 +10,44 @@ Versions track the plugin's release history. `Unreleased` collects commits not y
 
 ---
 
+## [0.10.0] — 2026-09-01
+
+### Added
+
+- **Map sub-key autocomplete in the KQL search bar.** Accepting a Map column suggestion (e.g.
+  `LogAttributes`) now inserts `LogAttributes.` and drills into that column's keys instead of
+  ending the field — the same bounded, filter-scoped sample query the field sidebar's key popover
+  already uses (`sql/keys.ts`), shared via the same cache so browsing a column from either surface
+  warms the other. Typing after the dot filters the already-fetched key list locally; no query is
+  re-issued per keystroke.
+
+### Changed
+
+- **`<mapColumn>.<key>` in KQL now resolves to `mapColumn['key']`** instead of falling through to a
+  free-text `Body` search. Map keys are sample-scoped and are not published as discovered fields the
+  way JSON paths are, so a key that was never individually discovered previously missed every field
+  lookup and silently degraded to a body ILIKE — a correctly-typed filter could return zero rows
+  with no error. This only changes behavior for names whose first dotted segment matches a
+  discovered Map column; a real column, Tuple element, JSON path, or explicit `col['key']` bracket
+  syntax with the same dotted shape still resolves exactly as before.
+- **Map-key and value-suggestion caches now expire** (2-minute TTL) and are cleared by the field
+  sidebar's "Refresh field list" button. Previously a cached key/value list for a relative time
+  range (e.g. `now-15m`) never refreshed for the rest of the session, since the cache-key bucket for
+  a relative range is stable by design.
+
+### Fixed
+
+- **Value suggestions now work for `<mapColumn>.<key>:`.** Typing (or accepting a suggested key for)
+  a Map key that was never individually discovered — e.g. `ResourceAttributes.k8s.pod.name:` — used
+  to build its value lookup against the literal dotted string instead of the real
+  `mapColumn['key']` accessor, since the field-name lookup only ever checked the discovered-fields
+  list and a Map key is deliberately never published there. The literal string isn't valid
+  ClickHouse syntax, so the query failed and was silently swallowed into an empty dropdown. The
+  value-suggestion path now resolves Map keys the same way the KQL-to-SQL translator and the search
+  bar's key-drilldown already do.
+
+---
+
 ## [0.9.0] — 2026-08-28
 
 ### Changed
